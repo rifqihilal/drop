@@ -23,7 +23,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 
 - Stay light. The budget is 30 MB of RAM, and idle CPU should stay near zero: event-driven where Windows allows, timers only as slow as they can be
 - Pages draw at their own origin. The card frame places them under `CARD_TOP`, between `CARD_SIDE` margins; hit tests convert with `on_page`
-- A new card page needs: a `Page` variant, a title in `page_title`, a size in `anim.rs`, its place in `App::pages`, and a switch under Modul in Settings
+- A new card page needs: a `Page` variant, a title in `page_title`, a size in `anim.rs`, its place in `App::pages`, and a switch on its page in `PAGES` in `settings.rs`
 - A new setting needs: a field in `Settings` and its default, a line in `to_ini`, a key in `parse` (keys are global, sections are only for reading), and the round-trip test
 - The `windows` crate is pinned to 0.61 with an explicit feature list in `Cargo.toml`; add features there when using new Win32 APIs
 - Commits follow conventional commits (`feat:`, `fix:`)

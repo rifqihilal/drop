@@ -1,5 +1,6 @@
-//! The settings window: prayer location with place search and a live preview
-//! of today's times, notification switches and general options.
+//! The settings window: a sidebar of pages, one per feature. `PAGES` lists what
+//! each page holds; the Sholat page adds place search and a live preview of
+//! today's times above its rows.
 //!
 //! Text fields are native EDIT controls (for typing, selection and IME);
 //! everything else is drawn with Direct2D in Windows 11's dark style. The
@@ -37,6 +38,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, LoadCursorW, PostMessageW,
@@ -46,7 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
     WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
     WM_SETCURSOR, WM_SETFONT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
 use crate::config::{self, Settings};
@@ -58,7 +60,7 @@ pub const SAVED_MSG: u32 = WM_APP + 6;
 /// Place search finished. LPARAM: `Box<Result<Vec<Place>, String>>`.
 const SEARCH_DONE_MSG: u32 = WM_APP + 7;
 
-const CLIENT: (f32, f32) = (760.0, 730.0);
+const CLIENT: (f32, f32) = (680.0, 560.0);
 
 // Child control IDs.
 const ID_SEARCH: usize = 101;
@@ -71,72 +73,302 @@ const ID_IDLE: usize = 107;
 const ID_ICAL: usize = 108;
 
 // Layout, in logical pixels.
-const SEARCH_FIELD: Rect = Rect::new(24.0, 90.0, 324.0, 124.0);
-const SEARCH_BUTTON: Rect = Rect::new(332.0, 90.0, 424.0, 124.0);
-const STATUS: Rect = Rect::new(24.0, 128.0, 424.0, 148.0);
+const SIDEBAR: f32 = 168.0;
+const LEFT: f32 = 184.0;
+const RIGHT: f32 = 664.0;
+const TITLE: Rect = Rect::new(LEFT, 10.0, RIGHT, 46.0);
+const NAV_TOP: f32 = 12.0;
+const NAV_STEP: f32 = 36.0;
+const HEADING: f32 = 24.0;
+const ROW: f32 = 48.0;
+const GROUP_GAP: f32 = 10.0;
+const CONTENT_TOP: f32 = 50.0;
+const FOOTER_TOP: f32 = 516.0;
+const FOOTER_STATUS: Rect = Rect::new(LEFT, 524.0, 480.0, 552.0);
+const CANCEL_BUTTON: Rect = Rect::new(488.0, 524.0, 572.0, 552.0);
+const SAVE_BUTTON: Rect = Rect::new(580.0, 524.0, RIGHT, 552.0);
+
+// The Sholat page's location block.
+const LOCATION_HEADING: Rect = Rect::new(LEFT + 2.0, 50.0, RIGHT, 72.0);
+const SEARCH_FIELD: Rect = Rect::new(LEFT, 74.0, 584.0, 104.0);
+const SEARCH_BUTTON: Rect = Rect::new(592.0, 74.0, RIGHT, 104.0);
+const STATUS: Rect = Rect::new(LEFT, 106.0, RIGHT, 122.0);
 /// Labels above the prayer fields: text and top-left corner.
-const FIELD_LABELS: [(&str, f32, f32); 5] = [
-    ("Nama lokasi", 24.0, 150.0),
-    ("Lintang", 24.0, 214.0),
-    ("Bujur", 232.0, 214.0),
-    ("Ketinggian (meter)", 24.0, 278.0),
-    ("Ingatkan sebelum (menit)", 232.0, 278.0),
+const FIELD_LABELS: [(&str, f32, f32); 4] = [
+    ("Nama lokasi", LEFT, 124.0),
+    ("Ketinggian (meter)", 430.0, 124.0),
+    ("Lintang", LEFT, 176.0),
+    ("Bujur", 430.0, 176.0),
 ];
 /// Search results drop down from under the search box, over these fields.
-const RESULTS_TOP: f32 = 128.0;
-const RESULT_ROW: f32 = 44.0;
+const RESULTS_TOP: f32 = 106.0;
+const RESULT_ROW: f32 = 38.0;
 const COVERED_FIELDS: [usize; 5] = [ID_CITY, ID_LATITUDE, ID_LONGITUDE, ID_ELEVATION, ID_REMIND];
-const CITY_FIELD: Rect = Rect::new(24.0, 172.0, 424.0, 206.0);
-const LATITUDE_FIELD: Rect = Rect::new(24.0, 236.0, 216.0, 270.0);
-const LONGITUDE_FIELD: Rect = Rect::new(232.0, 236.0, 424.0, 270.0);
-const ELEVATION_FIELD: Rect = Rect::new(24.0, 300.0, 216.0, 334.0);
-const REMIND_FIELD: Rect = Rect::new(232.0, 300.0, 424.0, 334.0);
-const PREVIEW: Rect = Rect::new(24.0, 354.0, 424.0, 444.0);
-const RIGHT: (f32, f32) = (456.0, 736.0);
-const TOGGLE_TOP: f32 = 90.0;
-const ROW: f32 = 40.0;
-const GENERAL_TOP: f32 = 324.0;
-const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
-/// Calendar feed link, under its heading at the foot of the right column.
-const ICAL_TOP: f32 = 608.0;
-const ICAL_FIELD: Rect = Rect::new(456.0, ICAL_TOP, 736.0, ICAL_TOP + 34.0);
-const CANCEL_BUTTON: Rect = Rect::new(526.0, 680.0, 626.0, 714.0);
-const SAVE_BUTTON: Rect = Rect::new(636.0, 680.0, 736.0, 714.0);
+const CITY_FIELD: Rect = Rect::new(LEFT, 142.0, 418.0, 172.0);
+const ELEVATION_FIELD: Rect = Rect::new(430.0, 142.0, RIGHT, 172.0);
+const LATITUDE_FIELD: Rect = Rect::new(LEFT, 194.0, 418.0, 224.0);
+const LONGITUDE_FIELD: Rect = Rect::new(430.0, 194.0, RIGHT, 224.0);
+const PREVIEW: Rect = Rect::new(LEFT, 232.0, RIGHT, 310.0);
+/// Where the Sholat page's rows start, under the location block.
+const PRAYER_TOP: f32 = 318.0;
 
-/// Switches: five notifications, start with Windows, eight modules, then
-/// three health reminders.
-const TOGGLES: [&str; 17] = [
-    "Wi-Fi tersambung dan terputus",
-    "Perangkat Bluetooth",
-    "Baterai lemah",
-    "Pengingat sholat",
-    "Bunyi notifikasi",
-    "Jalankan saat Windows menyala",
-    "Cuaca",
-    "Musik",
-    "Kalender & Pomodoro",
-    "Shelf",
-    "Halaman sholat",
-    "Mata saat idle",
-    "Tugas",
-    "Lirik lagu",
-    "Minum air",
-    "Istirahatkan mata",
-    "Peregangan",
-];
-/// First switch of the modules grid.
-const FIRST_MODULE: usize = 6;
-/// Top of the modules grid, two switches per row under the prayer preview.
-const MODULES_TOP: f32 = 494.0;
-/// First health reminder switch, in the right column under "Umum".
+const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
+
+/// Switch states, in this order: five notifications, start with Windows,
+/// eight modules, then three health reminders.
+const TOGGLE_COUNT: usize = 17;
+/// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
-const HEALTH_TOP: f32 = 448.0;
+
+const PAGE_GENERAL: usize = 0;
+const PAGE_PRAYER: usize = 6;
+
+enum Row {
+    Switch {
+        toggle: usize,
+        title: &'static str,
+        note: &'static str,
+    },
+    Field {
+        id: usize,
+        width: f32,
+        title: &'static str,
+        note: &'static str,
+    },
+}
+
+struct Group {
+    title: &'static str,
+    rows: &'static [Row],
+}
+
+struct Page {
+    title: &'static str,
+    glyph: &'static str,
+    color: u32,
+    /// Top of the first group.
+    top: f32,
+    groups: &'static [Group],
+}
+
+static PAGES: [Page; 9] = [
+    Page {
+        title: "Umum",
+        glyph: "\u{E713}",
+        color: 0x8e8e93,
+        top: CONTENT_TOP,
+        groups: &[
+            Group {
+                title: "Mulai",
+                rows: &[Row::Switch {
+                    toggle: 5,
+                    title: "Jalankan saat Windows menyala",
+                    note: "Drop terbuka sendiri setelah masuk Windows",
+                }],
+            },
+            Group {
+                title: "Suara",
+                rows: &[Row::Switch {
+                    toggle: 4,
+                    title: "Bunyi notifikasi",
+                    note: "Bunyi singkat saat notifikasi muncul",
+                }],
+            },
+            Group {
+                title: "Notch",
+                rows: &[
+                    Row::Switch {
+                        toggle: 11,
+                        title: "Mata saat idle",
+                        note: "Notch menampilkan mata saat komputer dibiarkan",
+                    },
+                    Row::Field {
+                        id: ID_IDLE,
+                        width: 64.0,
+                        title: "Mata muncul setelah",
+                        note: "Menit tanpa aktivitas, 1 sampai 120",
+                    },
+                ],
+            },
+        ],
+    },
+    Page {
+        title: "Notifikasi",
+        glyph: "\u{EA8F}",
+        color: 0x32ade6,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Sistem",
+            rows: &[
+                Row::Switch {
+                    toggle: 0,
+                    title: "Wi-Fi tersambung dan terputus",
+                    note: "Kabar saat koneksi berubah",
+                },
+                Row::Switch {
+                    toggle: 1,
+                    title: "Perangkat Bluetooth",
+                    note: "Kabar saat perangkat tersambung atau terputus",
+                },
+                Row::Switch {
+                    toggle: 2,
+                    title: "Baterai lemah",
+                    note: "Peringatan saat daya baterai hampir habis",
+                },
+            ],
+        }],
+    },
+    Page {
+        title: "Musik & lirik",
+        glyph: "\u{E8D6}",
+        color: 0xff375f,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Modul",
+            rows: &[
+                Row::Switch {
+                    toggle: 7,
+                    title: "Musik",
+                    note: "Kartu pemutar dan info lagu di notch",
+                },
+                Row::Switch {
+                    toggle: 13,
+                    title: "Lirik lagu",
+                    note: "Lirik tersinkron dari LRCLIB",
+                },
+            ],
+        }],
+    },
+    Page {
+        title: "Cuaca",
+        glyph: "\u{E706}",
+        color: 0xff9f0a,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Modul",
+            rows: &[Row::Switch {
+                toggle: 6,
+                title: "Cuaca",
+                note: "Kartu cuaca, memakai lokasi di halaman Sholat",
+            }],
+        }],
+    },
+    Page {
+        title: "Tugas",
+        glyph: "\u{E73E}",
+        color: 0x30d158,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Modul",
+            rows: &[Row::Switch {
+                toggle: 12,
+                title: "Tugas",
+                note: "Daftar tugas di notch",
+            }],
+        }],
+    },
+    Page {
+        title: "Kalender",
+        glyph: "\u{E787}",
+        color: 0xff453a,
+        top: CONTENT_TOP,
+        groups: &[
+            Group {
+                title: "Modul",
+                rows: &[Row::Switch {
+                    toggle: 8,
+                    title: "Kalender & Pomodoro",
+                    note: "Kartu kalender dan pengatur waktu fokus",
+                }],
+            },
+            Group {
+                title: "Agenda",
+                rows: &[Row::Field {
+                    id: ID_ICAL,
+                    width: 240.0,
+                    title: "Tautan kalender",
+                    note: "Agenda dari tautan .ics",
+                }],
+            },
+        ],
+    },
+    Page {
+        title: "Sholat",
+        glyph: "\u{E823}",
+        color: 0x00c7be,
+        top: PRAYER_TOP,
+        groups: &[Group {
+            title: "Modul & pengingat",
+            rows: &[
+                Row::Switch {
+                    toggle: 10,
+                    title: "Halaman sholat",
+                    note: "Kartu jadwal sholat dan arah kiblat",
+                },
+                Row::Switch {
+                    toggle: 3,
+                    title: "Pengingat sholat",
+                    note: "Notifikasi menjelang waktu sholat",
+                },
+                Row::Field {
+                    id: ID_REMIND,
+                    width: 64.0,
+                    title: "Ingatkan sebelum",
+                    note: "Menit sebelum waktu sholat, 1 sampai 60",
+                },
+            ],
+        }],
+    },
+    Page {
+        title: "Kesehatan",
+        glyph: "\u{EB42}",
+        color: 0x0a84ff,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Pengingat",
+            rows: &[
+                Row::Switch {
+                    toggle: 14,
+                    title: "Minum air",
+                    note: "Pengingat minum",
+                },
+                Row::Switch {
+                    toggle: 15,
+                    title: "Istirahatkan mata",
+                    note: "Pengingat istirahat mata",
+                },
+                Row::Switch {
+                    toggle: 16,
+                    title: "Peregangan",
+                    note: "Pengingat berdiri dan meregang",
+                },
+            ],
+        }],
+    },
+    Page {
+        title: "Shelf",
+        glyph: "\u{E8B7}",
+        color: 0xffb340,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Modul",
+            rows: &[Row::Switch {
+                toggle: 9,
+                title: "Shelf",
+                note: "Tampung berkas yang diseret ke notch",
+            }],
+        }],
+    },
+];
 
 // Windows 11 dark palette, as 0xRRGGBB.
-const BACKGROUND: u32 = 0x202020;
-const SURFACE: u32 = 0x2d2d2d;
+const BACKGROUND: u32 = 0x1e1e1e;
+const SIDEBAR_FILL: u32 = 0x161616;
+const SURFACE: u32 = 0x2a2a2a;
+const FIELD: u32 = 0x3a3a3a;
 const BORDER: u32 = 0x3d3d3d;
 const ACCENT: u32 = 0x4cc2ff;
+const SWITCH_ON: u32 = 0x30d158;
 
 #[derive(Clone, Copy)]
 struct Rect {
@@ -170,24 +402,72 @@ impl Rect {
     }
 }
 
-/// Row `index` of the switches column (notifications, then general).
-fn toggle_row(index: usize) -> Rect {
-    if index >= FIRST_HEALTH {
-        let top = HEALTH_TOP + (index - FIRST_HEALTH) as f32 * ROW;
-        return Rect::new(RIGHT.0, top, RIGHT.1, top + ROW);
+fn nav_row(index: usize) -> Rect {
+    let top = NAV_TOP + index as f32 * NAV_STEP;
+    Rect::new(8.0, top, SIDEBAR - 8.0, top + NAV_STEP - 4.0)
+}
+
+fn group_top(page: &Page, group: usize) -> f32 {
+    page.groups[..group].iter().fold(page.top, |top, group| {
+        top + HEADING + group.rows.len() as f32 * ROW + GROUP_GAP
+    })
+}
+
+/// Every row of a page with its place.
+fn rows(page: &'static Page) -> impl Iterator<Item = (Rect, &'static Row)> {
+    page.groups.iter().enumerate().flat_map(move |(g, group)| {
+        let top = group_top(page, g) + HEADING;
+        group.rows.iter().enumerate().map(move |(r, row)| {
+            let top = top + r as f32 * ROW;
+            (Rect::new(LEFT, top, RIGHT, top + ROW), row)
+        })
+    })
+}
+
+/// Bottom of the group holding the row that ends at `row_bottom`.
+fn group_end(page: &Page, row_bottom: f32) -> f32 {
+    (0..page.groups.len())
+        .map(|g| group_top(page, g + 1) - GROUP_GAP)
+        .find(|&bottom| bottom >= row_bottom)
+        .unwrap_or(row_bottom)
+}
+
+/// The text field at the right end of a row.
+fn row_field(row: Rect, width: f32) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    Rect::new(
+        row.right - 16.0 - width,
+        cy - 15.0,
+        row.right - 16.0,
+        cy + 15.0,
+    )
+}
+
+/// The page a text field lives on and its place there.
+fn field_place(id: usize) -> (usize, Rect) {
+    let location = [
+        (ID_SEARCH, SEARCH_FIELD),
+        (ID_CITY, CITY_FIELD),
+        (ID_LATITUDE, LATITUDE_FIELD),
+        (ID_LONGITUDE, LONGITUDE_FIELD),
+        (ID_ELEVATION, ELEVATION_FIELD),
+    ];
+    if let Some((_, rect)) = location.iter().find(|(field, _)| *field == id) {
+        return (PAGE_PRAYER, *rect);
     }
-    if index >= FIRST_MODULE {
-        let (column, row) = ((index - FIRST_MODULE) % 2, (index - FIRST_MODULE) / 2);
-        let left = 24.0 + column as f32 * 208.0;
-        let top = MODULES_TOP + row as f32 * ROW;
-        return Rect::new(left, top, left + 192.0, top + ROW);
+    for (index, page) in PAGES.iter().enumerate() {
+        for (rect, row) in rows(page) {
+            if let Row::Field {
+                id: field, width, ..
+            } = row
+            {
+                if *field == id {
+                    return (index, row_field(rect, *width));
+                }
+            }
+        }
     }
-    let top = if index < 5 {
-        TOGGLE_TOP + index as f32 * ROW
-    } else {
-        GENERAL_TOP
-    };
-    Rect::new(RIGHT.0, top, RIGHT.1, top + ROW)
+    (PAGE_GENERAL, Rect::new(0.0, 0.0, 0.0, 0.0))
 }
 
 struct Fonts {
@@ -199,6 +479,7 @@ struct Fonts {
     /// Semibold body text, left-aligned.
     button_left: IDWriteTextFormat,
     time: IDWriteTextFormat,
+    glyph: IDWriteTextFormat,
 }
 
 struct Window {
@@ -212,12 +493,14 @@ struct Window {
     brush: ID2D1SolidColorBrush,
     edit_font: HFONT,
     field_brush: HBRUSH,
-    fields: Vec<(usize, HWND, Rect)>,
+    /// Text fields: ID, control, place and the page they belong to.
+    fields: Vec<(usize, HWND, Rect, usize)>,
+    page: usize,
     /// Search results while the dropdown is open.
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 17],
+    toggles: [bool; TOGGLE_COUNT],
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     status: String,
@@ -243,7 +526,10 @@ pub fn open(notch: HWND) {
     if let Ok(window) = unsafe { Window::create(notch) } {
         let hwnd = window.hwnd;
         WINDOW.with(|cell| *cell.borrow_mut() = Some(window));
-        with_window(Window::update_preview);
+        with_window(|window| {
+            window.show_fields();
+            window.update_preview();
+        });
         unsafe {
             let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
             let _ = SetForegroundWindow(hwnd);
@@ -349,7 +635,7 @@ impl Window {
         let fonts = Fonts::new()?;
 
         let edit_font = CreateFontW(
-            -(14.0 * scale).round() as i32,
+            -(13.0 * scale).round() as i32,
             0,
             0,
             0,
@@ -364,31 +650,29 @@ impl Window {
             0,
             w!("Segoe UI Variable Text"),
         );
-        let field_brush = CreateSolidBrush(colorref(SURFACE));
+        let field_brush = CreateSolidBrush(colorref(FIELD));
 
         let settings = Settings::load();
         let number = |value: Option<f64>| value.map(|v| v.to_string()).unwrap_or_default();
         let field_specs = [
-            (ID_SEARCH, SEARCH_FIELD, String::new()),
-            (ID_CITY, CITY_FIELD, settings.city.clone()),
-            (ID_LATITUDE, LATITUDE_FIELD, number(settings.latitude)),
-            (ID_LONGITUDE, LONGITUDE_FIELD, number(settings.longitude)),
-            (
-                ID_ELEVATION,
-                ELEVATION_FIELD,
-                settings.elevation.to_string(),
-            ),
-            (ID_REMIND, REMIND_FIELD, settings.remind_minutes.to_string()),
-            (ID_IDLE, IDLE_FIELD, settings.idle_minutes.to_string()),
-            (ID_ICAL, ICAL_FIELD, settings.ical_url.clone()),
+            (ID_SEARCH, String::new()),
+            (ID_CITY, settings.city.clone()),
+            (ID_LATITUDE, number(settings.latitude)),
+            (ID_LONGITUDE, number(settings.longitude)),
+            (ID_ELEVATION, settings.elevation.to_string()),
+            (ID_REMIND, settings.remind_minutes.to_string()),
+            (ID_IDLE, settings.idle_minutes.to_string()),
+            (ID_ICAL, settings.ical_url.clone()),
         ];
         let mut fields = Vec::new();
-        for (id, rect, text) in field_specs {
+        for (id, text) in field_specs {
+            let (page, rect) = field_place(id);
+            // Hidden until `show_fields` picks the page's own.
             let edit = create_child(
                 hwnd,
                 w!("EDIT"),
                 id,
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+                WS_CHILD | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
                 edit_rect(rect),
                 scale,
             )?;
@@ -399,7 +683,7 @@ impl Window {
                 Some(LPARAM(1)),
             );
             let _ = SetWindowTextW(edit, &HSTRING::from(text));
-            fields.push((id, edit, rect));
+            fields.push((id, edit, rect, page));
         }
 
         Ok(Self {
@@ -413,6 +697,7 @@ impl Window {
             edit_font,
             field_brush,
             fields,
+            page: PAGE_GENERAL,
             places: Vec::new(),
             hover: 0,
             toggles: [
@@ -439,7 +724,7 @@ impl Window {
                 settings.eyes_minutes,
                 settings.stretch_minutes,
             ],
-            status: "Cari nama kota, kabupaten atau desa".to_string(),
+            status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
             preview: None,
@@ -450,7 +735,7 @@ impl Window {
         self.fields
             .iter()
             .find(|(field, ..)| *field == id)
-            .map(|(_, hwnd, _)| *hwnd)
+            .map(|(_, hwnd, ..)| *hwnd)
             .unwrap_or_default()
     }
 
@@ -475,6 +760,38 @@ impl Window {
     fn invalidate(&self) {
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    /// Moves to a sidebar page. A hidden field can't keep the keyboard, and the
+    /// notifications this causes can't reach us here, so `focused` is reset by hand.
+    fn set_page(&mut self, index: usize) {
+        self.places.clear();
+        if index != self.page {
+            self.page = index;
+            self.focused = None;
+            unsafe {
+                let _ = SetFocus(Some(self.hwnd));
+            }
+            if self.status_is_error {
+                self.status = SEARCH_HINT.to_string();
+                self.status_is_error = false;
+            }
+        }
+        self.show_fields();
+        self.invalidate();
+    }
+
+    /// Shows the current page's fields, minus those under an open dropdown.
+    /// Child windows always draw on top of the parent's painting.
+    fn show_fields(&self) {
+        let dropdown = !self.places.is_empty();
+        for (id, hwnd, _, page) in &self.fields {
+            let visible = *page == self.page && !(dropdown && COVERED_FIELDS.contains(id));
+            let command = if visible { SW_SHOW } else { SW_HIDE };
+            unsafe {
+                let _ = ShowWindow(*hwnd, command);
+            }
         }
     }
 
@@ -528,30 +845,17 @@ impl Window {
         });
     }
 
-    /// Opens the results dropdown over the fields below the search box. The
-    /// fields under it are hidden meanwhile: child windows always draw on top
-    /// of the parent's painting.
+    /// Opens the results dropdown over the fields below the search box.
     fn show_results(&mut self, result: std::result::Result<Vec<Place>, String>) {
         match result {
             Ok(places) if !places.is_empty() => {
                 self.places = places;
                 self.hover = 0;
                 self.set_status("", false);
-                self.set_covered_fields_visible(false);
+                self.show_fields();
             }
             Ok(_) => self.set_status("Tempat tidak ditemukan; coba nama lain", true),
             Err(message) => self.set_status(&message, true),
-        }
-    }
-
-    fn set_covered_fields_visible(&self, visible: bool) {
-        let command = if visible { SW_SHOW } else { SW_HIDE };
-        for (id, hwnd, _) in &self.fields {
-            if COVERED_FIELDS.contains(id) {
-                unsafe {
-                    let _ = ShowWindow(*hwnd, command);
-                }
-            }
         }
     }
 
@@ -605,7 +909,7 @@ impl Window {
 
     fn hide_results(&mut self) {
         self.places.clear();
-        self.set_covered_fields_visible(true);
+        self.show_fields();
         self.invalidate();
     }
 
@@ -620,6 +924,7 @@ impl Window {
             || latitude.is_some_and(config::valid_latitude)
                 && longitude.is_some_and(config::valid_longitude);
         if !coordinates_ok {
+            self.set_page(PAGE_PRAYER);
             self.set_status(
                 "Lintang (-90 s/d 90) atau bujur (-180 s/d 180) tidak valid",
                 true,
@@ -627,10 +932,12 @@ impl Window {
             return;
         }
         let Some(remind) = whole_number(&self.text(ID_REMIND), 1, 60) else {
+            self.set_page(PAGE_PRAYER);
             self.set_status("Pengingat harus 1 sampai 60 menit", true);
             return;
         };
         let Some(idle) = whole_number(&self.text(ID_IDLE), 1, 120) else {
+            self.set_page(PAGE_GENERAL);
             self.set_status("Waktu munculnya mata harus 1 sampai 120 menit", true);
             return;
         };
@@ -678,7 +985,23 @@ impl Window {
         self.close();
     }
 
+    /// The switch under a point on the current page.
+    fn toggle_at(&self, x: f32, y: f32) -> Option<usize> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Switch { toggle, .. } if rect.contains(x, y) => Some(*toggle),
+            _ => None,
+        })
+    }
+
+    fn search_button(&self, x: f32, y: f32) -> bool {
+        self.page == PAGE_PRAYER && SEARCH_BUTTON.contains(x, y)
+    }
+
     fn click(&mut self, x: f32, y: f32) {
+        if let Some(index) = (0..PAGES.len()).find(|&i| nav_row(i).contains(x, y)) {
+            self.set_page(index);
+            return;
+        }
         // An open dropdown takes the click: a row picks it, anywhere else closes it.
         if !self.places.is_empty() && !SEARCH_BUTTON.contains(x, y) {
             match self.result_at(x, y) {
@@ -688,26 +1011,29 @@ impl Window {
             }
             return;
         }
-        if SEARCH_BUTTON.contains(x, y) {
+        if self.search_button(x, y) {
             self.start_search();
         } else if SAVE_BUTTON.contains(x, y) {
             self.save();
         } else if CANCEL_BUTTON.contains(x, y) {
             self.close();
-        } else if let Some(index) = (0..TOGGLES.len()).find(|&i| toggle_row(i).contains(x, y)) {
+        } else if let Some(index) = self.toggle_at(x, y) {
             self.toggles[index] = !self.toggles[index];
             self.invalidate();
         }
     }
 
     fn clickable(&self, x: f32, y: f32) -> bool {
+        if (0..PAGES.len()).any(|i| nav_row(i).contains(x, y)) {
+            return true;
+        }
         if !self.places.is_empty() {
             return self.result_at(x, y).is_some() || SEARCH_BUTTON.contains(x, y);
         }
-        [SEARCH_BUTTON, SAVE_BUTTON, CANCEL_BUTTON]
-            .iter()
-            .any(|r| r.contains(x, y))
-            || (0..TOGGLES.len()).any(|i| toggle_row(i).contains(x, y))
+        self.search_button(x, y)
+            || SAVE_BUTTON.contains(x, y)
+            || CANCEL_BUTTON.contains(x, y)
+            || self.toggle_at(x, y).is_some()
     }
 
     unsafe fn paint(&self, hdc: HDC) {
@@ -720,30 +1046,69 @@ impl Window {
         t.BeginDraw();
         t.Clear(Some(&rgb(BACKGROUND, 1.0)));
 
-        let f = &self.fonts;
-        self.text_at(
-            "Pengaturan",
-            &f.title,
-            Rect::new(24.0, 14.0, 424.0, 54.0),
-            0xffffff,
-            1.0,
-        );
-
-        // Prayer column.
-        self.text_at(
-            "Waktu sholat",
-            &f.section,
-            Rect::new(24.0, 60.0, 424.0, 84.0),
-            0xffffff,
-            0.7,
-        );
+        self.sidebar();
+        let page = &PAGES[self.page];
+        self.text_at(page.title, &self.fonts.title, TITLE, 0xffffff, 1.0);
+        if self.page == PAGE_PRAYER {
+            self.location();
+        }
+        self.page_groups(page);
         // Fields under an open dropdown are hidden, and so is their chrome.
         let dropdown = !self.places.is_empty();
-        for (id, _, rect) in &self.fields {
-            if !(dropdown && COVERED_FIELDS.contains(id)) {
+        for (id, _, rect, field_page) in &self.fields {
+            if *field_page == self.page && !(dropdown && COVERED_FIELDS.contains(id)) {
                 self.field_background(*rect, self.focused == Some(*id));
             }
         }
+        if self.page == PAGE_PRAYER {
+            self.results_dropdown();
+        }
+
+        // Footer.
+        self.brush.SetColor(&rgb(BORDER, 1.0));
+        t.FillRectangle(
+            &Rect::new(SIDEBAR, FOOTER_TOP, CLIENT.0, FOOTER_TOP + 1.0).d2d(),
+            &self.brush,
+        );
+        // The Sholat page shows its status under the search box.
+        if self.status_is_error && self.page != PAGE_PRAYER {
+            self.text_at(
+                &self.status,
+                &self.fonts.small,
+                FOOTER_STATUS,
+                0xff99a4,
+                1.0,
+            );
+        }
+        self.button("Batal", CANCEL_BUTTON, false);
+        self.button("Simpan", SAVE_BUTTON, true);
+
+        let _ = t.EndDraw(None, None);
+    }
+
+    unsafe fn sidebar(&self) {
+        let f = &self.fonts;
+        self.brush.SetColor(&rgb(SIDEBAR_FILL, 1.0));
+        self.target
+            .FillRectangle(&Rect::new(0.0, 0.0, SIDEBAR, CLIENT.1).d2d(), &self.brush);
+        for (index, page) in PAGES.iter().enumerate() {
+            let row = nav_row(index);
+            if index == self.page {
+                self.rounded(row, 8.0, 0x2c2c2c, 1.0);
+            }
+            let cy = (row.top + row.bottom) / 2.0;
+            let tile = Rect::new(row.left + 6.0, cy - 11.0, row.left + 28.0, cy + 11.0);
+            self.rounded(tile, 6.0, page.color, 1.0);
+            self.text_at(page.glyph, &f.glyph, tile, 0xffffff, 1.0);
+            let label = Rect::new(tile.right + 10.0, row.top, row.right - 8.0, row.bottom);
+            self.text_at(page.title, &f.body, label, 0xffffff, 0.95);
+        }
+    }
+
+    /// The Sholat page's top: place search, coordinates and today's times.
+    unsafe fn location(&self) {
+        let f = &self.fonts;
+        self.text_at("Lokasi", &f.section, LOCATION_HEADING, 0xffffff, 0.7);
         self.button("Cari", SEARCH_BUTTON, false);
         let status_color = if self.status_is_error {
             0xff99a4
@@ -751,91 +1116,87 @@ impl Window {
             0xffffff
         };
         self.text_at(&self.status, &f.small, STATUS, status_color, 0.6);
-        let labels: &[(&str, f32, f32)] = if dropdown { &[] } else { &FIELD_LABELS };
+        let labels: &[(&str, f32, f32)] = if self.places.is_empty() {
+            &FIELD_LABELS
+        } else {
+            &[]
+        };
         for &(label, x, y) in labels {
             self.text_at(
                 label,
                 &f.small,
-                Rect::new(x, y, x + 192.0, y + 20.0),
+                Rect::new(x, y, x + 234.0, y + 18.0),
                 0xffffff,
                 0.75,
             );
         }
         self.preview_card();
-        self.text_at(
-            "Modul",
-            &f.section,
-            Rect::new(24.0, MODULES_TOP - 30.0, 424.0, MODULES_TOP - 6.0),
-            0xffffff,
-            0.7,
-        );
-        self.results_dropdown();
+    }
 
-        // Switches column.
-        self.text_at(
-            "Notifikasi",
-            &f.section,
-            Rect::new(RIGHT.0, 60.0, RIGHT.1, 84.0),
-            0xffffff,
-            0.7,
-        );
-        self.text_at(
-            "Umum",
-            &f.section,
-            Rect::new(RIGHT.0, GENERAL_TOP - 30.0, RIGHT.1, GENERAL_TOP - 6.0),
-            0xffffff,
-            0.7,
-        );
-        self.text_at(
-            "Agenda \u{b7} tautan kalender .ics",
-            &f.section,
-            Rect::new(RIGHT.0, ICAL_TOP - 30.0, RIGHT.1, ICAL_TOP - 6.0),
-            0xffffff,
-            0.7,
-        );
-        self.text_at(
-            "Kesehatan",
-            &f.section,
-            Rect::new(RIGHT.0, HEALTH_TOP - 30.0, RIGHT.1, HEALTH_TOP - 6.0),
-            0xffffff,
-            0.7,
-        );
-        for (index, label) in TOGGLES.iter().enumerate() {
-            let row = toggle_row(index);
-            let label = match index.checked_sub(FIRST_HEALTH) {
-                Some(i) => format!("{label} \u{b7} {} menit", self.health_minutes[i]),
-                None => label.to_string(),
-            };
-            self.text_at(
-                &label,
-                &f.body,
-                Rect::new(row.left, row.top, row.right - 56.0, row.bottom),
-                0xffffff,
-                0.95,
+    /// Headed cards of rows, with a thin line between rows.
+    unsafe fn page_groups(&self, page: &'static Page) {
+        let f = &self.fonts;
+        for (index, group) in page.groups.iter().enumerate() {
+            let top = group_top(page, index);
+            let heading = Rect::new(LEFT + 2.0, top, RIGHT, top + HEADING - 6.0);
+            self.text_at(group.title, &f.section, heading, 0xffffff, 0.7);
+            let bottom = top + HEADING + group.rows.len() as f32 * ROW;
+            self.rounded(
+                Rect::new(LEFT, top + HEADING, RIGHT, bottom),
+                10.0,
+                SURFACE,
+                1.0,
             );
-            self.toggle(row, self.toggles[index]);
         }
-        let idle_row = Rect::new(
-            RIGHT.0,
-            IDLE_FIELD.top,
-            IDLE_FIELD.left - 8.0,
-            IDLE_FIELD.bottom,
-        );
-        self.text_at(
-            "Mata muncul setelah (menit)",
-            &f.body,
-            idle_row,
-            0xffffff,
-            0.95,
-        );
-
-        // Footer.
-        self.brush.SetColor(&rgb(BORDER, 1.0));
-        t.FillRectangle(&Rect::new(0.0, 664.0, CLIENT.0, 665.0).d2d(), &self.brush);
-        self.button("Batal", CANCEL_BUTTON, false);
-        self.button("Simpan", SAVE_BUTTON, true);
-
-        let _ = t.EndDraw(None, None);
+        for (rect, row) in rows(page) {
+            if rect.bottom < group_end(page, rect.bottom) {
+                self.brush.SetColor(&rgb(BORDER, 1.0));
+                self.target.FillRectangle(
+                    &Rect::new(rect.left + 16.0, rect.bottom, rect.right, rect.bottom + 1.0).d2d(),
+                    &self.brush,
+                );
+            }
+            let (title, note, text_right) = match row {
+                Row::Switch { title, note, .. } => (*title, *note, rect.right - 72.0),
+                Row::Field {
+                    title, note, width, ..
+                } => (*title, *note, rect.right - 32.0 - width),
+            };
+            let title_box = Rect::new(
+                rect.left + 16.0,
+                rect.top + 5.0,
+                text_right,
+                rect.top + 25.0,
+            );
+            let note_box = Rect::new(
+                title_box.left,
+                title_box.bottom,
+                text_right,
+                rect.bottom - 5.0,
+            );
+            self.text_at(title, &f.body, title_box, 0xffffff, 0.95);
+            if let Row::Switch { toggle, .. } = row {
+                let minutes = toggle
+                    .checked_sub(FIRST_HEALTH)
+                    .map(|i| self.health_minutes[i]);
+                match minutes {
+                    Some(minutes) => self.text_at(
+                        &format!("{note}, setiap {minutes} menit"),
+                        &f.small,
+                        note_box,
+                        0xffffff,
+                        0.55,
+                    ),
+                    None => self.text_at(note, &f.small, note_box, 0xffffff, 0.55),
+                }
+                self.toggle(
+                    Rect::new(rect.left, rect.top, rect.right - 16.0, rect.bottom),
+                    self.toggles[*toggle],
+                );
+            } else {
+                self.text_at(note, &f.small, note_box, 0xffffff, 0.55);
+            }
+        }
     }
 
     unsafe fn preview_card(&self) {
@@ -896,9 +1257,9 @@ impl Window {
             }
             let name = Rect::new(
                 row.left + 12.0,
-                row.top + 3.0,
+                row.top + 2.0,
                 row.right - 12.0,
-                row.top + 23.0,
+                row.top + 20.0,
             );
             let region = Rect::new(name.left, name.bottom, name.right, row.bottom - 3.0);
             self.text_at(&place.name, &self.fonts.button_left, name, 0xffffff, 1.0);
@@ -907,7 +1268,7 @@ impl Window {
     }
 
     unsafe fn field_background(&self, rect: Rect, focused: bool) {
-        self.rounded(rect, 6.0, SURFACE, 1.0);
+        self.rounded(rect, 6.0, FIELD, 1.0);
         if focused {
             // Windows 11 marks the focused field with an accent underline.
             let line = Rect::new(
@@ -937,9 +1298,9 @@ impl Window {
         let track = Rect::new(row.right - 40.0, cy - 10.0, row.right, cy + 10.0);
         let knob_x;
         if on {
-            self.rounded(track, 10.0, ACCENT, 1.0);
+            self.rounded(track, 10.0, SWITCH_ON, 1.0);
             knob_x = track.right - 10.0;
-            self.brush.SetColor(&rgb(0x0b0b0b, 1.0));
+            self.brush.SetColor(&rgb(0xffffff, 1.0));
         } else {
             self.brush.SetColor(&rgb(0x9a9a9a, 1.0));
             self.target.DrawRoundedRectangle(
@@ -1019,9 +1380,12 @@ impl Drop for Window {
 impl Fonts {
     unsafe fn new() -> Result<Self> {
         let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-        let make = |weight: DWRITE_FONT_WEIGHT, size: f32, align: DWRITE_TEXT_ALIGNMENT| {
+        let make_in = |family: windows::core::PCWSTR,
+                       weight: DWRITE_FONT_WEIGHT,
+                       size: f32,
+                       align: DWRITE_TEXT_ALIGNMENT| {
             let format = dwrite.CreateTextFormat(
-                w!("Segoe UI Variable Text"),
+                family,
                 None,
                 weight,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -1034,19 +1398,28 @@ impl Fonts {
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
             Ok::<_, windows::core::Error>(format)
         };
+        let make = |weight: DWRITE_FONT_WEIGHT, size: f32, align: DWRITE_TEXT_ALIGNMENT| {
+            make_in(w!("Segoe UI Variable Text"), weight, size, align)
+        };
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         Ok(Self {
-            title: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 22.0, lead)?,
-            section: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0, lead)?,
-            body: make(DWRITE_FONT_WEIGHT_NORMAL, 14.0, lead)?,
-            small: make(DWRITE_FONT_WEIGHT_NORMAL, 12.5, lead)?,
+            title: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 18.0, lead)?,
+            section: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0, lead)?,
+            body: make(DWRITE_FONT_WEIGHT_NORMAL, 13.0, lead)?,
+            small: make(DWRITE_FONT_WEIGHT_NORMAL, 11.5, lead)?,
             button: make(
                 DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                13.0,
+                DWRITE_TEXT_ALIGNMENT_CENTER,
+            )?,
+            button_left: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0, lead)?,
+            time: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 15.0, lead)?,
+            glyph: make_in(
+                w!("Segoe Fluent Icons"),
+                DWRITE_FONT_WEIGHT_NORMAL,
                 14.0,
                 DWRITE_TEXT_ALIGNMENT_CENTER,
             )?,
-            button_left: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0, lead)?,
-            time: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 16.0, lead)?,
         })
     }
 }
@@ -1065,7 +1438,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_CTLCOLOREDIT => {
             let hdc = HDC(wparam.0 as *mut c_void);
             SetTextColor(hdc, colorref(0xf2f2f2));
-            SetBkColor(hdc, colorref(SURFACE));
+            SetBkColor(hdc, colorref(FIELD));
             let brush = with_window(|window| window.field_brush).unwrap_or_default();
             LRESULT(brush.0 as isize)
         }
@@ -1197,4 +1570,51 @@ fn rgb(color: u32, alpha: f32) -> D2D1_COLOR_F {
 /// GDI colours are 0x00BBGGRR.
 fn colorref(color: u32) -> COLORREF {
     COLORREF(((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn switches() -> Vec<usize> {
+        PAGES
+            .iter()
+            .flat_map(rows)
+            .filter_map(|(_, row)| match row {
+                Row::Switch { toggle, .. } => Some(*toggle),
+                Row::Field { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_switch_is_on_one_page() {
+        let mut found = switches();
+        found.sort_unstable();
+        assert_eq!(found, (0..TOGGLE_COUNT).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn rows_stay_above_the_footer() {
+        for page in &PAGES {
+            assert!(
+                rows(page).all(|(rect, _)| rect.bottom <= FOOTER_TOP),
+                "{}",
+                page.title
+            );
+        }
+    }
+
+    #[test]
+    fn fields_land_on_their_pages() {
+        assert_eq!(PAGES[PAGE_PRAYER].title, "Sholat");
+        assert_eq!(field_place(ID_REMIND).0, PAGE_PRAYER);
+        assert_eq!(field_place(ID_IDLE).0, PAGE_GENERAL);
+        assert!(field_place(ID_ICAL).1.right > 0.0);
+    }
+
+    #[test]
+    fn nav_stays_in_the_window() {
+        assert!(nav_row(PAGES.len() - 1).bottom <= CLIENT.1);
+    }
 }
