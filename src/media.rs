@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{Result, RuntimeType};
 use windows::Foundation::TypedEventHandler;
@@ -28,6 +28,8 @@ pub const MEDIA_MSG: u32 = WM_APP + 8;
 const SAFETY_REFRESH: Duration = Duration::from_secs(10);
 /// Several events usually arrive together; they are handled as one.
 const SETTLE: Duration = Duration::from_millis(120);
+/// A new reading this close to the running estimate is only jitter.
+const POSITION_JITTER: f64 = 2.0;
 
 #[derive(Clone)]
 pub struct Track {
@@ -213,10 +215,17 @@ fn read_track(session: &Session, last: Option<&Track>) -> Option<Track> {
             let start = timeline.StartTime().map(|t| t.Duration).unwrap_or(0);
             let end = timeline.EndTime().map(|t| t.Duration).unwrap_or(0);
             let position = timeline.Position().map(|t| t.Duration).unwrap_or(0);
-            (
-                seconds(position - start).max(0.0),
-                seconds(end - start).max(0.0),
-            )
+            let length = seconds(end - start).max(0.0);
+            // Players report the position only now and then; it is as old as
+            // this stamp says, and the song went on meanwhile.
+            let updated = timeline.LastUpdatedTime().map_or(0, |t| t.UniversalTime);
+            let age = seconds(windows_ticks_now() - updated);
+            let age = if playing && updated > 0 && (0.0..=length).contains(&age) {
+                age
+            } else {
+                0.0
+            };
+            (seconds(position - start).max(0.0) + age, length)
         })
         .unwrap_or((0.0, 0.0));
 
@@ -229,12 +238,27 @@ fn read_track(session: &Session, last: Option<&Track>) -> Option<Track> {
         read_at: Instant::now(),
         art: None,
     };
+    if let Some(last) = last.filter(|last| last.playing && playing && last.same_song(&track)) {
+        let estimate = last.position_now();
+        if (estimate - track.position).abs() < POSITION_JITTER {
+            track.position = estimate;
+        }
+    }
     // Album art is only fetched once per song.
     track.art = match last.filter(|last| last.same_song(&track)) {
         Some(last) if last.art.is_some() => last.art.clone(),
         _ => read_art(&properties).map(Arc::new),
     };
     Some(track)
+}
+
+/// The clock in Windows' `DateTime` units: 100 ns ticks since 1601.
+fn windows_ticks_now() -> i64 {
+    const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+    let since = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    UNIX_EPOCH_TICKS + (since.as_nanos() / 100) as i64
 }
 
 fn read_art(

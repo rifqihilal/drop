@@ -113,8 +113,8 @@ const DEMO_STEP: Duration = Duration::from_secs(4);
 /// Wait before reading a newly connected device's battery level.
 const BATTERY_DELAY: Duration = Duration::from_millis(2500);
 /// Frame interval for the music level bars (~15 fps keeps them light).
-const BARS_MS: u32 = 66;
-const BAR_SPEEDS: [f32; 4] = [7.0, 9.5, 6.0, 11.0];
+const BARS_MS: u32 = 40;
+const BAR_SPEEDS: [f32; 4] = [9.0, 13.0, 7.5, 15.0];
 /// How long the music card opens for a new song.
 const SONG_CARD: Duration = Duration::from_secs(4);
 /// The mouse rests this long on the notch before the music card opens.
@@ -208,6 +208,14 @@ struct App {
     page: Page,
     /// The page dots have opened into page icons.
     nav_open: bool,
+    /// The volume slider is being dragged.
+    volume_drag: bool,
+    /// The volume slider is open under the mouse.
+    volume_open: bool,
+    /// The lyrics button on the music card is on.
+    show_lyrics: bool,
+    /// Click-to-open mode: the card was clicked open and stays while hovered.
+    card_clicked: bool,
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
     ical_watch: IcalWatch,
@@ -368,6 +376,10 @@ fn main() -> Result<()> {
             press: None,
             page: Page::Music,
             nav_open: false,
+            volume_drag: false,
+            volume_open: false,
+            show_lyrics: true,
+            card_clicked: false,
             weather_watch: WeatherWatch::start(hwnd),
             ical_watch: IcalWatch::start(hwnd),
             lyrics_watch: LyricsWatch::start(hwnd),
@@ -492,7 +504,7 @@ impl App {
             || self.demo.is_some()
             || self.editing.is_some()
             // Lyrics move on with the song.
-            || (card_open && self.shown_page() == Page::Music && self.lyric().is_some());
+            || (card_open && self.shown_page() == Page::Music && self.shown_lyric().is_some());
         self.schedule(if moving {
             FRAME_MS
         } else if bars_moving {
@@ -553,16 +565,22 @@ impl App {
         if self.editing.is_some() && self.shown_page() != Page::Todo {
             self.finish_editing(true, true);
         }
-        let open =
-            hovering || self.card_until.is_some() || self.drag_over || self.editing.is_some();
+        let by_click = self.settings.open_on_click;
+        let open = (hovering && (!by_click || self.card_clicked))
+            || self.card_until.is_some()
+            || self.drag_over
+            || self.editing.is_some();
+        self.notch.set_peek(hovering && by_click && !open);
         if !open {
             // The next opening starts on the first page, this month.
             self.page = Page::Music;
             self.month_offset = 0;
             self.page_switch = None;
             self.nav_open = false;
+            self.volume_open = false;
         }
         self.notch.set_nav(self.nav_open);
+        self.notch.set_volume(self.volume_open);
         let card = open.then_some(if self.drag_over {
             DROP_ZONE
         } else if self.nav_open {
@@ -657,8 +675,54 @@ impl App {
         self.tick();
     }
 
+    /// Whether the music card's volume slider is at (`x`, `y`).
+    fn volume_at(&self, x: f32, y: f32) -> bool {
+        self.volume_open
+            && self.shown_page() == Page::Music
+            && self.notch.card_visible.value >= 0.5
+            && self
+                .renderer
+                .volume_at(x, y, self.notch.width.value, self.shown_lyric().is_some())
+    }
+
+    /// The speaker opens the slider, which stays while the mouse is on it.
+    fn update_volume(&mut self, x: f32, y: f32) {
+        let open = self.shown_page() == Page::Music
+            && self.notch.card_visible.value >= 0.5
+            && self.renderer.volume_zone_at(
+                x,
+                y,
+                self.notch.width.value,
+                self.shown_lyric().is_some(),
+                self.volume_open,
+            );
+        if open != self.volume_open {
+            self.volume_open = open;
+            self.tick();
+        }
+    }
+
+    fn set_volume_at(&mut self, x: f32) {
+        let level =
+            self.renderer
+                .volume_level(x, self.notch.width.value, self.shown_lyric().is_some());
+        if let Some(audio) = &self.audio {
+            audio.set_volume(level);
+        }
+        self.draw();
+    }
+
     /// A press on a shelf tile may become a drag out.
     fn on_press(&mut self, lparam: LPARAM) {
+        let (x, y) = self.logical_point(lparam);
+        if self.volume_at(x, y) {
+            self.volume_drag = true;
+            unsafe {
+                SetCapture(self.hwnd);
+            }
+            self.set_volume_at(x);
+            return;
+        }
         if self.shown_page() != Page::Shelf || self.notch.card_visible.value < 0.5 {
             return;
         }
@@ -676,7 +740,12 @@ impl App {
     /// the caller runs the drag after letting go of the app state.
     fn on_move(&mut self, lparam: LPARAM) -> Option<PathBuf> {
         let (x, y) = self.logical_point(lparam);
+        if self.volume_drag {
+            self.set_volume_at(x);
+            return None;
+        }
         self.update_nav(x, y);
+        self.update_volume(x, y);
         if let Some((index, px, py)) = self.press {
             if (x - px).abs() + (y - py).abs() > DRAG_THRESHOLD {
                 self.press = None;
@@ -875,18 +944,25 @@ impl App {
 
     /// Whether (`x`, `y`) is over something clickable on the open card.
     fn clickable_at(&self, x: f32, y: f32) -> bool {
+        if self.settings.open_on_click && self.notch.card_visible.target == 0.0 {
+            return true;
+        }
         if self.notch.card_visible.value < 0.5 || self.drag_over {
             return false;
         }
         let width = self.notch.width.value;
-        if self.arrow_at(x, y).is_some() || self.nav_item_at(x, y).is_some() {
+        if self.arrow_at(x, y).is_some() || self.nav_item_at(x, y).is_some() || self.volume_at(x, y)
+        {
             return true;
         }
         match self.shown_page() {
-            Page::Music => self
-                .renderer
-                .music_control_at(x, y, width, self.lyric().is_some())
-                .is_some(),
+            Page::Music => {
+                let lyrics = self.shown_lyric().is_some();
+                self.renderer
+                    .music_control_at(x, y, width, lyrics)
+                    .is_some()
+                    || self.renderer.lyrics_button_at(x, y, width, lyrics)
+            }
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Pomodoro => self.renderer.pomodoro_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
@@ -1055,6 +1131,11 @@ impl App {
     }
 
     /// The lyric line being sung and the next, when the song has lyrics.
+    /// The lyric lines the card shows, unless its button turned them off.
+    fn shown_lyric(&self) -> Option<(&str, &str)> {
+        self.lyric().filter(|_| self.show_lyrics)
+    }
+
     fn lyric(&self) -> Option<(&str, &str)> {
         let track = self.music()?;
         let (artist, title, lines) = self.lyrics.as_ref()?;
@@ -1154,18 +1235,23 @@ impl App {
     /// while they are on screen and moving.
     fn step_bars(&mut self, dt: f32) -> bool {
         let playing = self.track.as_ref().is_some_and(|track| track.playing);
-        let shown = self.notch.music_visible.value > 0.01;
+        // On the strip, and in the card's header.
+        let shown = self.notch.music_visible.value > 0.01 || self.notch.card_visible.value > 0.01;
         if !(shown && playing) {
             self.bars = [0.0; 4];
             return false;
         }
         self.bar_phase += dt;
         let peak = self.audio.as_ref().map_or(0.0, Audio::peak);
-        let level = (peak * 1.8).min(1.0);
+        // Quiet passages still move: loudness follows the root of the peak.
+        let level = (peak.sqrt() * 1.25).min(1.0);
         for (i, bar) in self.bars.iter_mut().enumerate() {
             // Each bar sways at its own pace so they do not move in lockstep.
-            let sway = 0.55 + 0.45 * (self.bar_phase * BAR_SPEEDS[i] + i as f32).sin();
-            *bar += (level * sway - *bar) * 0.45;
+            let phase = self.bar_phase * BAR_SPEEDS[i] + i as f32;
+            let wave = 0.6 * phase.sin() + 0.4 * (phase * 1.7 + i as f32).sin();
+            let target = level * (0.6 + 0.4 * wave);
+            // Quick up, slower down, like a level meter.
+            *bar += (target - *bar) * if target > *bar { 0.6 } else { 0.3 };
         }
         true
     }
@@ -1173,6 +1259,8 @@ impl App {
     fn on_hover(&mut self, inside: bool) {
         let now = Instant::now();
         self.nav_open &= inside;
+        self.volume_open &= inside || self.volume_drag;
+        self.card_clicked &= inside;
         if inside {
             if self.hover_since.is_none() {
                 self.hover_since = Some(now);
@@ -1195,6 +1283,18 @@ impl App {
 
     fn on_click(&mut self, lparam: LPARAM) {
         let (x, y) = self.logical_point(lparam);
+        if self.volume_drag {
+            self.volume_drag = false;
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            return;
+        }
+        if self.settings.open_on_click && self.notch.card_visible.target == 0.0 {
+            self.card_clicked = true;
+            self.tick();
+            return;
+        }
         if self.notch.card_visible.value >= 0.5 && !self.drag_over {
             if let Some(index) = self.nav_item_at(x, y) {
                 self.go_to(index);
@@ -1238,7 +1338,14 @@ impl App {
         if self.shown_page() != Page::Music {
             return;
         }
-        let lyrics = self.lyric().is_some();
+        let lyrics = self.shown_lyric().is_some();
+        if self.renderer.lyrics_button_at(x, y, width, lyrics) {
+            if self.lyric().is_some() {
+                self.show_lyrics = !self.show_lyrics;
+                self.tick();
+            }
+            return;
+        }
         let Some(command) = self.renderer.music_control_at(x, y, width, lyrics) else {
             return;
         };
@@ -1418,6 +1525,11 @@ impl App {
     }
 
     fn on_volume(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        // The music card has its own slider.
+        if self.notch.card_visible.target > 0.0 && self.shown_page() == Page::Music {
+            self.draw();
+            return;
+        }
         self.show_level(LevelKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
     }
 
@@ -1526,7 +1638,11 @@ impl App {
                 position: track.position_now(),
                 duration: track.duration,
                 bars: self.bars,
-                lyric: self.lyric(),
+                lyric: self.shown_lyric(),
+                lyrics_ready: self.lyric().is_some(),
+                lyrics_on: self.show_lyrics,
+                volume_visible: n.volume_visible.value,
+                volume: self.audio.as_ref().and_then(Audio::volume).unwrap_or(0.0),
             }),
             music_visible: n.music_visible.value,
             card_visible: n.card_visible.value,
@@ -1538,6 +1654,7 @@ impl App {
                 .unwrap_or(0),
             page_list: self.pages(),
             nav_visible: n.nav_visible.value,
+            peek_visible: n.peek_visible.value,
             calendar: {
                 let (year, month, day) = prayer::today();
                 let (shown_year, shown_month) =

@@ -115,8 +115,9 @@ const PRAYER_TOP: f32 = 318.0;
 const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
 
 /// Switch states, in this order: five notifications, start with Windows,
-/// eight modules, three health reminders, then the minimal notch.
-const TOGGLE_COUNT: usize = 18;
+/// eight modules, three health reminders, the minimal notch, then opening
+/// the card by click.
+const TOGGLE_COUNT: usize = 19;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -181,6 +182,11 @@ static PAGES: [Page; 9] = [
                         toggle: 17,
                         title: "Notch minimal",
                         note: "Bar hitam tipis saat tertutup, tab browser tetap terlihat",
+                    },
+                    Row::Switch {
+                        toggle: 18,
+                        title: "Buka kartu dengan klik",
+                        note: "Hover hanya melebarkan notch dan menampilkan tanggal",
                     },
                     Row::Switch {
                         toggle: 11,
@@ -724,6 +730,7 @@ impl Window {
                 settings.eyes,
                 settings.stretch,
                 settings.notch_minimal,
+                settings.open_on_click,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -978,6 +985,7 @@ impl Window {
             stretch: self.toggles[16],
             stretch_minutes: self.health_minutes[2],
             notch_minimal: self.toggles[17],
+            open_on_click: self.toggles[18],
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);

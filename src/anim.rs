@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 pub const COMPACT: (f32, f32) = (156.0, 28.0);
 /// Notch size in the minimal setting: a thin bar that leaves browser tabs free.
 pub const MINIMAL: (f32, f32) = (120.0, 6.0);
+/// Notch size while hovered in click-to-open mode: widened for the date.
+pub const PEEK: (f32, f32) = (320.0, 30.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.
@@ -23,9 +25,9 @@ pub const CARD_SIDE: f32 = 30.0;
 pub const CARD_TOP: f32 = 22.0;
 
 /// Every open card is this size, so the arrows stay put between pages.
-pub const CARD: (f32, f32) = (CARD_WIDTH, CARD_TOP + 150.0);
+pub const CARD: (f32, f32) = (CARD_WIDTH, CARD_TOP + 164.0);
 /// The open card grown downward to hold the page icons.
-pub const CARD_NAV: (f32, f32) = (CARD_WIDTH, CARD.1 + 40.0);
+pub const CARD_NAV: (f32, f32) = (CARD_WIDTH, CARD.1 + 26.0);
 /// Notch size while files are dragged over it.
 pub const DROP_ZONE: (f32, f32) = (320.0, 84.0);
 /// Height of one task on the task card.
@@ -263,6 +265,10 @@ pub struct Notch {
     pub card_visible: Spring,
     /// How far the page dots have turned into page icons, 0..1.
     pub nav_visible: Spring,
+    /// How far the notch has widened to show the date, 0..1.
+    pub peek_visible: Spring,
+    /// How far the music card's volume slider has opened, 0..1.
+    pub volume_visible: Spring,
     idle: bool,
     banner_active: bool,
     /// Size of the live strip (music or timer), if one shows.
@@ -271,6 +277,8 @@ pub struct Notch {
     card_size: Option<(f32, f32)>,
     /// Size with nothing else to show.
     resting: (f32, f32),
+    /// Hovered in click-to-open mode.
+    peek: bool,
 }
 
 impl Notch {
@@ -285,11 +293,14 @@ impl Notch {
             music_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
             card_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
             nav_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
+            peek_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
+            volume_visible: Spring::new(0.0, 200.0, 28.0, 0.002),
             idle: false,
             banner_active: false,
             strip_size: None,
             card_size: None,
             resting: COMPACT,
+            peek: false,
         }
     }
 
@@ -394,6 +405,8 @@ impl Notch {
         moving |= self.music_visible.step(dt);
         moving |= self.card_visible.step(dt);
         moving |= self.nav_visible.step(dt);
+        moving |= self.peek_visible.step(dt);
+        moving |= self.volume_visible.step(dt);
         if let Some(Banner {
             content: Content::Level { level, .. },
             ..
@@ -416,11 +429,15 @@ impl Notch {
     fn retarget(&mut self) {
         let banner = self.banner_active;
         let card = self.card_size.filter(|_| !banner);
-        let strip = self.strip_size.filter(|_| !banner && card.is_none());
-        let eyes = self.idle && !banner && card.is_none() && strip.is_none();
+        let peek = self.peek && !banner && card.is_none();
+        let strip = self
+            .strip_size
+            .filter(|_| !banner && card.is_none() && !peek);
+        let eyes = self.idle && !banner && card.is_none() && strip.is_none() && !peek;
         let (w, h) = match (&self.banner, card, strip) {
             (Some(shown), _, _) if banner => shown.size,
             (_, Some(size), _) | (_, None, Some(size)) => size,
+            _ if peek => PEEK,
             _ if eyes => IDLE,
             _ => self.resting,
         };
@@ -431,12 +448,26 @@ impl Notch {
         self.card_visible.target = on(card.is_some());
         self.music_visible.target = on(strip.is_some());
         self.eyes_visible.target = on(eyes);
+        self.peek_visible.target = on(peek);
     }
 
     /// Rests as the thin bar, or as the usual notch with the clock.
     pub fn set_minimal(&mut self, minimal: bool) {
         self.resting = if minimal { MINIMAL } else { COMPACT };
         self.retarget();
+    }
+
+    /// Widens the notch to show the date, or lets it rest again.
+    pub fn set_peek(&mut self, peek: bool) {
+        if peek != self.peek {
+            self.peek = peek;
+            self.retarget();
+        }
+    }
+
+    /// Opens or closes the music card's volume slider.
+    pub fn set_volume(&mut self, open: bool) {
+        self.volume_visible.target = if open { 1.0 } else { 0.0 };
     }
 
     /// Turns the page dots into page icons, or back.

@@ -81,13 +81,19 @@ fn card_arrow(direction: f32, width: f32, height: f32) -> (f32, f32) {
 }
 
 /// A page's name in the card header: a white word, then one in its colour.
-fn page_title(page: Page, place: &str) -> (&str, &str, Accent) {
+/// The calendar names the month it shows.
+fn page_title<'a>(
+    page: Page,
+    place: &'a str,
+    month: &'a str,
+    year: &'a str,
+) -> (&'a str, &'a str, Accent) {
     match page {
         Page::Music => ("Sedang", "Diputar", Accent::Green),
         Page::Status => ("Hari", "Ini", Accent::Teal),
         Page::Prayer if !place.is_empty() => ("Sholat", place, Accent::Green),
         Page::Prayer => ("Waktu", "Sholat", Accent::Green),
-        Page::Calendar => ("Kalender", "& Agenda", Accent::Red),
+        Page::Calendar => (month, year, Accent::Red),
         Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
         Page::Shelf => ("Rak", "Berkas", Accent::Teal),
@@ -109,12 +115,62 @@ fn page_glyph(page: Page) -> &'static str {
 
 // The row of page icons, in the part the card grows by.
 const NAV_STEP: f32 = 30.0;
-const NAV_DROP: f32 = 16.0;
+const NAV_DROP: f32 = 6.0;
+/// Extra room before Settings, for the line that sets it apart.
+const NAV_GAP: f32 = 10.0;
 
-/// Center of icon `index` of `count`.
+/// Center of icon `index` of `count`; the last is Settings.
 fn nav_item(index: usize, count: usize) -> (f32, f32) {
-    let offset = index as f32 - (count as f32 - 1.0) / 2.0;
-    (CANVAS.0 / 2.0 + offset * NAV_STEP, CARD.1 + NAV_DROP)
+    let total = (count - 1) as f32 * NAV_STEP + NAV_GAP;
+    let settings = if index + 1 == count { NAV_GAP } else { 0.0 };
+    let x = CANVAS.0 / 2.0 - total / 2.0 + index as f32 * NAV_STEP + settings;
+    (x, CARD.1 + NAV_DROP)
+}
+
+/// The hour of a "22:38" clock.
+fn clock_hour(clock: &str) -> u32 {
+    clock
+        .split(':')
+        .next()
+        .and_then(|hour| hour.trim().parse().ok())
+        .unwrap_or(12)
+}
+
+fn greeting(hour: u32) -> &'static str {
+    match hour {
+        4..=10 => "Selamat pagi",
+        11..=14 => "Selamat siang",
+        15..=17 => "Selamat sore",
+        _ => "Selamat malam",
+    }
+}
+
+/// The sky at `hour`, top to bottom, for the home panel.
+fn sky_colors(hour: u32) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
+    match hour {
+        4..=6 => (color(0.2, 0.25, 0.55, 1.0), color(0.85, 0.45, 0.3, 1.0)),
+        7..=15 => (color(0.13, 0.36, 0.75, 1.0), color(0.32, 0.62, 0.88, 1.0)),
+        16..=18 => (color(0.35, 0.2, 0.55, 1.0), color(0.88, 0.45, 0.3, 1.0)),
+        _ => (color(0.09, 0.09, 0.28, 1.0), color(0.27, 0.16, 0.47, 1.0)),
+    }
+}
+
+/// The cover's main colour, from BGRA pixels: vivid pixels count most, so a
+/// small bright subject beats a large grey background. Scaled to one
+/// brightness, so the card's white text stays readable on it.
+fn art_tint(pixels: &[u8]) -> Option<[f32; 3]> {
+    let mut sum = [0.0_f32; 3];
+    for pixel in pixels.as_chunks::<4>().0 {
+        let rgb = [pixel[2], pixel[1], pixel[0]].map(|v| v as f32 / 255.0);
+        let high = rgb[0].max(rgb[1]).max(rgb[2]);
+        let low = rgb[0].min(rgb[1]).min(rgb[2]);
+        let weight = (high - low).powi(2) + 0.01;
+        for (total, value) in sum.iter_mut().zip(rgb) {
+            *total += value * weight;
+        }
+    }
+    let high = sum[0].max(sum[1]).max(sum[2]);
+    (high > 0.0).then(|| sum.map(|value| value / high * 0.6))
 }
 
 /// Height of the sun's path at `position` (0 at Subuh, 4 at Isya), 0..1. The
@@ -136,34 +192,38 @@ const ART_PIXELS: u32 = 160;
 /// Click radius around each music control.
 const HIT_RADIUS: f32 = 20.0;
 
-/// Positions on the music card, measured from the top of the notch.
+/// Positions on the music card, measured from the top of the page.
 struct CardRects {
     art: D2D_RECT_F,
     text_left: f32,
     text_right: f32,
-    progress_right: f32,
+    progress: (f32, f32, f32),
+    lyrics: (f32, f32),
     previous: (f32, f32),
     play: (f32, f32),
     next: (f32, f32),
-    /// How far down the content sits, to stay centered on the tall card.
-    shift: f32,
+    speaker: (f32, f32),
+    volume: (f32, f32, f32),
 }
 
 impl CardRects {
     fn new(width: f32, lyrics: bool) -> Self {
         let cx = CANVAS.0 / 2.0;
         let (x0, x1) = (cx - width / 2.0, cx + width / 2.0);
-        let shift = if lyrics { -12.0 } else { 14.0 };
-        let controls_y = 37.0 + shift;
+        // Lyrics take the foot; without them the rest sits centered.
+        let shift = if lyrics { -10.0 } else { 8.0 };
+        let (bar, row) = (84.0 + shift, 116.0 + shift);
         Self {
-            shift,
-            art: rect(x0 + 18.0, 20.0 + shift, x0 + 90.0, 92.0 + shift),
-            text_left: x0 + 104.0,
-            text_right: x1 - 150.0,
-            progress_right: x1 - 20.0,
-            previous: (x1 - 122.0, controls_y),
-            play: (x1 - 78.0, controls_y),
-            next: (x1 - 34.0, controls_y),
+            art: rect(x0 + 18.0, 10.0 + shift, x0 + 74.0, 66.0 + shift),
+            text_left: x0 + 86.0,
+            text_right: x1 - 18.0,
+            progress: (x0 + 56.0, x1 - 56.0, bar),
+            lyrics: (x0 + 30.0, row),
+            previous: (cx - 44.0, row),
+            play: (cx, row),
+            next: (cx + 44.0, row),
+            speaker: (x1 - 28.0, row),
+            volume: (x1 - 116.0, x1 - 44.0, row),
         }
     }
 }
@@ -255,8 +315,11 @@ impl ShelfRects {
 const PAGE_SLIDE: f32 = 18.0;
 
 // Calendar card layout.
-const CELL: (f32, f32) = (28.0, 16.5);
-const GRID_TOP: f32 = 40.0;
+const CELL: (f32, f32) = (28.0, 19.0);
+const GRID_TOP: f32 = 34.0;
+
+/// The header row's middle, as a page sees it.
+const CARD_TOP_ROW: f32 = 17.0 - CARD_TOP;
 
 struct CalendarRects {
     grid_left: f32,
@@ -268,12 +331,11 @@ struct CalendarRects {
 
 impl CalendarRects {
     fn new(x0: f32, x1: f32) -> Self {
-        let grid_left = x0 + 20.0;
-        let grid_right = grid_left + 7.0 * CELL.0;
         Self {
-            grid_left,
-            previous_month: (grid_right - 42.0, 12.0),
-            next_month: (grid_right - 12.0, 12.0),
+            grid_left: x0 + 20.0,
+            // In the header row, right of the date.
+            previous_month: (x1 - 66.0, CARD_TOP_ROW),
+            next_month: (x1 - 38.0, CARD_TOP_ROW),
             agenda_left: x0 + 232.0,
             agenda_right: x1 - 14.0,
         }
@@ -281,11 +343,11 @@ impl CalendarRects {
 }
 
 /// Top of the first event beside the month, and the height of each.
-const AGENDA_TOP: f32 = 26.0;
+const AGENDA_TOP: f32 = 36.0;
 const AGENDA_ROW: f32 = 34.0;
 
 // Pomodoro card layout: the ring on the left, its controls on the right.
-const POMODORO_RING: (f32, f32) = (112.0, 72.0);
+const POMODORO_RING: (f32, f32) = (112.0, 78.0);
 const POMODORO_LEFT: f32 = 214.0;
 
 struct PomodoroRects {
@@ -297,8 +359,8 @@ impl PomodoroRects {
     fn new(x0: f32) -> Self {
         let left = x0 + POMODORO_LEFT;
         Self {
-            start_pause: rect(left, 76.0, left + 92.0, 104.0),
-            reset: (left + 114.0, 90.0),
+            start_pause: rect(left, 82.0, left + 92.0, 110.0),
+            reset: (left + 114.0, 96.0),
         }
     }
 }
@@ -346,8 +408,6 @@ pub mod glyph {
     pub const MUSIC: &str = "\u{E8D6}";
     pub const PLAY: &str = "\u{E768}";
     pub const PAUSE: &str = "\u{E769}";
-    pub const PREVIOUS: &str = "\u{E892}";
-    pub const NEXT: &str = "\u{E893}";
     pub const CHEVRON_LEFT: &str = "\u{E76B}";
     pub const CHEVRON_RIGHT: &str = "\u{E76C}";
     pub const RESET: &str = "\u{E72C}";
@@ -411,6 +471,8 @@ pub struct Scene<'a> {
     pub page_list: Vec<Page>,
     /// How far the page dots have turned into page icons, 0..1.
     pub nav_visible: f32,
+    /// How far the notch has widened to show the date, 0..1.
+    pub peek_visible: f32,
     pub calendar: CalendarScene,
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
@@ -567,6 +629,14 @@ pub struct MusicScene<'a> {
     pub title: &'a str,
     pub artist: &'a str,
     pub playing: bool,
+    /// The song has lyrics to show.
+    pub lyrics_ready: bool,
+    /// The lyrics button is on.
+    pub lyrics_on: bool,
+    /// Master volume, 0..1.
+    pub volume: f32,
+    /// How far the volume slider has opened, 0..1.
+    pub volume_visible: f32,
     /// Seconds.
     pub position: f64,
     pub duration: f64,
@@ -621,6 +691,8 @@ pub struct Renderer {
     close_glyph: IDWriteTextFormat,
     /// Icons inside pill buttons.
     pill_glyph: IDWriteTextFormat,
+    /// Icons in the page navigation pill.
+    nav_glyph: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
     symbols: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -631,6 +703,8 @@ pub struct Renderer {
     round_caps: ID2D1StrokeStyle,
     /// Album art of the current track, decoded once per song.
     art: Option<ID2D1Bitmap>,
+    /// The art's main colour, for the music card's background.
+    art_tint: Option<[f32; 3]>,
     /// Shelf thumbnails, in shelf order.
     thumbs: Vec<(PathBuf, Option<ID2D1Bitmap>)>,
     /// Dashed outline of the drop zone.
@@ -775,6 +849,7 @@ impl Renderer {
             let lyric_next = centered_line(DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let pill_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
+            let nav_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 13.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
             symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
@@ -797,6 +872,7 @@ impl Renderer {
                 lyric_next,
                 close_glyph,
                 pill_glyph,
+                nav_glyph,
                 symbols,
                 icons,
                 black,
@@ -804,6 +880,7 @@ impl Renderer {
                 accent,
                 round_caps,
                 art: None,
+                art_tint: None,
                 thumbs: Vec::new(),
                 dashes,
                 dc,
@@ -880,6 +957,24 @@ impl Renderer {
         sink.Close()?;
 
         self.target.FillGeometry(&geometry, &self.black, None);
+
+        // The music card glows with the colour of the cover.
+        let shown = match (scene.page, scene.previous_page) {
+            (Page::Music, Some(_)) => scene.page_mix,
+            (Page::Music, None) => 1.0,
+            (_, Some(Page::Music)) => 1.0 - scene.page_mix,
+            _ => 0.0,
+        };
+        let opacity = shown * scene.card_visible.clamp(0.0, 1.0);
+        if let Some([r, g, b]) = self.art_tint.filter(|_| opacity > 0.01 && !scene.drop_zone) {
+            let glow = self.gradient(
+                pt(x0, 0.0),
+                pt(x1, h),
+                &[(0.0, color(r, g, b, 1.0)), (0.9, color(0.0, 0.0, 0.0, 0.0))],
+            )?;
+            glow.SetOpacity(opacity);
+            self.target.FillGeometry(&geometry, &glow, None);
+        }
         Ok(())
     }
 
@@ -953,12 +1048,13 @@ impl Renderer {
 
     /// Decodes album art for the current track; None clears it.
     pub fn set_album_art(&mut self, bytes: Option<&[u8]>) {
-        self.art = bytes.and_then(|bytes| unsafe { self.decode_art(bytes).ok() });
+        let decoded = bytes.and_then(|bytes| unsafe { self.decode_art(bytes).ok() });
+        (self.art, self.art_tint) = decoded.map_or((None, None), |(art, tint)| (Some(art), tint));
     }
 
     /// Center-crops to a square and scales to a small bitmap: the art is never
-    /// drawn larger than the card shows it.
-    unsafe fn decode_art(&self, bytes: &[u8]) -> Result<ID2D1Bitmap> {
+    /// drawn larger than the card shows it. Also returns its main colour.
+    unsafe fn decode_art(&self, bytes: &[u8]) -> Result<(ID2D1Bitmap, Option<[f32; 3]>)> {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let stream = SHCreateMemStream(Some(bytes)).ok_or(windows::core::Error::empty())?;
@@ -990,7 +1086,10 @@ impl Renderer {
             0.0,
             WICBitmapPaletteTypeMedianCut,
         )?;
-        self.target.CreateBitmapFromWicBitmap(&converter, None)
+        let mut buffer = vec![0u8; (pixels * pixels * 4) as usize];
+        converter.CopyPixels(std::ptr::null(), pixels * 4, &mut buffer)?;
+        let bitmap = self.target.CreateBitmapFromWicBitmap(&converter, None)?;
+        Ok((bitmap, art_tint(&buffer)))
     }
 
     /// Which music control sits at (`x`, `y`) on the open card.
@@ -1005,6 +1104,39 @@ impl Renderer {
         .into_iter()
         .find(|((cx, cy), _)| (x - cx).powi(2) + (y - cy).powi(2) <= HIT_RADIUS.powi(2))
         .map(|(_, command)| command)
+    }
+
+    /// Whether the lyrics button is at (`x`, `y`) on the open card.
+    pub fn lyrics_button_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> bool {
+        let (y, width) = on_page(y, width);
+        let (bx, by) = CardRects::new(width, lyrics).lyrics;
+        (x - bx).powi(2) + (y - by).powi(2) <= HIT_RADIUS.powi(2)
+    }
+
+    /// Whether the mouse at (`x`, `y`) opens the volume slider: on the
+    /// speaker, or while `open`, anywhere along the slider too.
+    pub fn volume_zone_at(&self, x: f32, y: f32, width: f32, lyrics: bool, open: bool) -> bool {
+        let (y, width) = on_page(y, width);
+        let card = CardRects::new(width, lyrics);
+        let left = if open {
+            card.volume.0 - 10.0
+        } else {
+            card.speaker.0 - 14.0
+        };
+        x >= left && x <= card.speaker.0 + 14.0 && (y - card.speaker.1).abs() <= 16.0
+    }
+
+    /// Whether the volume slider is at (`x`, `y`) on the open card.
+    pub fn volume_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> bool {
+        let (y, width) = on_page(y, width);
+        let (left, right, row) = CardRects::new(width, lyrics).volume;
+        x >= left - 6.0 && x <= right + 6.0 && (y - row).abs() <= 12.0
+    }
+
+    /// The volume the slider gives at `x`, past its ends included.
+    pub fn volume_level(&self, x: f32, width: f32, lyrics: bool) -> f32 {
+        let (left, right, _) = CardRects::new(width - 2.0 * CARD_SIDE, lyrics).volume;
+        ((x - left) / (right - left)).clamp(0.0, 1.0)
     }
 
     /// The live strip (timer or music) and the open card's page.
@@ -1117,10 +1249,12 @@ impl Renderer {
         }
     }
 
-    /// What the dots open into: an icon per page, then Settings. Each rises
-    /// into place a moment after the one before it.
+    /// What the dots open into: a pill of small icons, the showing page's in
+    /// its colour, then Settings past a thin line. Each icon rises into place
+    /// a moment after the one before it.
     unsafe fn draw_page_icons(&self, scene: &Scene, alpha: f32) {
-        if scene.nav_visible < 0.01 {
+        let visible = scene.nav_visible.clamp(0.0, 1.0);
+        if visible < 0.01 {
             return;
         }
         const STAGGER: f32 = 0.05;
@@ -1131,27 +1265,36 @@ impl Renderer {
             .chain([glyph::SETTINGS])
             .collect();
         let count = icons.len();
+        let (first, y) = nav_item(0, count);
+        let (last, _) = nav_item(count - 1, count);
+        self.light.SetOpacity(0.1 * visible * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: rect(first - 17.0, y - 13.0, last + 17.0, y + 13.0),
+                radiusX: 13.0,
+                radiusY: 13.0,
+            },
+            &self.light,
+        );
+        let line = last - NAV_STEP / 2.0 - NAV_GAP / 2.0;
+        self.light.SetOpacity(0.2 * visible * alpha);
+        self.target
+            .FillRectangle(&rect(line - 0.5, y - 7.0, line + 0.5, y + 7.0), &self.light);
         let span = 1.0 - STAGGER * (count - 1) as f32;
         for (index, icon) in icons.into_iter().enumerate() {
-            let t = ((scene.nav_visible - index as f32 * STAGGER) / span).clamp(0.0, 1.0);
+            let t = ((visible - index as f32 * STAGGER) / span).clamp(0.0, 1.0);
             let eased = t * t * (3.0 - 2.0 * t);
             let (x, y) = nav_item(index, count);
-            let y = y + 8.0 * (1.0 - eased);
-            let current = index == scene.page_index;
-            if current {
-                self.light.SetOpacity(0.2 * eased * alpha);
-                self.target.FillEllipse(
-                    &D2D1_ELLIPSE {
-                        point: pt(x, y),
-                        radiusX: 13.0,
-                        radiusY: 13.0,
-                    },
-                    &self.light,
-                );
+            let y = y + 6.0 * (1.0 - eased);
+            if index == scene.page_index {
+                let (_, _, accent) = page_title(scene.page, "", "", "");
+                self.accent.SetColor(&accent_color(accent));
+                self.accent.SetOpacity(eased * alpha);
+                self.draw_nav_glyph(icon, x, y, &self.accent);
+            } else {
+                self.light.SetOpacity(0.75 * eased * alpha);
+                self.draw_nav_glyph(icon, x, y, &self.light);
             }
-            self.light
-                .SetOpacity(if current { 1.0 } else { 0.75 } * eased * alpha);
-            self.draw_small_glyph(icon, x, y, &self.light);
         }
     }
 
@@ -1169,7 +1312,7 @@ impl Renderer {
     pub fn nav_item_at(&self, x: f32, y: f32, count: usize) -> Option<usize> {
         (0..count).find(|&index| {
             let (ix, iy) = nav_item(index, count);
-            (x - ix).abs() <= NAV_STEP / 2.0 && (y - iy).abs() <= 15.0
+            (x - ix).abs() <= NAV_STEP / 2.0 && (y - iy).abs() <= 14.0
         })
     }
 
@@ -1186,7 +1329,9 @@ impl Renderer {
         fixed: bool,
     ) {
         let cy = 17.0;
-        let (first, second, accent) = page_title(page, scene.place);
+        let month = calendar::MONTHS[scene.calendar.month as usize - 1];
+        let year = scene.calendar.year.to_string();
+        let (first, second, accent) = page_title(page, scene.place, month, &year);
         // A place name stops short of the date in the middle.
         let second_room = if page == Page::Prayer { 84.0 } else { 140.0 };
         let mut x = x0 + 20.0;
@@ -1209,7 +1354,15 @@ impl Renderer {
         if !fixed {
             return;
         }
-        let alpha = scene.card_visible.min(1.0);
+        let card_alpha = scene.card_visible.min(1.0);
+        // The home page shows its own clock, so this one steps aside there.
+        let shown = match (scene.page, scene.previous_page) {
+            (Page::Status, Some(_)) => 1.0 - scene.page_mix,
+            (Page::Status, None) => 0.0,
+            (_, Some(Page::Status)) => scene.page_mix,
+            _ => 1.0,
+        };
+        let alpha = card_alpha * shown;
 
         // Battery ring, date, and the time in bold, centred as one group.
         let date = self.text_layout(scene.status.date, &self.subtitle_text, 160.0);
@@ -1246,7 +1399,7 @@ impl Renderer {
             for (i, level) in music.bars.iter().enumerate() {
                 let left = right - (4 - i) as f32 * (bar + gap) + gap;
                 let half = (3.0 + (tallest - 3.0) * level.clamp(0.0, 1.0)) / 2.0;
-                self.light.SetOpacity(0.85 * alpha);
+                self.light.SetOpacity(0.85 * card_alpha);
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: rect(left, cy - half, left + bar, cy + half),
@@ -1367,14 +1520,6 @@ impl Renderer {
         alpha: f32,
     ) {
         let layout = CalendarRects::new(x0, x1);
-        let heading = format!(
-            "{} {}",
-            calendar::MONTHS[calendar.month as usize - 1],
-            calendar.year
-        );
-        if let Some(text) = self.text_layout(&heading, &self.title_text, 150.0) {
-            self.draw_layout(&text.layout, layout.grid_left, 2.0, alpha);
-        }
         self.light.SetOpacity(0.8 * alpha);
         for ((cx, cy), icon) in [
             (layout.previous_month, glyph::CHEVRON_LEFT),
@@ -1388,7 +1533,7 @@ impl Renderer {
             rect(left, row, left + CELL.0, row + CELL.1)
         };
         for (column, name) in calendar::WEEKDAYS.iter().enumerate() {
-            self.draw_text(name, &self.tiny, cell(column as u32, 22.0), 0.45 * alpha);
+            self.draw_text(name, &self.tiny, cell(column as u32, 15.0), 0.45 * alpha);
         }
         let first = calendar::weekday(calendar.year, calendar.month, 1);
         let days = calendar::days_in_month(calendar.year, calendar.month);
@@ -1406,8 +1551,8 @@ impl Renderer {
                             (bounds.left + bounds.right) / 2.0,
                             (bounds.top + bounds.bottom) / 2.0,
                         ),
-                        radiusX: 8.5,
-                        radiusY: 8.5,
+                        radiusX: 9.0,
+                        radiusY: 9.0,
                     },
                     &self.accent,
                 );
@@ -1460,7 +1605,7 @@ impl Renderer {
         let left = layout.agenda_left;
         let room = layout.agenda_right - left;
         if let Some(text) = self.text_layout("Agenda", &self.subtitle_text, room) {
-            self.draw_layout(&text.layout, left, 6.0, 0.55 * alpha);
+            self.draw_layout(&text.layout, left, 16.0, 0.55 * alpha);
         }
         if agenda.is_empty() {
             if let Some(text) = self.text_layout("Tidak ada acara", &self.small_left, room) {
@@ -1511,11 +1656,11 @@ impl Renderer {
         }
         let left = x0 + POMODORO_LEFT;
         if let Some(text) = self.text_layout(timer.label, &self.title_text, 150.0) {
-            self.draw_layout(&text.layout, left, 26.0, alpha);
+            self.draw_layout(&text.layout, left, 32.0, alpha);
         }
         let session = format!("Sesi {}", timer.session);
         if let Some(text) = self.text_layout(&session, &self.subtitle_text, 150.0) {
-            self.draw_layout(&text.layout, left, 48.0, 0.6 * alpha);
+            self.draw_layout(&text.layout, left, 54.0, 0.6 * alpha);
         }
         let (icon, label) = if timer.running {
             (glyph::PAUSE, "Jeda")
@@ -1944,15 +2089,15 @@ impl Renderer {
             "Berikutnya"
         };
         if let Some(text) = self.text_layout(caption, &self.subtitle_text, 150.0) {
-            self.draw_layout(&text.layout, left, 12.0, 0.55 * alpha);
+            self.draw_layout(&text.layout, left, 14.0, 0.55 * alpha);
         }
         if let Some(text) = self.text_layout(prayer.next_name, &self.big_clock, 150.0) {
-            self.draw_layout(&text.layout, left, 28.0, alpha);
+            self.draw_layout(&text.layout, left, 30.0, alpha);
         }
         self.accent.SetColor(&accent_color(Accent::Blue));
         self.accent.SetOpacity(alpha);
         if let Some(time) = self.text_layout(&prayer.next_time, &self.text_left, 60.0) {
-            let cy = 82.0;
+            let cy = 84.0;
             self.draw_layout(&time.layout, left, cy - time.height / 2.0, alpha);
             let wait = format!("dalam {}", prayer.wait);
             if let Some(text) = self.text_layout(&wait, &self.small_left, 104.0) {
@@ -1967,7 +2112,7 @@ impl Renderer {
         let bar = |right: f32, brush: &ID2D1SolidColorBrush| {
             self.target.FillRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
-                    rect: rect(left, 102.0, right, 106.0),
+                    rect: rect(left, 104.0, right, 108.0),
                     radiusX: 2.0,
                     radiusY: 2.0,
                 },
@@ -1982,7 +2127,7 @@ impl Renderer {
         let first = x0 + 176.0;
         let column = (x1 - 16.0 - first) / 5.0;
         let at_x = |position: f32| first + column * (position + 0.5);
-        let (base, rise) = (98.0, 68.0);
+        let (base, rise) = (100.0, 68.0);
         let at_y = |position: f32| base - rise * sun_arc(position);
         let _ = self.draw_sun_path(&at_x, &at_y, base, base - rise, alpha);
         for index in 0..5 {
@@ -2020,8 +2165,8 @@ impl Renderer {
                 Some(next) if index > next => 0.75,
                 _ => 0.45,
             };
-            let name_box = rect(center - 26.0, 108.0, center + 26.0, 124.0);
-            let time_box = rect(name_box.left, 124.0, name_box.right, 140.0);
+            let name_box = rect(center - 26.0, 110.0, center + 26.0, 125.0);
+            let time_box = rect(name_box.left, 125.0, name_box.right, 140.0);
             self.draw_text(name, &self.tiny, name_box, 0.8 * opacity * alpha);
             self.draw_text(&prayer.times[index], &self.tiny, time_box, opacity * alpha);
         }
@@ -2131,112 +2276,43 @@ impl Renderer {
             .then_some(PomodoroControl::Reset)
     }
 
-    /// Today at a glance, in tiles: the weather, the next prayer and the
-    /// battery. The header above already gives the date and time.
+    /// Home: the time in a panel coloured like the sky, then the weather, the
+    /// next prayer and what is left to do today.
     unsafe fn draw_status_card(&self, scene: &Scene, x0: f32, x1: f32, alpha: f32) {
-        let status = &scene.status;
-        let tiles = if status.battery.is_some() { 3 } else { 2 };
-        let (gap, top, height) = (10.0, 30.0, 76.0);
-        let width = (x1 - x0 - 16.0 - gap * (tiles - 1) as f32) / tiles as f32;
-        let tile = |index: usize| {
-            let left = x0 + 8.0 + index as f32 * (width + gap);
-            rect(left, top, left + width, top + height)
-        };
-        for index in 0..tiles {
-            self.light.SetOpacity(0.07 * alpha);
-            self.target.FillRoundedRectangle(
-                &D2D1_ROUNDED_RECT {
-                    rect: tile(index),
-                    radiusX: 14.0,
-                    radiusY: 14.0,
-                },
-                &self.light,
-            );
-        }
         let text =
             |text: &str, format: &IDWriteTextFormat, x: f32, y: f32, room: f32, opacity: f32| {
                 if let Some(block) = self.text_layout(text, format, room) {
                     self.draw_layout(&block.layout, x, y, opacity * alpha);
                 }
             };
+        let status = &scene.status;
+        let hour = clock_hour(scene.clock);
 
-        // Weather.
-        let area = tile(0);
-        let (left, room) = (area.left + 14.0, width - 24.0);
-        match &status.weather {
-            Some(weather) => {
-                text(weather.glyph, &self.symbols, left, top + 6.0, 40.0, 0.95);
-                text(
-                    &weather.temperature,
-                    &self.trailing_text,
-                    left + 36.0,
-                    top + 4.0,
-                    room - 36.0,
-                    1.0,
-                );
-                text(
-                    weather.description,
-                    &self.subtitle_text,
-                    left,
-                    top + 40.0,
-                    room,
-                    0.75,
-                );
-                text(weather.place, &self.small_left, left, top + 56.0, room, 0.5);
-            }
-            None => {
-                text("Cuaca", &self.subtitle_text, left, top + 12.0, room, 0.75);
-                text(
-                    status.weather_hint,
-                    &self.small_left,
-                    left,
-                    top + 32.0,
-                    room,
-                    0.5,
-                );
-            }
+        // The panel.
+        let panel = rect(x0 + 6.0, 6.0, x0 + 190.0, 146.0);
+        let (top, bottom) = sky_colors(hour);
+        if let Ok(sky) = self.gradient(
+            pt(0.0, panel.top),
+            pt(0.0, panel.bottom),
+            &[(0.0, top), (1.0, bottom)],
+        ) {
+            sky.SetOpacity(alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: panel,
+                    radiusX: 16.0,
+                    radiusY: 16.0,
+                },
+                &sky,
+            );
         }
-
-        // The next prayer.
-        let area = tile(1);
-        let left = area.left + 14.0;
-        match &scene.prayer {
-            Some(prayer) => {
-                text(
-                    prayer.next_name,
-                    &self.small_left,
-                    left,
-                    top + 10.0,
-                    room,
-                    0.6,
-                );
-                text(
-                    &prayer.next_time,
-                    &self.trailing_text,
-                    left,
-                    top + 24.0,
-                    room,
-                    1.0,
-                );
-                text(&prayer.wait, &self.small_left, left, top + 56.0, room, 0.5);
-            }
-            None => {
-                text("Sholat", &self.subtitle_text, left, top + 12.0, room, 0.75);
-                text(
-                    "Atur lokasi di Pengaturan",
-                    &self.small_left,
-                    left,
-                    top + 32.0,
-                    room,
-                    0.5,
-                );
-            }
-        }
-
-        // Battery.
+        let left = panel.left + 16.0;
+        let room = panel.right - 12.0 - left;
+        text(greeting(hour), &self.subtitle_text, left, 16.0, room, 0.9);
+        text(scene.clock, &self.big_clock, left, 33.0, room, 1.0);
+        text(status.date, &self.subtitle_text, left, 75.0, room, 0.85);
         if let Some((percent, charging)) = status.battery {
-            let area = tile(2);
-            let (cx, cy) = (area.left + 32.0, top + height / 2.0);
+            let cy = 122.0;
             let fill = if charging {
                 accent_color(Accent::Green)
             } else if percent <= 20 {
@@ -2244,20 +2320,104 @@ impl Renderer {
             } else {
                 color(1.0, 1.0, 1.0, 1.0)
             };
-            let _ = self.draw_ring(cx, cy, 17.0, percent as f32 / 100.0, fill, alpha);
-            let left = cx + 26.0;
-            let room = area.right - 8.0 - left;
+            let _ = self.draw_ring(left + 7.0, cy, 7.0, percent as f32 / 100.0, fill, alpha);
+            let label = if charging {
+                format!("{percent}% \u{b7} mengisi")
+            } else {
+                format!("{percent}%")
+            };
             text(
-                &format!("{percent}%"),
-                &self.title_text,
-                left,
-                cy - 18.0,
-                room,
-                1.0,
+                &label,
+                &self.small_left,
+                left + 22.0,
+                cy - 8.0,
+                room - 22.0,
+                0.9,
             );
-            let label = if charging { "Mengisi" } else { "Baterai" };
-            text(label, &self.small_left, left, cy + 2.0, room, 0.55);
         }
+
+        // Beside it, three rows split by thin lines.
+        let left = panel.right + 16.0;
+        let right = x1 - 14.0;
+        let room = right - left;
+        for y in [52.0, 108.0] {
+            self.light.SetOpacity(0.08 * alpha);
+            self.target
+                .FillRectangle(&rect(left, y, right, y + 1.0), &self.light);
+        }
+
+        match &status.weather {
+            Some(weather) => {
+                text(weather.glyph, &self.symbols, left, 10.0, 40.0, 0.95);
+                text(
+                    &weather.temperature,
+                    &self.title_text,
+                    left + 38.0,
+                    10.0,
+                    60.0,
+                    1.0,
+                );
+                let line = format!("{} \u{b7} {}", weather.description, weather.place);
+                text(
+                    &line,
+                    &self.small_left,
+                    left + 38.0,
+                    30.0,
+                    room - 38.0,
+                    0.55,
+                );
+            }
+            None => {
+                text("Cuaca", &self.subtitle_text, left, 12.0, room, 0.75);
+                text(status.weather_hint, &self.small_left, left, 30.0, room, 0.5);
+            }
+        }
+
+        match &scene.prayer {
+            Some(prayer) => {
+                text(prayer.next_name, &self.title_text, left, 58.0, 100.0, 1.0);
+                if let Some(time) = self.text_layout(&prayer.next_time, &self.text_left, 60.0) {
+                    self.draw_layout(&time.layout, right - time.width, 60.0, alpha);
+                }
+                let wait = format!("dalam {}", prayer.wait);
+                text(&wait, &self.small_left, left, 78.0, room, 0.55);
+                let bar = |end: f32, brush: &ID2D1SolidColorBrush| {
+                    self.target.FillRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: rect(left, 96.0, end, 99.0),
+                            radiusX: 1.5,
+                            radiusY: 1.5,
+                        },
+                        brush,
+                    );
+                };
+                self.light.SetOpacity(0.14 * alpha);
+                bar(right, &self.light);
+                self.accent.SetColor(&accent_color(Accent::Blue));
+                self.accent.SetOpacity(alpha);
+                bar(left + room * prayer.progress.clamp(0.0, 1.0), &self.accent);
+            }
+            None => {
+                text("Sholat", &self.subtitle_text, left, 60.0, room, 0.75);
+                text(
+                    "Atur lokasi di Pengaturan",
+                    &self.small_left,
+                    left,
+                    78.0,
+                    room,
+                    0.5,
+                );
+            }
+        }
+
+        let events = scene.agenda.iter().filter(|item| item.today).count();
+        let summary = match (scene.todo.left, events) {
+            (0, 0) => "Tidak ada tugas hari ini".to_string(),
+            (tasks, 0) => format!("{tasks} tugas tersisa"),
+            (0, events) => format!("{events} acara hari ini"),
+            (tasks, events) => format!("{tasks} tugas \u{b7} {events} acara hari ini"),
+        };
+        text(&summary, &self.small_left, left, 118.0, room, 0.75);
     }
 
     /// Small art on the left, level bars on the right.
@@ -2281,92 +2441,124 @@ impl Renderer {
         }
     }
 
-    /// Art, title over artist, the three controls, and progress.
+    /// Art beside the title and artist, progress in the cover's colour, the
+    /// controls, the volume, and the lyrics when there are any.
     unsafe fn draw_music_card(&self, music: &MusicScene, width: f32, alpha: f32) {
         let card = CardRects::new(width, music.lyric.is_some());
-        let shift = card.shift;
-        self.draw_art(card.art, 12.0, alpha);
+        self.draw_art(card.art, 10.0, alpha);
+        // The tint at full strength: bright on the dark card.
+        let accent = self
+            .art_tint
+            .map_or(color(1.0, 1.0, 1.0, 1.0), |[r, g, b]| {
+                let high = r.max(g).max(b).max(0.01);
+                color(r / high, g / high, b / high, 1.0)
+            });
 
         let column = card.text_right - card.text_left;
         if let Some(title) = self.text_layout(music.title, &self.title_text, column) {
-            self.draw_layout(&title.layout, card.text_left, 20.0 + shift, 0.97 * alpha);
+            self.draw_layout(&title.layout, card.text_left, card.art.top + 6.0, alpha);
         }
         if let Some(artist) = self.text_layout(music.artist, &self.subtitle_text, column) {
-            self.draw_layout(&artist.layout, card.text_left, 41.0 + shift, 0.55 * alpha);
+            self.draw_layout(
+                &artist.layout,
+                card.text_left,
+                card.art.top + 28.0,
+                0.6 * alpha,
+            );
         }
 
-        // Play/pause in a white disc, previous and next beside it.
-        let (px, py) = card.play;
-        self.light.SetOpacity(alpha);
-        self.target.FillEllipse(
-            &D2D1_ELLIPSE {
-                point: pt(px, py),
-                radiusX: 17.0,
-                radiusY: 17.0,
-            },
-            &self.light,
-        );
-        let play_glyph = if music.playing {
-            glyph::PAUSE
-        } else {
-            glyph::PLAY
-        };
-        self.black.SetOpacity(alpha);
-        self.draw_glyph(play_glyph, px, py, &self.black);
-        self.black.SetOpacity(1.0);
-        self.light.SetOpacity(0.9 * alpha);
-        for (cx, cy, icon) in [
-            (card.previous.0, card.previous.1, glyph::PREVIOUS),
-            (card.next.0, card.next.1, glyph::NEXT),
-        ] {
-            self.draw_glyph(icon, cx, cy, &self.light);
-        }
-
-        // Progress, when the player reports a length.
-        if music.duration > 0.0 {
-            let fraction = (music.position / music.duration).clamp(0.0, 1.0) as f32;
-            let (left, right, y) = (card.text_left, card.progress_right, 76.0 + shift);
-            let bar = |end: f32, opacity: f32| {
-                self.light.SetOpacity(opacity * alpha);
+        let slider = |left: f32, right: f32, y: f32, fraction: f32, opacity: f32| {
+            let bar = |end: f32, brush: &ID2D1SolidColorBrush| {
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: rect(left, y - 2.0, end, y + 2.0),
                         radiusX: 2.0,
                         radiusY: 2.0,
                     },
-                    &self.light,
+                    brush,
                 );
             };
-            bar(right, 0.2);
-            bar(left + (right - left) * fraction, 0.9);
-            let elapsed = format_duration(music.position);
-            let remaining = format!("-{}", format_duration(music.duration - music.position));
-            if let Some(text) = self.text_layout(&elapsed, &self.small_left, 80.0) {
-                self.draw_layout(&text.layout, left, 84.0 + shift, 0.55 * alpha);
+            self.light.SetOpacity(0.18 * opacity);
+            bar(right, &self.light);
+            self.accent.SetColor(&accent);
+            self.accent.SetOpacity(opacity);
+            bar(
+                left + (right - left) * fraction.clamp(0.0, 1.0),
+                &self.accent,
+            );
+        };
+
+        // Progress, when the player reports a length. Whole seconds on both
+        // sides, so the two always add up to the song.
+        if music.duration > 0.0 {
+            let (left, right, y) = card.progress;
+            slider(
+                left,
+                right,
+                y,
+                (music.position / music.duration) as f32,
+                alpha,
+            );
+            let elapsed = music.position.floor();
+            let remaining = (music.duration.round() - elapsed).max(0.0);
+            if let Some(text) = self.text_layout(&format_duration(elapsed), &self.small_left, 40.0)
+            {
+                let x = card.art.left;
+                self.draw_layout(&text.layout, x, y - text.height / 2.0, 0.6 * alpha);
             }
-            if let Some(text) = self.text_layout(&remaining, &self.small_left, 80.0) {
-                self.draw_layout(&text.layout, right - text.width, 84.0 + shift, 0.55 * alpha);
+            let left_text = format!("-{}", format_duration(remaining));
+            if let Some(text) = self.text_layout(&left_text, &self.small_left, 44.0) {
+                let x = card.text_right - text.width;
+                self.draw_layout(&text.layout, x, y - text.height / 2.0, 0.6 * alpha);
             }
+        }
+
+        // Controls, as solid shapes.
+        self.light.SetOpacity(alpha);
+        let (px, py) = card.play;
+        if music.playing {
+            self.fill_pause(px, py, &self.light);
+        } else {
+            let _ = self.fill_play(px, py, &self.light);
+        }
+        self.light.SetOpacity(0.9 * alpha);
+        let _ = self.fill_skip(card.previous.0, card.previous.1, -1.0, &self.light);
+        let _ = self.fill_skip(card.next.0, card.next.1, 1.0, &self.light);
+
+        // The lyrics button lights up in the cover's colour.
+        let (lx, ly) = card.lyrics;
+        if music.lyrics_ready && music.lyrics_on {
+            self.accent.SetColor(&accent);
+            self.accent.SetOpacity(alpha);
+            let _ = self.fill_lyrics(lx, ly, &self.accent);
+        } else {
+            let opacity = if music.lyrics_ready { 0.6 } else { 0.25 };
+            self.light.SetOpacity(opacity * alpha);
+            let _ = self.fill_lyrics(lx, ly, &self.light);
+        }
+
+        // Volume: the slider slides out of the speaker on hover.
+        let (sx, sy) = card.speaker;
+        self.light.SetOpacity(0.85 * alpha);
+        let _ = self.fill_speaker(sx, sy, &self.light);
+        let reveal = music.volume_visible.clamp(0.0, 1.0);
+        if reveal > 0.01 {
+            let (left, right, y) = card.volume;
+            let start = right - (right - left) * reveal;
+            slider(start, right, y, music.volume, reveal * alpha);
         }
 
         // Lyrics: the line being sung, the next one dimmer below it.
         if let Some((line, next)) = music.lyric {
             let cx = CANVAS.0 / 2.0;
             let (x0, x1) = (cx - width / 2.0 + 18.0, cx + width / 2.0 - 18.0);
-            self.light.SetOpacity(0.08 * alpha);
-            self.target
-                .FillRectangle(&rect(x0, 106.0 + shift, x1, 107.0 + shift), &self.light);
+            let top = card.play.1 + 16.0;
             let line = if line.is_empty() { "\u{266A}" } else { line };
-            self.draw_text(
-                line,
-                &self.lyric_text,
-                rect(x0, 112.0 + shift, x1, 132.0 + shift),
-                alpha,
-            );
+            self.draw_text(line, &self.lyric_text, rect(x0, top, x1, top + 16.0), alpha);
             self.draw_text(
                 next,
                 &self.lyric_next,
-                rect(x0, 132.0 + shift, x1, 150.0 + shift),
+                rect(x0, top + 16.0, x1, top + 31.0),
                 0.4 * alpha,
             );
         }
@@ -2467,6 +2659,130 @@ impl Renderer {
             &wide,
             &self.pill_glyph,
             &rect(cx - 10.0, cy - 10.0, cx + 10.0, cy + 10.0),
+            brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
+
+    /// A solid shape with softly rounded corners.
+    unsafe fn fill_shape(&self, points: &[(f32, f32)], brush: &ID2D1SolidColorBrush) -> Result<()> {
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        let (x, y) = points[0];
+        sink.BeginFigure(pt(x, y), D2D1_FIGURE_BEGIN_FILLED);
+        for &(x, y) in &points[1..] {
+            sink.AddLine(pt(x, y));
+        }
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
+        self.target.FillGeometry(&geometry, brush, None);
+        self.target
+            .DrawGeometry(&geometry, brush, 1.6, &self.round_caps);
+        Ok(())
+    }
+
+    unsafe fn fill_play(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        self.fill_shape(
+            &[(cx - 7.0, cy - 9.0), (cx + 9.0, cy), (cx - 7.0, cy + 9.0)],
+            brush,
+        )
+    }
+
+    unsafe fn fill_pause(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        for left in [cx - 7.5, cx + 2.0] {
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(left, cy - 9.5, left + 5.5, cy + 9.5),
+                    radiusX: 1.8,
+                    radiusY: 1.8,
+                },
+                brush,
+            );
+        }
+    }
+
+    /// Two triangles pointing toward `direction` (-1 back, 1 on).
+    unsafe fn fill_skip(
+        &self,
+        cx: f32,
+        cy: f32,
+        direction: f32,
+        brush: &ID2D1SolidColorBrush,
+    ) -> Result<()> {
+        for base in [cx - 10.0 * direction, cx] {
+            self.fill_shape(
+                &[
+                    (base, cy - 6.5),
+                    (base + 10.0 * direction, cy),
+                    (base, cy + 6.5),
+                ],
+                brush,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A speaker with one sound wave.
+    unsafe fn fill_speaker(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        self.fill_shape(
+            &[
+                (cx - 8.0, cy - 2.5),
+                (cx - 5.0, cy - 2.5),
+                (cx - 1.0, cy - 6.0),
+                (cx - 1.0, cy + 6.0),
+                (cx - 5.0, cy + 2.5),
+                (cx - 8.0, cy + 2.5),
+            ],
+            brush,
+        )?;
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        sink.BeginFigure(pt(cx + 3.0, cy - 4.5), D2D1_FIGURE_BEGIN_HOLLOW);
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: pt(cx + 3.0, cy + 4.5),
+            size: D2D_SIZE_F {
+                width: 5.5,
+                height: 5.5,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close()?;
+        self.target
+            .DrawGeometry(&geometry, brush, 1.8, &self.round_caps);
+        Ok(())
+    }
+
+    /// A speech bubble: a line being sung.
+    unsafe fn fill_lyrics(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: rect(cx - 9.0, cy - 8.0, cx + 9.0, cy + 4.0),
+                radiusX: 3.5,
+                radiusY: 3.5,
+            },
+            brush,
+        );
+        self.fill_shape(
+            &[
+                (cx - 4.5, cy + 3.0),
+                (cx - 4.5, cy + 8.0),
+                (cx + 1.0, cy + 3.0),
+            ],
+            brush,
+        )
+    }
+
+    /// An icon in the page navigation pill.
+    unsafe fn draw_nav_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.nav_glyph,
+            &rect(cx - 11.0, cy - 11.0, cx + 11.0, cy + 11.0),
             brush,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
             DWRITE_MEASURING_MODE_NATURAL,
@@ -2736,7 +3052,8 @@ impl Renderer {
     }
 
     unsafe fn draw_clock(&self, scene: &Scene) {
-        if scene.minimal {
+        let peek = scene.peek_visible.clamp(0.0, 1.0);
+        if scene.minimal && peek < 0.01 {
             return;
         }
         // The clock steps aside quickly for the eyes, a banner or a card; the
@@ -2746,6 +3063,8 @@ impl Renderer {
             .max(scene.banner_visible)
             .max(scene.card_visible);
         let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
+        // The thin bar has no clock until it widens.
+        let alpha = if scene.minimal { alpha * peek } else { alpha };
         if alpha <= 0.0 {
             return;
         }
@@ -2786,7 +3105,18 @@ impl Renderer {
             if let Some(text) = self.text_layout(&weather.temperature, &self.small_left, 50.0) {
                 let x = bounds.right - 13.0 - text.width;
                 self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.75 * alpha);
+                if let Some(sky) = self.text_layout(weather.description, &self.small_left, 90.0) {
+                    let x = x - 7.0 - sky.width;
+                    let opacity = 0.75 * alpha * peek * peek;
+                    self.draw_layout(&sky.layout, x, cy - sky.height / 2.0, opacity);
+                }
             }
+        }
+        // Widened: the day and date on the clock's left.
+        if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 120.0) {
+            let x = cx - 32.0 - date.width;
+            let opacity = 0.85 * alpha * peek * peek;
+            self.draw_layout(&date.layout, x, cy - date.height / 2.0, opacity);
         }
     }
 
@@ -2884,6 +3214,28 @@ mod tests {
         let (first, _) = nav_item(0, 3);
         let (last, _) = nav_item(2, 3);
         assert_eq!((first + last) / 2.0, CANVAS.0 / 2.0);
+    }
+
+    #[test]
+    fn greets_by_the_hour_of_the_clock() {
+        assert_eq!(clock_hour("22:38"), 22);
+        assert_eq!(clock_hour("07:05"), 7);
+        assert_eq!(greeting(clock_hour("07:05")), "Selamat pagi");
+        assert_eq!(greeting(clock_hour("13:00")), "Selamat siang");
+        assert_eq!(greeting(clock_hour("16:30")), "Selamat sore");
+        assert_eq!(greeting(clock_hour("22:38")), "Selamat malam");
+        assert_eq!(greeting(clock_hour("02:00")), "Selamat malam");
+    }
+
+    #[test]
+    fn tint_follows_the_vivid_pixels() {
+        // Mostly grey with a little red, as BGRA.
+        let mut pixels = [128, 128, 128, 255].repeat(50);
+        pixels.extend([20, 20, 230, 255].repeat(10));
+        let [r, g, b] = art_tint(&pixels).unwrap();
+        assert!(r > g && r > b, "{r} {g} {b}");
+        assert!((r - 0.6).abs() < 0.001);
+        assert_eq!(art_tint(&[0, 0, 0, 255]), None);
     }
 
     #[test]

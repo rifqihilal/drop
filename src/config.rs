@@ -37,6 +37,8 @@ pub struct Settings {
     pub module_lyrics: bool,
     /// Rest as a thin bar, with no clock or live strip.
     pub notch_minimal: bool,
+    /// Hovering only widens the notch; a click opens the card.
+    pub open_on_click: bool,
     /// Link to an iCalendar feed for the agenda; empty when none.
     pub ical_url: String,
     /// Health reminders, each after its minutes of use.
@@ -71,6 +73,7 @@ impl Default for Settings {
             module_todo: true,
             module_lyrics: true,
             notch_minimal: false,
+            open_on_click: false,
             ical_url: String::new(),
             water: true,
             water_minutes: 60,
@@ -168,6 +171,8 @@ impl Settings {
              lirik = {}\n\
              ; Saat tertutup notch hanya bar hitam tipis.\n\
              notch_kecil = {}\n\
+             ; Hover hanya melebarkan notch, kartu terbuka saat diklik.\n\
+             buka_klik = {}\n\
              \n\
              [agenda]\n\
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
@@ -203,6 +208,7 @@ impl Settings {
             flag(self.module_todo),
             flag(self.module_lyrics),
             flag(self.notch_minimal),
+            flag(self.open_on_click),
             self.ical_url,
             health::BREAK_MINUTES,
             flag(self.water),
@@ -287,6 +293,7 @@ fn parse(text: &str) -> Settings {
             "tugas" => s.module_todo = flag(true),
             "lirik" => s.module_lyrics = flag(true),
             "notch_kecil" => s.notch_minimal = flag(false),
+            "buka_klik" => s.open_on_click = flag(false),
             "ical" => s.ical_url = value.to_string(),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
@@ -334,6 +341,7 @@ mod tests {
             module_todo: false,
             module_lyrics: false,
             notch_minimal: true,
+            open_on_click: true,
             ical_url:
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),

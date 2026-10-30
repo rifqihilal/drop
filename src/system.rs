@@ -164,6 +164,22 @@ impl Audio {
             .unwrap_or(0.0)
     }
 
+    /// Master volume of the default device, 0..1.
+    pub fn volume(&self) -> Option<f32> {
+        let (volume, _) = self.endpoint.as_ref()?;
+        unsafe { volume.GetMasterVolumeLevelScalar() }.ok()
+    }
+
+    /// Sets the master volume, 0..1; hearing it again also unmutes.
+    pub fn set_volume(&self, level: f32) {
+        if let Some((volume, _)) = &self.endpoint {
+            unsafe {
+                let _ = volume.SetMute(false, std::ptr::null());
+                let _ = volume.SetMasterVolumeLevelScalar(level, std::ptr::null());
+            }
+        }
+    }
+
     /// Applies a volume key and returns the resulting level and mute state.
     /// Returns a value even when nothing changed (already at 100%), so the
     /// notch can still show where the volume is.
