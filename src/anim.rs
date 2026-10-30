@@ -38,8 +38,7 @@ impl Spring {
         let mut remaining = dt;
         while remaining > 0.0 {
             let h = remaining.min(1.0 / 240.0);
-            let force =
-                -self.stiffness * (self.value - self.target) - self.damping * self.velocity;
+            let force = -self.stiffness * (self.value - self.target) - self.damping * self.velocity;
             self.velocity += force * h;
             self.value += self.velocity * h;
             remaining -= h;

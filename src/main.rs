@@ -4,29 +4,35 @@
 //!
 //! Prototype scope: a compact notch with a clock while the computer is in use,
 //! growing into a pair of animated eyes once it has been idle for a while.
-//! Right-click the notch to quit.
+//! Right-click the notch or the tray icon for the menu.
 
 mod anim;
+mod autostart;
 mod render;
+mod tray;
 
 use std::cell::RefCell;
 use std::time::Instant;
 
 use windows::core::{w, Result};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostQuitMessage,
+    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
-    MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_NULL,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::Notch;
@@ -41,6 +47,7 @@ const EYES_MS: u32 = 100;
 const COMPACT_MS: u32 = 500;
 const DEFAULT_IDLE_SECS: u32 = 120;
 const MENU_QUIT: usize = 1;
+const MENU_AUTOSTART: usize = 2;
 
 struct App {
     hwnd: HWND,
@@ -59,6 +66,13 @@ thread_local! {
 fn main() -> Result<()> {
     let idle_secs = parse_idle_secs().unwrap_or(DEFAULT_IDLE_SECS);
     unsafe {
+        // One notch per session: a second launch (say, from auto-start) just exits.
+        // The handle stays open for the life of the process.
+        let _instance_lock = CreateMutexW(None, false, w!("Local\\DropNotch"))?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            return Ok(());
+        }
+
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let instance = GetModuleHandleW(None)?;
@@ -100,6 +114,7 @@ fn main() -> Result<()> {
         };
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        tray::add(hwnd);
         app.schedule(COMPACT_MS);
         APP.with(|cell| *cell.borrow_mut() = Some(app));
 
@@ -186,16 +201,41 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            if show_menu(hwnd) == MENU_QUIT {
-                let _ = DestroyWindow(hwnd);
+            handle_menu(hwnd);
+            LRESULT(0)
+        }
+        tray::CALLBACK_MSG => {
+            let event = lparam.0 as u32;
+            if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
+                handle_menu(hwnd);
             }
             LRESULT(0)
         }
+        WM_SETTINGCHANGE => {
+            // Covers switching between light and dark taskbars.
+            tray::refresh(hwnd);
+            LRESULT(0)
+        }
         WM_DESTROY => {
+            tray::remove(hwnd);
             PostQuitMessage(0);
             LRESULT(0)
         }
+        _ if msg == tray::taskbar_created_msg() => {
+            tray::add(hwnd);
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn handle_menu(hwnd: HWND) {
+    match show_menu(hwnd) {
+        MENU_AUTOSTART => autostart::set_enabled(!autostart::is_enabled()),
+        MENU_QUIT => unsafe {
+            let _ = DestroyWindow(hwnd);
+        },
+        _ => {}
     }
 }
 
@@ -216,6 +256,18 @@ fn show_menu(hwnd: HWND) -> usize {
         let Ok(menu) = CreatePopupMenu() else {
             return 0;
         };
+        let autostart_flags = if autostart::is_enabled() {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(
+            menu,
+            autostart_flags,
+            MENU_AUTOSTART,
+            w!("Jalankan saat Windows menyala"),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Keluar Drop"));
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
@@ -230,6 +282,8 @@ fn show_menu(hwnd: HWND) -> usize {
             hwnd,
             None,
         );
+        // Lets the menu close properly when it was opened from the tray.
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
         chosen.0 as usize
     }

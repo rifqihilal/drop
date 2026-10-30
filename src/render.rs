@@ -27,8 +27,8 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP,
-    HDC, HGDIOBJ,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
+    HGDIOBJ,
 };
 use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
@@ -41,7 +41,12 @@ const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (IDLE.0 + 2.0 * EAR, IDLE.1);
 
-const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F { r: 0.93, g: 0.96, b: 1.0, a: 1.0 };
+const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 0.93,
+    g: 0.96,
+    b: 1.0,
+    a: 1.0,
+};
 
 /// Everything the renderer needs for one frame, in logical pixels.
 pub struct Scene<'a> {
