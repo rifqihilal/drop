@@ -23,8 +23,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -64,22 +64,13 @@ pub mod glyph {
     pub const WIFI: &str = "\u{E701}";
     pub const BLUETOOTH: &str = "\u{E702}";
 
-    /// Battery outline filled to `percent`, with a bolt while charging.
-    pub fn battery(percent: u32, charging: bool) -> &'static str {
+    /// Battery outline filled to `percent`.
+    pub fn battery(percent: u32) -> &'static str {
         const LEVELS: [&str; 11] = [
             "\u{EBA0}", "\u{EBA1}", "\u{EBA2}", "\u{EBA3}", "\u{EBA4}", "\u{EBA5}", "\u{EBA6}",
             "\u{EBA7}", "\u{EBA8}", "\u{EBA9}", "\u{EBAA}",
         ];
-        const CHARGING: [&str; 11] = [
-            "\u{EBAB}", "\u{EBAC}", "\u{EBAD}", "\u{EBAE}", "\u{EBAF}", "\u{EBB0}", "\u{EBB1}",
-            "\u{EBB2}", "\u{EBB3}", "\u{EBB4}", "\u{EBB5}",
-        ];
-        let step = ((percent.min(100) + 5) / 10) as usize;
-        if charging {
-            CHARGING[step]
-        } else {
-            LEVELS[step]
-        }
+        LEVELS[((percent.min(100) + 5) / 10) as usize]
     }
 }
 
@@ -104,6 +95,7 @@ pub struct Scene<'a> {
 
 pub struct Renderer {
     factory: ID2D1Factory,
+    dwrite: IDWriteFactory,
     target: ID2D1DCRenderTarget,
     text: IDWriteTextFormat,
     small_text: IDWriteTextFormat,
@@ -204,6 +196,7 @@ impl Renderer {
 
             Ok(Self {
                 factory,
+                dwrite,
                 target,
                 text,
                 small_text,
@@ -352,16 +345,56 @@ impl Renderer {
                 self.draw_level(x0, x1, h, level, *muted, alpha);
             }
             Content::Notice { glyph, text, dim } => {
-                let icon_alpha = if *dim { 0.45 } else { 1.0 };
-                self.draw_text(glyph, &self.icons, icon_box, icon_alpha * alpha);
-                self.draw_text(
-                    text,
-                    &self.notice_text,
-                    rect(x0 + 42.0, 0.0, x1 - 16.0, h),
-                    0.95 * alpha,
-                );
+                self.draw_notice(glyph, text, *dim, x0, x1, h, alpha);
             }
         }
+    }
+
+    /// Icon and text centered together as one group; text too long for the
+    /// notch ends in an ellipsis.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_notice(
+        &self,
+        glyph: &str,
+        text: &str,
+        dim: bool,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
+        const PADDING: f32 = 16.0;
+        const ICON: f32 = 18.0;
+        const GAP: f32 = 8.0;
+        let available = (x1 - x0 - 2.0 * PADDING - ICON - GAP).max(1.0);
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let Ok(layout) = self
+            .dwrite
+            .CreateTextLayout(&wide, &self.notice_text, available, h)
+        else {
+            return;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        let text_width = match layout.GetMetrics(&mut metrics) {
+            Ok(()) => metrics.width.min(available),
+            Err(_) => available,
+        };
+
+        let start = (x0 + x1) / 2.0 - (ICON + GAP + text_width) / 2.0;
+        let icon_alpha = if dim { 0.45 } else { 1.0 };
+        self.draw_text(
+            glyph,
+            &self.icons,
+            rect(start, 0.0, start + ICON, h),
+            icon_alpha * alpha,
+        );
+        self.light.SetOpacity(0.95 * alpha);
+        self.target.DrawTextLayout(
+            pt(start + ICON + GAP, 0.0),
+            &layout,
+            &self.light,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
     }
 
     /// Level bar and percentage.

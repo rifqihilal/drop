@@ -16,10 +16,7 @@ use windows::Win32::Media::Audio::{
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
-use windows::Win32::System::Power::{
-    GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
-    SYSTEM_POWER_STATUS,
-};
+use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
 use windows::Win32::System::SystemServices::{
     GUID_ACDC_POWER_SOURCE, GUID_BATTERY_PERCENTAGE_REMAINING,
     GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
@@ -231,11 +228,4 @@ pub fn power_event(wparam: WPARAM, lparam: LPARAM) -> Option<PowerEvent> {
     } else {
         None
     }
-}
-
-/// True when the computer has a battery at all.
-pub fn has_battery() -> bool {
-    let mut status = SYSTEM_POWER_STATUS::default();
-    // Flag 128 means "no system battery".
-    unsafe { GetSystemPowerStatus(&mut status).is_ok() && status.BatteryFlag & 128 == 0 }
 }

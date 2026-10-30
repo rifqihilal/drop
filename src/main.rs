@@ -5,7 +5,7 @@
 //! Prototype scope: a compact notch with a clock while the computer is in use,
 //! growing into a pair of animated eyes once it has been idle for a while,
 //! showing volume and brightness changes in place of Windows' own flyout, and
-//! announcing Wi-Fi, Bluetooth and charger changes.
+//! announcing Wi-Fi and Bluetooth changes and low battery.
 //! Right-click the notch or the tray icon for the menu.
 
 mod anim;
@@ -86,7 +86,6 @@ struct App {
     /// A Wi-Fi disconnect waiting out the grace period: (deadline, network).
     wifi_lost: Option<(Instant, String)>,
     bluetooth: Option<Bluetooth>,
-    has_battery: bool,
     /// Last known power source and charge; None until Windows reports them.
     on_ac: Option<bool>,
     battery: Option<u32>,
@@ -152,7 +151,6 @@ fn main() -> Result<()> {
             _wifi: Wifi::watch(hwnd),
             wifi_lost: None,
             bluetooth: Bluetooth::watch(hwnd),
-            has_battery: system::has_battery(),
             on_ac: None,
             battery: None,
             demo: has_flag("--demo").then(|| (0, now + Duration::from_secs(1))),
@@ -260,37 +258,21 @@ impl App {
                     self.show_level(LevelKind::Brightness, brightness as f32 / 100.0, false);
                 }
             }
-            PowerEvent::OnAc(on_ac) => {
-                let previous = self.on_ac.replace(on_ac);
-                if !self.has_battery || previous.is_none_or(|previous| previous == on_ac) {
-                    return;
-                }
-                let percent = self.battery.unwrap_or(0);
-                let text = if on_ac {
-                    format!("Mengisi daya · {percent}%")
-                } else {
-                    format!("Memakai baterai · {percent}%")
-                };
-                self.notify(glyph::battery(percent, on_ac), text, false);
-            }
+            // Plugging the charger in or out stays quiet; the power source only
+            // decides whether a falling charge needs a warning.
+            PowerEvent::OnAc(on_ac) => self.on_ac = Some(on_ac),
             PowerEvent::Battery(percent) => {
                 let Some(previous) = self.battery.replace(percent) else {
                     return;
                 };
-                let on_ac = self.on_ac.unwrap_or(false);
-                if on_ac && previous < 100 && percent == 100 {
-                    self.notify(
-                        glyph::battery(100, true),
-                        "Baterai penuh".to_string(),
-                        false,
-                    );
-                } else if !on_ac
+                let on_battery = self.on_ac == Some(false);
+                if on_battery
                     && LOW_BATTERY
                         .iter()
                         .any(|&level| previous > level && percent <= level)
                 {
                     let text = format!("Baterai lemah · {percent}% · colokkan charger");
-                    self.notify(glyph::battery(percent, false), text, false);
+                    self.notify(glyph::battery(percent), text, false);
                 }
             }
         }
@@ -562,12 +544,12 @@ fn demo_notice(index: usize) -> (&'static str, String, bool) {
             false,
         ),
         2 => (
-            glyph::battery(54, true),
-            "Mengisi daya · 54%".to_string(),
+            glyph::WIFI,
+            "Terhubung ke Jaringan Kantor Lantai 3 dengan nama yang sangat panjang".to_string(),
             false,
         ),
         3 => (
-            glyph::battery(20, false),
+            glyph::battery(20),
             "Baterai lemah · 20% · colokkan charger".to_string(),
             false,
         ),
