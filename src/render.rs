@@ -50,7 +50,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
     Accent, Content, LevelKind, Notice, Trailing, IDLE, LEVEL, MUSIC_CARD, NOTICE_HEIGHT,
-    NOTICE_WIDTH,
+    NOTICE_WIDTH, STATUS_CARD,
 };
 use crate::media::Command;
 
@@ -58,8 +58,14 @@ use crate::media::Command;
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
-    max(max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1), MUSIC_CARD.0) + 2.0 * EAR,
-    max(max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT), MUSIC_CARD.1),
+    max(
+        max(max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1), MUSIC_CARD.0),
+        STATUS_CARD.0,
+    ) + 2.0 * EAR,
+    max(
+        max(max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT), MUSIC_CARD.1),
+        STATUS_CARD.1,
+    ),
 );
 
 /// Album art is decoded at most this many pixels square.
@@ -177,6 +183,33 @@ pub struct Scene<'a> {
     /// How visible the playing strip and the music card are, 0..1.
     pub music_visible: f32,
     pub card_visible: f32,
+    /// Which page the open card shows, and how many it has.
+    pub page: Page,
+    pub pages: usize,
+    pub status: StatusScene<'a>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Page {
+    Music,
+    Status,
+}
+
+pub struct StatusScene<'a> {
+    pub time: &'a str,
+    pub date: &'a str,
+    pub weather: Option<WeatherScene<'a>>,
+    /// Shown in place of the weather when there is none.
+    pub weather_hint: &'a str,
+    /// Charge and whether it is charging; None without a battery.
+    pub battery: Option<(u32, bool)>,
+}
+
+pub struct WeatherScene<'a> {
+    pub glyph: &'a str,
+    pub temperature: String,
+    pub description: &'a str,
+    pub place: &'a str,
 }
 
 pub struct MusicScene<'a> {
@@ -220,6 +253,10 @@ pub struct Renderer {
     trailing_text: IDWriteTextFormat,
     /// Small left-aligned text: track times.
     small_left: IDWriteTextFormat,
+    /// Large clock on the status card.
+    big_clock: IDWriteTextFormat,
+    /// Weather symbols (Segoe UI Symbol).
+    symbols: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
@@ -340,6 +377,10 @@ impl Renderer {
             let subtitle_text = line(DWRITE_FONT_WEIGHT_NORMAL, 12.5)?;
             let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
+            let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
+            let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
+            symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+            symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
 
             Ok(Self {
                 factory,
@@ -351,6 +392,8 @@ impl Renderer {
                 subtitle_text,
                 trailing_text,
                 small_left,
+                big_clock,
+                symbols,
                 icons,
                 black,
                 light,
@@ -557,24 +600,107 @@ impl Renderer {
         .map(|(_, command)| command)
     }
 
+    /// The playing strip and the open card (music or status page).
     unsafe fn draw_music(&self, scene: &Scene) {
-        let Some(music) = &scene.music else {
-            return;
-        };
         let cx = CANVAS.0 / 2.0;
         let (x0, x1) = (cx - scene.width / 2.0, cx + scene.width / 2.0);
         let notch = rect(x0, 0.0, x1, scene.height);
-        if scene.music_visible > 0.01 {
+        if let Some(music) = scene.music.as_ref().filter(|_| scene.music_visible > 0.01) {
             self.target
                 .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             self.draw_music_strip(music, x0, x1, scene.height, scene.music_visible.min(1.0));
             self.target.PopAxisAlignedClip();
         }
-        if scene.card_visible > 0.01 {
-            self.target
-                .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            self.draw_music_card(music, scene.width, scene.card_visible.min(1.0));
-            self.target.PopAxisAlignedClip();
+        if scene.card_visible <= 0.01 {
+            return;
+        }
+        let alpha = scene.card_visible.min(1.0);
+        self.target
+            .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        match (scene.page, &scene.music) {
+            (Page::Music, Some(music)) => self.draw_music_card(music, scene.width, alpha),
+            _ => self.draw_status_card(&scene.status, x0, x1, alpha),
+        }
+        if scene.pages > 1 {
+            // Page dots: which of the card's pages is showing.
+            let index = if scene.page == Page::Music { 0 } else { 1 };
+            for dot in 0..scene.pages {
+                let x = cx + (dot as f32 - (scene.pages - 1) as f32 / 2.0) * 10.0;
+                self.light
+                    .SetOpacity(if dot == index { 0.9 } else { 0.3 } * alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x, 104.0),
+                        radiusX: 2.5,
+                        radiusY: 2.5,
+                    },
+                    &self.light,
+                );
+            }
+        }
+        self.target.PopAxisAlignedClip();
+    }
+
+    /// Clock and date, weather, and battery, left to right.
+    unsafe fn draw_status_card(&self, status: &StatusScene, x0: f32, x1: f32, alpha: f32) {
+        let left = x0 + 22.0;
+        if let Some(time) = self.text_layout(status.time, &self.big_clock, 140.0) {
+            self.draw_layout(&time.layout, left, 22.0, alpha);
+        }
+        if let Some(date) = self.text_layout(status.date, &self.subtitle_text, 140.0) {
+            self.draw_layout(&date.layout, left, 64.0, 0.55 * alpha);
+        }
+
+        let column = x0 + 142.0;
+        match &status.weather {
+            Some(weather) => {
+                if let Some(sky) = self.text_layout(weather.glyph, &self.symbols, 40.0) {
+                    self.draw_layout(&sky.layout, column, 26.0, 0.95 * alpha);
+                }
+                if let Some(temp) =
+                    self.text_layout(&weather.temperature, &self.trailing_text, 80.0)
+                {
+                    self.draw_layout(&temp.layout, column + 36.0, 22.0, alpha);
+                }
+                if let Some(text) =
+                    self.text_layout(weather.description, &self.subtitle_text, 110.0)
+                {
+                    self.draw_layout(&text.layout, column, 58.0, 0.75 * alpha);
+                }
+                if let Some(text) = self.text_layout(weather.place, &self.small_left, 110.0) {
+                    self.draw_layout(&text.layout, column, 76.0, 0.5 * alpha);
+                }
+            }
+            None => {
+                if let Some(text) = self.text_layout(status.weather_hint, &self.small_left, 110.0) {
+                    self.draw_layout(&text.layout, column, 48.0, 0.5 * alpha);
+                }
+            }
+        }
+
+        if let Some((percent, charging)) = status.battery {
+            let (cx, cy) = (x1 - 52.0, 46.0);
+            let color = if charging {
+                accent_color(Accent::Green)
+            } else if percent <= 20 {
+                accent_color(Accent::Red)
+            } else {
+                color(1.0, 1.0, 1.0, 1.0)
+            };
+            let _ = self.draw_ring(cx, cy, 21.0, percent as f32 / 100.0, color, alpha);
+            self.draw_text(
+                &format!("{percent}"),
+                &self.small_text,
+                rect(cx - 20.0, cy - 12.0, cx + 20.0, cy + 12.0),
+                alpha,
+            );
+            let label = if charging { "Mengisi" } else { "Baterai" };
+            self.draw_text(
+                label,
+                &self.small_text,
+                rect(cx - 40.0, 72.0, cx + 40.0, 90.0),
+                0.55 * alpha,
+            );
         }
     }
 

@@ -95,17 +95,18 @@ const RIGHT: (f32, f32) = (456.0, 736.0);
 const TOGGLE_TOP: f32 = 90.0;
 const ROW: f32 = 40.0;
 const GENERAL_TOP: f32 = 324.0;
-const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
+const IDLE_FIELD: Rect = Rect::new(672.0, 407.0, 736.0, 441.0);
 const CANCEL_BUTTON: Rect = Rect::new(526.0, 506.0, 626.0, 540.0);
 const SAVE_BUTTON: Rect = Rect::new(636.0, 506.0, 736.0, 540.0);
 
-const TOGGLES: [&str; 6] = [
+const TOGGLES: [&str; 7] = [
     "Wi-Fi tersambung dan terputus",
     "Perangkat Bluetooth",
     "Baterai lemah",
     "Pengingat sholat",
     "Bunyi notifikasi",
     "Jalankan saat Windows menyala",
+    "Tampilkan cuaca",
 ];
 
 // Windows 11 dark palette, as 0xRRGGBB.
@@ -151,7 +152,7 @@ fn toggle_row(index: usize) -> Rect {
     let top = if index < 5 {
         TOGGLE_TOP + index as f32 * ROW
     } else {
-        GENERAL_TOP
+        GENERAL_TOP + (index - 5) as f32 * ROW
     };
     Rect::new(RIGHT.0, top, RIGHT.1, top + ROW)
 }
@@ -183,7 +184,7 @@ struct Window {
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 6],
+    toggles: [bool; 7],
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -385,6 +386,7 @@ impl Window {
                 settings.notify_prayer,
                 settings.sound,
                 autostart::is_enabled(),
+                settings.weather,
             ],
             status: "Cari nama kota, kabupaten atau desa".to_string(),
             status_is_error: false,
@@ -596,6 +598,7 @@ impl Window {
             notify_prayer: self.toggles[3],
             sound: self.toggles[4],
             idle_minutes: idle,
+            weather: self.toggles[6],
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);

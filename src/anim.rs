@@ -15,6 +15,8 @@ pub const NOTICE_HEIGHT: f32 = 62.0;
 pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
 /// Notch size of the full music card.
 pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
+/// Notch size of the status card: clock, weather and battery.
+pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -243,7 +245,8 @@ pub struct Notch {
     idle: bool,
     banner_active: bool,
     music_playing: bool,
-    card_open: bool,
+    /// Size of the open card (music or status), if one is open.
+    card_size: Option<(f32, f32)>,
 }
 
 impl Notch {
@@ -260,7 +263,7 @@ impl Notch {
             idle: false,
             banner_active: false,
             music_playing: false,
-            card_open: false,
+            card_size: None,
         }
     }
 
@@ -385,12 +388,12 @@ impl Notch {
     /// Order of precedence: banner, music card, playing strip, eyes, clock.
     fn retarget(&mut self) {
         let banner = self.banner_active;
-        let card = self.card_open && !banner;
-        let strip = self.music_playing && !banner && !card;
-        let eyes = self.idle && !banner && !card && !strip;
-        let (w, h) = match &self.banner {
-            Some(shown) if banner => shown.size,
-            _ if card => MUSIC_CARD,
+        let card = self.card_size.filter(|_| !banner);
+        let strip = self.music_playing && !banner && card.is_none();
+        let eyes = self.idle && !banner && card.is_none() && !strip;
+        let (w, h) = match (&self.banner, card) {
+            (Some(shown), _) if banner => shown.size,
+            (_, Some(size)) => size,
             _ if strip => MUSIC_STRIP,
             _ if eyes => IDLE,
             _ => COMPACT,
@@ -399,16 +402,16 @@ impl Notch {
         self.height.target = h;
         let on = |visible: bool| if visible { 1.0 } else { 0.0 };
         self.banner_visible.target = on(banner);
-        self.card_visible.target = on(card);
+        self.card_visible.target = on(card.is_some());
         self.music_visible.target = on(strip);
         self.eyes_visible.target = on(eyes);
     }
 
-    /// `playing` shows the music strip; `card` opens the full music card.
-    pub fn set_music(&mut self, playing: bool, card: bool) {
-        if (playing, card) != (self.music_playing, self.card_open) {
+    /// `playing` shows the music strip; `card` opens a card of that size.
+    pub fn set_music(&mut self, playing: bool, card: Option<(f32, f32)>) {
+        if (playing, card) != (self.music_playing, self.card_size) {
             self.music_playing = playing;
-            self.card_open = card;
+            self.card_size = card;
             self.retarget();
         }
     }

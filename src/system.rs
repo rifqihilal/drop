@@ -17,7 +17,10 @@ use windows::Win32::Media::Audio::{
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
-use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
+use windows::Win32::System::Power::{
+    GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
+    SYSTEM_POWER_STATUS,
+};
 use windows::Win32::System::SystemServices::{
     GUID_ACDC_POWER_SOURCE, GUID_BATTERY_PERCENTAGE_REMAINING,
     GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
@@ -244,4 +247,16 @@ pub fn power_event(wparam: WPARAM, lparam: LPARAM) -> Option<PowerEvent> {
     } else {
         None
     }
+}
+
+/// Battery charge and whether it is charging; None without a battery.
+pub fn battery_status() -> Option<(u32, bool)> {
+    let mut status = SYSTEM_POWER_STATUS::default();
+    unsafe { GetSystemPowerStatus(&mut status).ok()? };
+    // Flag 128: no system battery; 255: charge unknown.
+    if status.BatteryFlag & 128 != 0 || status.BatteryLifePercent > 100 {
+        return None;
+    }
+    let charging = status.ACLineStatus == 1 || status.BatteryFlag & 8 != 0;
+    Some((u32::from(status.BatteryLifePercent), charging))
 }

@@ -24,6 +24,8 @@ pub struct Settings {
     pub sound: bool,
     /// Minutes without input before the eyes appear.
     pub idle_minutes: u32,
+    /// Fetch the weather for the prayer location.
+    pub weather: bool,
 }
 
 impl Default for Settings {
@@ -40,6 +42,7 @@ impl Default for Settings {
             notify_prayer: true,
             sound: true,
             idle_minutes: 2,
+            weather: true,
         }
     }
 }
@@ -107,7 +110,9 @@ impl Settings {
              \n\
              [umum]\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
-             mata_setelah_menit = {}\n",
+             mata_setelah_menit = {}\n\
+             ; Ambil cuaca untuk lokasi di atas dari Open-Meteo.\n\
+             cuaca = {}\n",
             self.city,
             number(self.latitude),
             number(self.longitude),
@@ -119,6 +124,7 @@ impl Settings {
             flag(self.notify_prayer),
             flag(self.sound),
             self.idle_minutes,
+            flag(self.weather),
         )
     }
 }
@@ -185,6 +191,7 @@ fn parse(text: &str) -> Settings {
             "mata_setelah_menit" => {
                 s.idle_minutes = number().map_or(2, |v| v.clamp(1.0, 120.0) as u32)
             }
+            "cuaca" => s.weather = flag(true),
             _ => {}
         }
     }
@@ -216,6 +223,7 @@ mod tests {
             notify_prayer: true,
             sound: false,
             idle_minutes: 5,
+            weather: false,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
     }

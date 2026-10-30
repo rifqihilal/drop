@@ -15,12 +15,14 @@ mod config;
 mod geo;
 mod keys;
 mod media;
+mod net;
 mod osd;
 mod prayer;
 mod render;
 mod settings;
 mod system;
 mod tray;
+mod weather;
 mod wifi;
 
 use std::cell::RefCell;
@@ -49,17 +51,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE,
-    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
-use anim::{LevelKind, Notch, Notice};
+use anim::{LevelKind, Notch, Notice, MUSIC_CARD, STATUS_CARD};
 use bluetooth::{Bluetooth, DeviceEvent};
 use config::{PrayerSettings, Settings};
 use media::{Command, Media, Track};
-use render::{MusicScene, Renderer, Scene};
+use render::{MusicScene, Page, Renderer, Scene, StatusScene, WeatherScene};
 use system::{Audio, PowerEvent};
+use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
 
 const TIMER_ID: usize = 1;
@@ -137,6 +140,10 @@ struct App {
     card_until: Option<Instant>,
     bars: [f32; 4],
     bar_phase: f32,
+    /// Which page the open card shows when there is music.
+    page: Page,
+    weather_watch: WeatherWatch,
+    weather: Option<Weather>,
 }
 
 /// One day's prayer schedule and which reminders already went off.
@@ -243,6 +250,9 @@ fn main() -> Result<()> {
             card_until: None,
             bars: [0.0; 4],
             bar_phase: 0.0,
+            page: Page::Music,
+            weather_watch: WeatherWatch::start(hwnd),
+            weather: None,
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
@@ -360,6 +370,7 @@ impl App {
         // when Drop starts does not.
         if new_song && self.tracks_seen && track.as_ref().is_some_and(|t| t.playing) {
             self.card_until = Some(now + SONG_CARD);
+            self.page = Page::Music;
         }
         self.tracks_seen = true;
         self.track = track;
@@ -372,9 +383,53 @@ impl App {
             .hover_since
             .is_some_and(|since| now.duration_since(since) >= HOVER_DELAY);
         self.card_until = self.card_until.filter(|until| now < *until);
-        let card = self.track.is_some() && (hovering || self.card_until.is_some());
+        let open = hovering || self.card_until.is_some();
+        if !open || self.track.is_none() {
+            // The next opening starts on the music page when there is music.
+            self.page = Page::Music;
+        }
+        let card = open.then(|| match self.shown_page() {
+            Page::Music => MUSIC_CARD,
+            Page::Status => STATUS_CARD,
+        });
         let playing = self.track.as_ref().is_some_and(|track| track.playing);
         self.notch.set_music(playing, card);
+    }
+
+    /// The music page needs something playing; otherwise the status page.
+    fn shown_page(&self) -> Page {
+        if self.track.is_some() {
+            self.page
+        } else {
+            Page::Status
+        }
+    }
+
+    /// The wheel flips between the music and status pages of an open card.
+    fn on_wheel(&mut self) {
+        if self.track.is_some() && self.notch.card_visible.target > 0.0 {
+            self.page = match self.page {
+                Page::Music => Page::Status,
+                Page::Status => Page::Music,
+            };
+            self.tick();
+        }
+    }
+
+    fn on_weather(&mut self, weather: Weather) {
+        self.weather = Some(weather);
+        self.draw();
+    }
+
+    /// What the status page shows in place of the weather.
+    fn weather_hint(&self) -> &'static str {
+        if !self.settings.weather {
+            "Cuaca dimatikan"
+        } else if self.settings.prayer().is_none() {
+            "Atur lokasi di Pengaturan"
+        } else {
+            "Memuat cuaca…"
+        }
     }
 
     /// Moves the level bars toward the current output peak. Returns true
@@ -420,7 +475,7 @@ impl App {
     }
 
     fn on_click(&mut self, lparam: LPARAM) {
-        if self.notch.card_visible.value < 0.5 {
+        if self.notch.card_visible.value < 0.5 || self.shown_page() != Page::Music {
             return;
         }
         let scale = window_scale(self.hwnd);
@@ -471,6 +526,12 @@ impl App {
     /// a new prayer location with a notice.
     fn apply_settings(&mut self, announce: bool) {
         self.settings = Settings::load();
+        let place = self.settings.latitude.zip(self.settings.longitude);
+        let weather_place = place.filter(|_| self.settings.weather);
+        if weather_place.is_none() {
+            self.weather = None;
+        }
+        self.weather_watch.set_location(weather_place);
         if !self.idle_from_args {
             self.idle_after_ms = self.settings.idle_minutes * 60_000;
         }
@@ -631,6 +692,7 @@ impl App {
 
     fn draw(&self) {
         let n = &self.notch;
+        let date = date_text();
         let scene = Scene {
             width: n.width.value,
             height: n.height.value,
@@ -650,6 +712,25 @@ impl App {
             }),
             music_visible: n.music_visible.value,
             card_visible: n.card_visible.value,
+            page: self.shown_page(),
+            pages: if self.track.is_some() { 2 } else { 1 },
+            status: StatusScene {
+                time: &self.clock,
+                date: &date,
+                weather: self.weather.as_ref().map(|weather| WeatherScene {
+                    glyph: weather.glyph(),
+                    temperature: format!("{}°", weather.temperature.round()),
+                    description: weather.description(),
+                    place: &self.settings.city,
+                }),
+                weather_hint: self.weather_hint(),
+                // Read only while a card is showing; it is cheap anyway.
+                battery: if n.card_visible.value > 0.01 {
+                    system::battery_status()
+                } else {
+                    None
+                },
+            },
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);
     }
@@ -703,6 +784,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEMOVE => {
             with_app(|app| app.on_hover(true));
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            with_app(App::on_wheel);
+            LRESULT(0)
+        }
+        weather::WEATHER_MSG => {
+            let weather = weather::take_weather(lparam);
+            with_app(|app| app.on_weather(weather));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
@@ -866,6 +956,23 @@ fn idle_ms() -> u32 {
             0
         }
     }
+}
+
+/// "Jumat, 30 Okt"
+fn date_text() -> String {
+    const DAYS: [&str; 7] = [
+        "Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu",
+    ];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+    ];
+    let time = unsafe { GetLocalTime() };
+    format!(
+        "{}, {} {}",
+        DAYS[time.wDayOfWeek as usize % 7],
+        time.wDay,
+        MONTHS[(time.wMonth as usize).clamp(1, 12) - 1]
+    )
 }
 
 fn current_clock() -> String {
