@@ -38,6 +38,7 @@ use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
@@ -54,12 +55,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE,
-    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
+    TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND, MF_CHECKED, MF_GRAYED,
+    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -245,6 +247,9 @@ fn main() -> Result<()> {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
+            // Without a class cursor, whatever cursor was showing (say, another
+            // app's busy cursor) would stay over the notch.
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
             lpszClassName: w!("DropNotch"),
             ..Default::default()
         };
@@ -549,6 +554,20 @@ impl App {
             self.draw();
         }
         None
+    }
+
+    /// Whether (`x`, `y`) is over something clickable on the open card.
+    fn clickable_at(&self, x: f32, y: f32) -> bool {
+        if self.notch.card_visible.value < 0.5 || self.drag_over {
+            return false;
+        }
+        let width = self.notch.width.value;
+        match self.shown_page() {
+            Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
+            Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
+            Page::Shelf => self.shelf_hit(x, y).is_some(),
+            Page::Status => false,
+        }
     }
 
     fn shelf_hit(&self, x: f32, y: f32) -> Option<ShelfHit> {
@@ -1109,6 +1128,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 dragdrop::drag_out(&path);
             }
             LRESULT(0)
+        }
+        WM_SETCURSOR if (lparam.0 & 0xffff) as u32 == HTCLIENT => {
+            let mut point = POINT::default();
+            let _ = GetCursorPos(&mut point);
+            let _ = ScreenToClient(hwnd, &mut point);
+            let hand = with_app(|app| {
+                let scale = window_scale(hwnd);
+                app.clickable_at(point.x as f32 / scale, point.y as f32 / scale)
+            });
+            let shape = if hand == Some(true) {
+                IDC_HAND
+            } else {
+                IDC_ARROW
+            };
+            if let Ok(cursor) = LoadCursorW(None, shape) {
+                SetCursor(Some(cursor));
+            }
+            LRESULT(1)
         }
         WM_MOUSEWHEEL => {
             with_app(|app| app.on_wheel(wparam));
