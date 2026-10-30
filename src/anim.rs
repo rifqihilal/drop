@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 
 /// Notch size while the computer is in use (logical pixels).
 pub const COMPACT: (f32, f32) = (156.0, 28.0);
+/// The closed notch at the small and large settings.
+pub const COMPACT_SMALL: (f32, f32) = (136.0, 24.0);
+pub const COMPACT_LARGE: (f32, f32) = (184.0, 34.0);
 /// Notch size in the minimal setting: a thin bar that leaves browser tabs free.
 pub const MINIMAL: (f32, f32) = (120.0, 6.0);
 /// Notch size while hovered in click-to-open mode: widened for the date.
@@ -277,6 +280,8 @@ pub struct Notch {
     card_size: Option<(f32, f32)>,
     /// Size with nothing else to show.
     resting: (f32, f32),
+    /// How much the size setting adds to the live strip and the wide notch.
+    growth: (f32, f32),
     /// Hovered in click-to-open mode.
     peek: bool,
 }
@@ -300,6 +305,7 @@ impl Notch {
             strip_size: None,
             card_size: None,
             resting: COMPACT,
+            growth: (0.0, 0.0),
             peek: false,
         }
     }
@@ -434,10 +440,12 @@ impl Notch {
             .strip_size
             .filter(|_| !banner && card.is_none() && !peek);
         let eyes = self.idle && !banner && card.is_none() && strip.is_none() && !peek;
+        let grown = |(w, h): (f32, f32)| (w + self.growth.0, h + self.growth.1);
         let (w, h) = match (&self.banner, card, strip) {
             (Some(shown), _, _) if banner => shown.size,
-            (_, Some(size), _) | (_, None, Some(size)) => size,
-            _ if peek => PEEK,
+            (_, Some(size), _) => size,
+            (_, None, Some(size)) => grown(size),
+            _ if peek => grown(PEEK),
             _ if eyes => IDLE,
             _ => self.resting,
         };
@@ -451,9 +459,10 @@ impl Notch {
         self.peek_visible.target = on(peek);
     }
 
-    /// Rests as the thin bar, or as the usual notch with the clock.
-    pub fn set_minimal(&mut self, minimal: bool) {
-        self.resting = if minimal { MINIMAL } else { COMPACT };
+    /// Rests at `size`, or as the thin bar when `minimal`.
+    pub fn set_resting(&mut self, size: (f32, f32), minimal: bool) {
+        self.growth = (size.0 - COMPACT.0, size.1 - COMPACT.1);
+        self.resting = if minimal { MINIMAL } else { size };
         self.retarget();
     }
 

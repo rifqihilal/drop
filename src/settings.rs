@@ -51,7 +51,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
-use crate::config::{self, Settings};
+use crate::config::{self, NotchSize, Settings};
 use crate::geo::{self, Place};
 use crate::{autostart, prayer};
 
@@ -136,7 +136,19 @@ enum Row {
         title: &'static str,
         note: &'static str,
     },
+    /// The notch size, picked from [`SIZES`].
+    Size {
+        title: &'static str,
+        note: &'static str,
+    },
 }
+
+const SIZES: [(&str, NotchSize); 3] = [
+    ("Kecil", NotchSize::Small),
+    ("Normal", NotchSize::Normal),
+    ("Besar", NotchSize::Large),
+];
+const SIZE_WIDTH: f32 = 60.0;
 
 struct Group {
     title: &'static str,
@@ -178,6 +190,10 @@ static PAGES: [Page; 9] = [
             Group {
                 title: "Notch",
                 rows: &[
+                    Row::Size {
+                        title: "Ukuran notch",
+                        note: "Hanya notch saat tertutup, kartu tetap",
+                    },
                     Row::Switch {
                         toggle: 17,
                         title: "Notch minimal",
@@ -443,6 +459,13 @@ fn group_end(page: &Page, row_bottom: f32) -> f32 {
         .unwrap_or(row_bottom)
 }
 
+/// Segment `index` of the size picker at the right end of a row.
+fn size_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - SIZE_WIDTH * (SIZES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + SIZE_WIDTH, cy + 15.0)
+}
+
 /// The text field at the right end of a row.
 fn row_field(row: Rect, width: f32) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
@@ -514,6 +537,7 @@ struct Window {
     toggles: [bool; TOGGLE_COUNT],
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
+    notch_size: NotchSize,
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -737,6 +761,7 @@ impl Window {
                 settings.eyes_minutes,
                 settings.stretch_minutes,
             ],
+            notch_size: settings.notch_size,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
@@ -986,6 +1011,7 @@ impl Window {
             stretch_minutes: self.health_minutes[2],
             notch_minimal: self.toggles[17],
             open_on_click: self.toggles[18],
+            notch_size: self.notch_size,
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);
@@ -1004,6 +1030,16 @@ impl Window {
     fn toggle_at(&self, x: f32, y: f32) -> Option<usize> {
         rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
             Row::Switch { toggle, .. } if rect.contains(x, y) => Some(*toggle),
+            _ => None,
+        })
+    }
+
+    /// The size under a point on the current page.
+    fn size_at(&self, x: f32, y: f32) -> Option<NotchSize> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Size { .. } => (0..SIZES.len())
+                .find(|&i| size_segment(rect, i).contains(x, y))
+                .map(|i| SIZES[i].1),
             _ => None,
         })
     }
@@ -1032,6 +1068,9 @@ impl Window {
             self.save();
         } else if CANCEL_BUTTON.contains(x, y) {
             self.close();
+        } else if let Some(size) = self.size_at(x, y) {
+            self.notch_size = size;
+            self.invalidate();
         } else if let Some(index) = self.toggle_at(x, y) {
             self.toggles[index] = !self.toggles[index];
             self.invalidate();
@@ -1049,6 +1088,7 @@ impl Window {
             || SAVE_BUTTON.contains(x, y)
             || CANCEL_BUTTON.contains(x, y)
             || self.toggle_at(x, y).is_some()
+            || self.size_at(x, y).is_some()
     }
 
     unsafe fn paint(&self, hdc: HDC) {
@@ -1176,6 +1216,10 @@ impl Window {
                 Row::Field {
                     title, note, width, ..
                 } => (*title, *note, rect.right - 32.0 - width),
+                Row::Size { title, note } => {
+                    let width = SIZE_WIDTH * SIZES.len() as f32;
+                    (*title, *note, rect.right - 32.0 - width)
+                }
             };
             let title_box = Rect::new(
                 rect.left + 16.0,
@@ -1190,6 +1234,20 @@ impl Window {
                 rect.bottom - 5.0,
             );
             self.text_at(title, &f.body, title_box, 0xffffff, 0.95);
+            if let Row::Size { .. } = row {
+                let track = Rect {
+                    right: size_segment(rect, SIZES.len() - 1).right,
+                    ..size_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, size)) in SIZES.iter().enumerate() {
+                    let segment = size_segment(rect, index);
+                    if *size == self.notch_size {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
+            }
             if let Row::Switch { toggle, .. } = row {
                 let minutes = toggle
                     .checked_sub(FIRST_HEALTH)
@@ -1598,7 +1656,7 @@ mod tests {
             .flat_map(rows)
             .filter_map(|(_, row)| match row {
                 Row::Switch { toggle, .. } => Some(*toggle),
-                Row::Field { .. } => None,
+                Row::Field { .. } | Row::Size { .. } => None,
             })
             .collect()
     }

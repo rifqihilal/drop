@@ -71,12 +71,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    Accent, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, DROP_ZONE, MUSIC_STRIP,
-    PRAYER_STRIP, TIMER_STRIP,
+    Accent, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT, COMPACT_LARGE,
+    COMPACT_SMALL, DROP_ZONE, MUSIC_STRIP, PRAYER_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
-use config::{PrayerSettings, Settings};
+use config::{NotchSize, PrayerSettings, Settings};
 use frames::Pacer;
 use health::Health;
 use ical::{Event, IcalWatch};
@@ -1392,7 +1392,12 @@ impl App {
     fn apply_settings(&mut self, announce: bool) {
         self.settings = Settings::load();
         dragdrop::set_accepting(self.settings.module_shelf);
-        self.notch.set_minimal(self.settings.notch_minimal);
+        let resting = match self.settings.notch_size {
+            NotchSize::Small => COMPACT_SMALL,
+            NotchSize::Normal => COMPACT,
+            NotchSize::Large => COMPACT_LARGE,
+        };
+        self.notch.set_resting(resting, self.settings.notch_minimal);
         let place = self.settings.latitude.zip(self.settings.longitude);
         let weather_place = place.filter(|_| self.settings.weather);
         if weather_place.is_none() {

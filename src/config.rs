@@ -7,6 +7,25 @@ use std::time::SystemTime;
 use crate::health;
 use crate::prayer::Location;
 
+/// How large the closed notch is; open cards keep one size.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum NotchSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+}
+
+impl NotchSize {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Small => "kecil",
+            Self::Normal => "normal",
+            Self::Large => "besar",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     /// Place name shown with prayer times.
@@ -39,6 +58,7 @@ pub struct Settings {
     pub notch_minimal: bool,
     /// Hovering only widens the notch; a click opens the card.
     pub open_on_click: bool,
+    pub notch_size: NotchSize,
     /// Link to an iCalendar feed for the agenda; empty when none.
     pub ical_url: String,
     /// Health reminders, each after its minutes of use.
@@ -74,6 +94,7 @@ impl Default for Settings {
             module_lyrics: true,
             notch_minimal: false,
             open_on_click: false,
+            notch_size: NotchSize::Normal,
             ical_url: String::new(),
             water: true,
             water_minutes: 60,
@@ -173,6 +194,8 @@ impl Settings {
              notch_kecil = {}\n\
              ; Hover hanya melebarkan notch, kartu terbuka saat diklik.\n\
              buka_klik = {}\n\
+             ; Ukuran notch: kecil, normal atau besar.\n\
+             ukuran_notch = {}\n\
              \n\
              [agenda]\n\
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
@@ -209,6 +232,7 @@ impl Settings {
             flag(self.module_lyrics),
             flag(self.notch_minimal),
             flag(self.open_on_click),
+            self.notch_size.name(),
             self.ical_url,
             health::BREAK_MINUTES,
             flag(self.water),
@@ -294,6 +318,13 @@ fn parse(text: &str) -> Settings {
             "lirik" => s.module_lyrics = flag(true),
             "notch_kecil" => s.notch_minimal = flag(false),
             "buka_klik" => s.open_on_click = flag(false),
+            "ukuran_notch" => {
+                s.notch_size = match value.to_lowercase().as_str() {
+                    "kecil" => NotchSize::Small,
+                    "besar" => NotchSize::Large,
+                    _ => NotchSize::Normal,
+                }
+            }
             "ical" => s.ical_url = value.to_string(),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
@@ -342,6 +373,7 @@ mod tests {
             module_lyrics: false,
             notch_minimal: true,
             open_on_click: true,
+            notch_size: NotchSize::Large,
             ical_url:
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),

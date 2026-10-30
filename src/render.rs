@@ -1378,14 +1378,7 @@ impl Renderer {
         let total = ring + date.width + 8.0 + time.width;
         let mut x = (x0 + x1) / 2.0 - total / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            let color = if charging {
-                accent_color(Accent::Green)
-            } else if percent <= 20 {
-                accent_color(Accent::Red)
-            } else {
-                color(1.0, 1.0, 1.0, 1.0)
-            };
-            let _ = self.draw_ring(x + 6.0, cy, 6.0, percent as f32 / 100.0, color, alpha);
+            self.draw_battery(x + 6.0, cy, 6.0, percent, charging, alpha);
             x += ring;
         }
         self.draw_layout(&date.layout, x, cy - date.height / 2.0, 0.75 * alpha);
@@ -2313,14 +2306,7 @@ impl Renderer {
         text(status.date, &self.subtitle_text, left, 75.0, room, 0.85);
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
-            let fill = if charging {
-                accent_color(Accent::Green)
-            } else if percent <= 20 {
-                accent_color(Accent::Red)
-            } else {
-                color(1.0, 1.0, 1.0, 1.0)
-            };
-            let _ = self.draw_ring(left + 7.0, cy, 7.0, percent as f32 / 100.0, fill, alpha);
+            self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
             let label = if charging {
                 format!("{percent}% \u{b7} mengisi")
             } else {
@@ -2929,6 +2915,53 @@ impl Renderer {
         self.target.PopAxisAlignedClip();
     }
 
+    /// The charge as a ring: green with a bolt inside while charging, red
+    /// when low.
+    unsafe fn draw_battery(
+        &self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        percent: u32,
+        charging: bool,
+        alpha: f32,
+    ) {
+        let fill = if charging {
+            accent_color(Accent::Green)
+        } else if percent <= 20 {
+            accent_color(Accent::Red)
+        } else {
+            color(1.0, 1.0, 1.0, 1.0)
+        };
+        let _ = self.draw_ring(cx, cy, radius, percent as f32 / 100.0, fill, alpha);
+        if charging {
+            let _ = self.fill_bolt(cx, cy, radius * 0.72);
+        }
+    }
+
+    /// A lightning bolt `size` tall each way, in the accent brush.
+    unsafe fn fill_bolt(&self, cx: f32, cy: f32, size: f32) -> Result<()> {
+        const BOLT: [(f32, f32); 6] = [
+            (0.25, -1.0),
+            (-0.6, 0.18),
+            (-0.05, 0.18),
+            (-0.25, 1.0),
+            (0.6, -0.18),
+            (0.05, -0.18),
+        ];
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        let point = |(x, y): (f32, f32)| pt(cx + x * size, cy + y * size);
+        sink.BeginFigure(point(BOLT[0]), D2D1_FIGURE_BEGIN_FILLED);
+        BOLT[1..]
+            .iter()
+            .for_each(|&corner| sink.AddLine(point(corner)));
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
+        self.target.FillGeometry(&geometry, &self.accent, None);
+        Ok(())
+    }
+
     /// Progress ring starting at twelve and running clockwise.
     unsafe fn draw_ring(
         &self,
@@ -3085,21 +3118,7 @@ impl Renderer {
         }
         let cy = scene.height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            let fill = if charging {
-                accent_color(Accent::Green)
-            } else if percent <= 20 {
-                accent_color(Accent::Red)
-            } else {
-                color(1.0, 1.0, 1.0, 1.0)
-            };
-            let _ = self.draw_ring(
-                bounds.left + 18.0,
-                cy,
-                5.5,
-                percent as f32 / 100.0,
-                fill,
-                alpha,
-            );
+            self.draw_battery(bounds.left + 18.0, cy, 5.5, percent, charging, alpha);
         }
         if let Some(weather) = &scene.status.weather {
             if let Some(text) = self.text_layout(&weather.temperature, &self.small_left, 50.0) {
