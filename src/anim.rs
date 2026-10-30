@@ -280,8 +280,9 @@ pub struct Notch {
     card_size: Option<(f32, f32)>,
     /// Size with nothing else to show.
     resting: (f32, f32),
-    /// How much the size setting adds to the live strip and the wide notch.
-    growth: (f32, f32),
+    /// The closed notch's size relative to the usual one; what it shows,
+    /// the live strip and the wide notch scale with it.
+    pub scale: f32,
     /// Hovered in click-to-open mode.
     peek: bool,
 }
@@ -305,7 +306,7 @@ impl Notch {
             strip_size: None,
             card_size: None,
             resting: COMPACT,
-            growth: (0.0, 0.0),
+            scale: 1.0,
             peek: false,
         }
     }
@@ -440,7 +441,7 @@ impl Notch {
             .strip_size
             .filter(|_| !banner && card.is_none() && !peek);
         let eyes = self.idle && !banner && card.is_none() && strip.is_none() && !peek;
-        let grown = |(w, h): (f32, f32)| (w + self.growth.0, h + self.growth.1);
+        let grown = |(w, h): (f32, f32)| (w * self.scale, h * self.scale);
         let (w, h) = match (&self.banner, card, strip) {
             (Some(shown), _, _) if banner => shown.size,
             (_, Some(size), _) => size,
@@ -461,7 +462,7 @@ impl Notch {
 
     /// Rests at `size`, or as the thin bar when `minimal`.
     pub fn set_resting(&mut self, size: (f32, f32), minimal: bool) {
-        self.growth = (size.0 - COMPACT.0, size.1 - COMPACT.1);
+        self.scale = size.1 / COMPACT.1;
         self.resting = if minimal { MINIMAL } else { size };
         self.retarget();
     }

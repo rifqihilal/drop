@@ -538,6 +538,11 @@ struct Window {
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     notch_size: NotchSize,
+    /// The settings as they were when the window opened, for Batal.
+    opened: Settings,
+    opened_autostart: bool,
+    /// Something was written since then.
+    applied: bool,
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -762,6 +767,9 @@ impl Window {
                 settings.stretch_minutes,
             ],
             notch_size: settings.notch_size,
+            opened: settings.clone(),
+            opened_autostart: autostart::is_enabled(),
+            applied: false,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
@@ -951,8 +959,8 @@ impl Window {
         self.invalidate();
     }
 
-    /// Validates the form; on success writes the file and closes.
-    fn save(&mut self) {
+    /// The settings as the form stands, or where it is wrong and why.
+    fn form(&self) -> std::result::Result<Settings, (usize, &'static str)> {
         let latitude_text = self.text(ID_LATITUDE);
         let longitude_text = self.text(ID_LONGITUDE);
         let latitude = config::parse_number(&latitude_text);
@@ -962,25 +970,22 @@ impl Window {
             || latitude.is_some_and(config::valid_latitude)
                 && longitude.is_some_and(config::valid_longitude);
         if !coordinates_ok {
-            self.set_page(PAGE_PRAYER);
-            self.set_status(
+            return Err((
+                PAGE_PRAYER,
                 "Lintang (-90 s/d 90) atau bujur (-180 s/d 180) tidak valid",
-                true,
-            );
-            return;
+            ));
         }
         let Some(remind) = whole_number(&self.text(ID_REMIND), 1, 60) else {
-            self.set_page(PAGE_PRAYER);
-            self.set_status("Pengingat harus 1 sampai 60 menit", true);
-            return;
+            return Err((PAGE_PRAYER, "Pengingat harus 1 sampai 60 menit"));
         };
         let Some(idle) = whole_number(&self.text(ID_IDLE), 1, 120) else {
-            self.set_page(PAGE_GENERAL);
-            self.set_status("Waktu munculnya mata harus 1 sampai 120 menit", true);
-            return;
+            return Err((
+                PAGE_GENERAL,
+                "Waktu munculnya mata harus 1 sampai 120 menit",
+            ));
         };
 
-        let settings = Settings {
+        Ok(Settings {
             city: self.text(ID_CITY),
             latitude: if both_empty { None } else { latitude },
             longitude: if both_empty { None } else { longitude },
@@ -1012,16 +1017,54 @@ impl Window {
             notch_minimal: self.toggles[17],
             open_on_click: self.toggles[18],
             notch_size: self.notch_size,
-        };
+        })
+    }
+
+    /// Writes `settings` and tells the notch. Returns false when that failed.
+    fn apply(&mut self, settings: &Settings) -> bool {
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);
-            return;
+            return false;
         }
         if self.toggles[5] != autostart::is_enabled() {
             autostart::set_enabled(self.toggles[5]);
         }
+        self.applied = true;
         unsafe {
             let _ = PostMessageW(Some(self.notch), SAVED_MSG, WPARAM(0), LPARAM(0));
+        }
+        true
+    }
+
+    /// Puts a changed switch into effect at once, so it can be seen. A field
+    /// still being typed wrong holds this back until Simpan points at it.
+    fn apply_live(&mut self) {
+        if let Ok(settings) = self.form() {
+            self.apply(&settings);
+        }
+    }
+
+    /// Validates the form; on success writes the file and closes.
+    fn save(&mut self) {
+        match self.form() {
+            Ok(settings) => {
+                if self.apply(&settings) {
+                    self.close();
+                }
+            }
+            Err((page, message)) => {
+                self.set_page(page);
+                self.set_status(message, true);
+            }
+        }
+    }
+
+    /// Closes, taking back whatever was applied since the window opened.
+    fn cancel(&mut self) {
+        if self.applied {
+            self.toggles[5] = self.opened_autostart;
+            let original = self.opened.clone();
+            self.apply(&original);
         }
         self.close();
     }
@@ -1067,13 +1110,15 @@ impl Window {
         } else if SAVE_BUTTON.contains(x, y) {
             self.save();
         } else if CANCEL_BUTTON.contains(x, y) {
-            self.close();
+            self.cancel();
         } else if let Some(size) = self.size_at(x, y) {
             self.notch_size = size;
             self.invalidate();
+            self.apply_live();
         } else if let Some(index) = self.toggle_at(x, y) {
             self.toggles[index] = !self.toggles[index];
             self.invalidate();
+            self.apply_live();
         }
     }
 
@@ -1557,7 +1602,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 (id, _) if id == IDCANCEL.0 as usize => {
                     if window.places.is_empty() {
-                        window.close();
+                        window.cancel();
                     } else {
                         window.hide_results();
                     }

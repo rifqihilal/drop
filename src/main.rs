@@ -1390,7 +1390,9 @@ impl App {
     /// Reads the settings file and puts it into effect. `announce` confirms
     /// a new prayer location with a notice.
     fn apply_settings(&mut self, announce: bool) {
+        let before = self.settings.prayer();
         self.settings = Settings::load();
+        let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
         let resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,
@@ -1425,7 +1427,7 @@ impl App {
             .settings
             .prayer()
             .map(|settings| PrayerDay::new(settings, prayer::today()));
-        if announce && self.settings.notify_prayer {
+        if announce && moved && self.settings.notify_prayer {
             if let Some(day) = &self.prayer {
                 let notice = notices::prayer_ready(day);
                 self.notify(notice);
@@ -1660,6 +1662,7 @@ impl App {
             page_list: self.pages(),
             nav_visible: n.nav_visible.value,
             peek_visible: n.peek_visible.value,
+            closed_scale: n.scale,
             calendar: {
                 let (year, month, day) = prayer::today();
                 let (shown_year, shown_month) =

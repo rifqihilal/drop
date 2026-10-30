@@ -127,6 +127,20 @@ fn nav_item(index: usize, count: usize) -> (f32, f32) {
     (x, CARD.1 + NAV_DROP)
 }
 
+/// What the home page says is next: today's first event, else the first task
+/// not done, and how many more of either wait behind it.
+fn next_up(agenda: &[AgendaItem], tasks: &[Task]) -> Option<(String, usize)> {
+    let events: Vec<&AgendaItem> = agenda.iter().filter(|item| item.today).collect();
+    let open: Vec<&Task> = tasks.iter().filter(|task| !task.done).collect();
+    let more = (events.len() + open.len()).checked_sub(1)?;
+    let line = match (events.first(), open.first()) {
+        (Some(event), _) => format!("{} {}", event.time, event.summary),
+        (None, Some(task)) => task.text.clone(),
+        (None, None) => return None,
+    };
+    Some((line, more))
+}
+
 /// The hour of a "22:38" clock.
 fn clock_hour(clock: &str) -> u32 {
     clock
@@ -473,6 +487,8 @@ pub struct Scene<'a> {
     pub nav_visible: f32,
     /// How far the notch has widened to show the date, 0..1.
     pub peek_visible: f32,
+    /// The closed notch's size relative to the usual one.
+    pub closed_scale: f32,
     pub calendar: CalendarScene,
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
@@ -905,7 +921,7 @@ impl Renderer {
             self.draw_eyes(scene);
             self.draw_banner(scene);
             self.draw_music(scene);
-            self.draw_clock(scene);
+            self.with_scale(scene.closed_scale, || self.draw_clock(scene));
             t.EndDraw(None, None)?;
 
             let blend = BLENDFUNCTION {
@@ -1148,18 +1164,22 @@ impl Renderer {
             let alpha = scene.music_visible.min(1.0);
             self.target
                 .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            match (scene.strip, &scene.timer, &scene.music) {
+            // The strip's own coordinates, before the notch size scales it.
+            let k = scene.closed_scale;
+            let (left, right) = (cx - scene.width / 2.0 / k, cx + scene.width / 2.0 / k);
+            let height = scene.height / k;
+            self.with_scale(k, || match (scene.strip, &scene.timer, &scene.music) {
                 (Strip::Timer, Some(timer), _) => {
-                    self.draw_timer_strip(timer, x0, x1, scene.height, alpha)
+                    self.draw_timer_strip(timer, left, right, height, alpha)
                 }
                 (Strip::Music, _, Some(music)) => {
-                    self.draw_music_strip(music, x0, x1, scene.height, alpha)
+                    self.draw_music_strip(music, left, right, height, alpha)
                 }
                 (Strip::Prayer, _, _) => {
-                    self.draw_prayer_strip(scene.prayer_soon, x0, x1, scene.height, alpha)
+                    self.draw_prayer_strip(scene.prayer_soon, left, right, height, alpha)
                 }
                 _ => {}
-            }
+            });
             self.target.PopAxisAlignedClip();
         }
         if scene.card_visible <= 0.01 {
@@ -1438,6 +1458,26 @@ impl Renderer {
         }
     }
 
+    /// Draws with everything scaled by `scale` from the top center.
+    unsafe fn with_scale(&self, scale: f32, draw: impl FnOnce()) {
+        let scaled = Matrix3x2 {
+            M11: scale,
+            M12: 0.0,
+            M21: 0.0,
+            M22: scale,
+            M31: CANVAS.0 / 2.0 * (1.0 - scale),
+            M32: 0.0,
+        };
+        self.target.SetTransform(&scaled);
+        draw();
+        self.target.SetTransform(&Matrix3x2 {
+            M11: 1.0,
+            M22: 1.0,
+            M31: 0.0,
+            ..scaled
+        });
+    }
+
     /// Draws with everything shifted `dx` to the right and `dy` down.
     unsafe fn with_offset(&self, dx: f32, dy: f32, draw: impl FnOnce()) {
         let shifted = Matrix3x2 {
@@ -1457,27 +1497,19 @@ impl Renderer {
         });
     }
 
-    /// A phase-coloured dot and the time left.
+    /// The phase's progress as a small ring, and the time left. Both change
+    /// once a second, so a running timer costs next to nothing.
     unsafe fn draw_timer_strip(&self, timer: &TimerScene, x0: f32, x1: f32, h: f32, alpha: f32) {
         let cy = h / 2.0;
         let color = accent_color(if timer.on_break {
             Accent::Teal
         } else {
-            Accent::Green
+            Accent::Red
         });
-        // Phase dot on the left, the countdown on the right; the clock stays
-        // in the middle.
-        self.accent.SetColor(&color);
-        self.accent
-            .SetOpacity(if timer.running { 1.0 } else { 0.45 } * alpha);
-        self.target.FillEllipse(
-            &D2D1_ELLIPSE {
-                point: pt(x0 + 20.0, cy),
-                radiusX: 4.0,
-                radiusY: 4.0,
-            },
-            &self.accent,
-        );
+        // Ring on the left, the countdown on the right; the clock stays in
+        // the middle.
+        let ring = if timer.running { 1.0 } else { 0.45 };
+        let _ = self.draw_ring(x0 + 20.0, cy, 6.5, timer.progress, color, ring * alpha);
         if let Some(text) = self.text_layout(&timer.left, &self.text_left, 80.0) {
             let x = x1 - 14.0 - text.width;
             self.accent
@@ -2326,7 +2358,13 @@ impl Renderer {
         let left = panel.right + 16.0;
         let right = x1 - 14.0;
         let room = right - left;
-        for y in [52.0, 108.0] {
+        let next = next_up(&scene.agenda, scene.todo.tasks);
+        let lines: &[f32] = if next.is_some() {
+            &[52.0, 108.0]
+        } else {
+            &[52.0]
+        };
+        for &y in lines {
             self.light.SetOpacity(0.08 * alpha);
             self.target
                 .FillRectangle(&rect(left, y, right, y + 1.0), &self.light);
@@ -2396,14 +2434,18 @@ impl Renderer {
             }
         }
 
-        let events = scene.agenda.iter().filter(|item| item.today).count();
-        let summary = match (scene.todo.left, events) {
-            (0, 0) => "Tidak ada tugas hari ini".to_string(),
-            (tasks, 0) => format!("{tasks} tugas tersisa"),
-            (0, events) => format!("{events} acara hari ini"),
-            (tasks, events) => format!("{tasks} tugas \u{b7} {events} acara hari ini"),
-        };
-        text(&summary, &self.small_left, left, 118.0, room, 0.75);
+        if let Some((line, more)) = next {
+            let count = format!("+{more}");
+            let badge = (more > 0)
+                .then(|| self.text_layout(&count, &self.small_left, 40.0))
+                .flatten();
+            let room = room - badge.as_ref().map_or(0.0, |badge| badge.width + 8.0);
+            text(&line, &self.subtitle_text, left, 118.0, room, 0.9);
+            if let Some(badge) = badge {
+                let x = right - badge.width;
+                self.draw_layout(&badge.layout, x, 119.0, 0.55 * alpha);
+            }
+        }
     }
 
     /// Small art on the left, level bars on the right.
@@ -3102,12 +3144,12 @@ impl Renderer {
             return;
         }
         let cx = CANVAS.0 / 2.0;
-        let bounds = rect(
-            cx - scene.width / 2.0,
-            0.0,
-            cx + scene.width / 2.0,
-            scene.height,
+        // Drawn scaled by the notch size, so measured before it.
+        let (width, height) = (
+            scene.width / scene.closed_scale,
+            scene.height / scene.closed_scale,
         );
+        let bounds = rect(cx - width / 2.0, 0.0, cx + width / 2.0, height);
         self.draw_text(scene.clock, &self.text, bounds, 0.92 * alpha);
 
         // With nothing live beside it, the clock sits between the battery and
@@ -3116,7 +3158,7 @@ impl Renderer {
         if alpha <= 0.01 {
             return;
         }
-        let cy = scene.height / 2.0;
+        let cy = height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
             self.draw_battery(bounds.left + 18.0, cy, 5.5, percent, charging, alpha);
         }
@@ -3255,6 +3297,28 @@ mod tests {
         assert!(r > g && r > b, "{r} {g} {b}");
         assert!((r - 0.6).abs() < 0.001);
         assert_eq!(art_tint(&[0, 0, 0, 255]), None);
+    }
+
+    #[test]
+    fn next_up_puts_todays_event_before_tasks() {
+        let task = |text: &str, done| Task {
+            text: text.to_string(),
+            done,
+        };
+        let event = |today| AgendaItem {
+            day: String::new(),
+            time: "09:00".to_string(),
+            summary: "Rapat",
+            today,
+        };
+        assert_eq!(next_up(&[], &[]), None);
+        assert_eq!(next_up(&[event(false)], &[task("A", true)]), None);
+        let tasks = [task("A", true), task("B", false), task("C", false)];
+        assert_eq!(next_up(&[], &tasks), Some(("B".to_string(), 1)));
+        assert_eq!(
+            next_up(&[event(true)], &tasks),
+            Some(("09:00 Rapat".to_string(), 2))
+        );
     }
 
     #[test]
