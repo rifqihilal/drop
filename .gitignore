@@ -9,8 +9,3 @@
 # Agents
 .agents/
 .mimocode
-
-/node_modules
-/dist
-/package-lock.json
-/src-tauri

@@ -15,15 +15,15 @@ lirik tampil.
 - Mata beranimasi saat komputer tidak disentuh beberapa menit.
 - Info langsung di samping jam: musik, timer Pomodoro, atau sholat yang sudah dekat.
 - Bersembunyi saat ada aplikasi layar penuh.
+- Tiga ukuran, ditambah mode minimal berupa bar hitam tipis.
 
-**Kartu** (arahkan mouse ke notch, lalu scroll, klik panah samping, atau tekan `Alt+N`)
+**Kartu** (arahkan mouse ke notch atau klik, sesuai Pengaturan; pindah halaman dengan scroll, panah samping, baris ikon di bawah kartu, atau `Alt+N`)
 
-- **Hari Ini:** cuaca, sholat berikutnya, dan baterai.
+- **Hari Ini:** jam, tanggal, baterai, cuaca dari [Open-Meteo](https://open-meteo.com), sholat berikutnya, serta acara atau tugas terdekat.
 - **Sedang Diputar:** kontrol musik, sampul album, dan lirik tersinkron dari [LRCLIB](https://lrclib.net).
-- **Prakiraan Cuaca:** enam jam ke depan dan tujuh hari, dari [Open-Meteo](https://open-meteo.com).
 - **Waktu Sholat:** jadwal Kemenag RI dengan posisi matahari.
-- **Kalender & Fokus:** kalender bulanan dan Pomodoro.
-- **Agenda Acara:** acara dari tautan kalender `.ics`, dengan pengingat 10 menit sebelumnya.
+- **Kalender:** kalender bulanan dan agenda dari tautan `.ics`, dengan pengingat 10 menit sebelumnya.
+- **Fokus:** timer Pomodoro.
 - **Daftar Tugas:** tugas singkat yang diketik langsung di notch.
 - **Rak Berkas:** seret berkas ke notch, lalu seret keluar ke aplikasi lain.
 
