@@ -19,6 +19,7 @@ mod geo;
 mod health;
 mod ical;
 mod keys;
+mod lyrics;
 mod media;
 mod net;
 mod osd;
@@ -71,8 +72,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     agenda_card, shelf_card, todo_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD,
-    DROP_ZONE, MUSIC_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP,
-    WEATHER_CARD,
+    DROP_ZONE, MUSIC_CARD, MUSIC_LYRICS_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD,
+    TIMER_STRIP, WEATHER_CARD,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -80,6 +81,7 @@ use config::{PrayerSettings, Settings};
 use frames::Pacer;
 use health::Health;
 use ical::{Event, IcalWatch};
+use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use render::{
     glyph, AgendaItem, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer,
@@ -207,6 +209,9 @@ struct App {
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
     ical_watch: IcalWatch,
+    lyrics_watch: LyricsWatch,
+    /// Synced lyrics of the song playing, once found: (artist, title, lines).
+    lyrics: Option<(String, String, Lyrics)>,
     /// Events around today from the calendar feed.
     events: Vec<Event>,
     /// Events already announced: (day, minute, title).
@@ -362,6 +367,8 @@ fn main() -> Result<()> {
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
             ical_watch: IcalWatch::start(hwnd),
+            lyrics_watch: LyricsWatch::start(hwnd),
+            lyrics: None,
             events: Vec::new(),
             event_reminded: Vec::new(),
             weather: None,
@@ -478,7 +485,9 @@ impl App {
         let waiting = self.wifi_lost.is_some()
             || self.battery_check.is_some()
             || self.demo.is_some()
-            || self.editing.is_some();
+            || self.editing.is_some()
+            // Lyrics move on with the song.
+            || (card_open && self.shown_page() == Page::Music && self.lyric().is_some());
         self.schedule(if moving {
             FRAME_MS
         } else if bars_moving {
@@ -517,6 +526,13 @@ impl App {
             self.card_until = Some(now + SONG_CARD);
             self.page = Page::Music;
         }
+        if new_song {
+            self.lyrics = None;
+            if let Some(track) = track.as_ref().filter(|_| self.settings.module_lyrics) {
+                self.lyrics_watch
+                    .request(&track.artist, &track.title, track.duration);
+            }
+        }
         self.tracks_seen = true;
         self.track = track;
         self.tick();
@@ -543,6 +559,7 @@ impl App {
         let card = open.then(|| match self.shown_page() {
             _ if self.drag_over => DROP_ZONE,
             Page::Shelf => shelf_card(self.shelf.items().len()),
+            Page::Music if self.lyric().is_some() => MUSIC_LYRICS_CARD,
             Page::Music => MUSIC_CARD,
             Page::Status => STATUS_CARD,
             Page::Calendar => CALENDAR_CARD,
@@ -955,6 +972,26 @@ impl App {
         self.notify_for(notice, PRAYER_NOTICE_DURATION);
     }
 
+    /// Keeps lyrics that arrive for the song still playing.
+    fn on_lyrics(&mut self, found: lyrics::Found) {
+        let current = self
+            .track
+            .as_ref()
+            .is_some_and(|track| track.artist == found.artist && track.title == found.title);
+        if let (true, Some(lines)) = (current, found.lyrics) {
+            self.lyrics = Some((found.artist, found.title, lines));
+            self.tick();
+        }
+    }
+
+    /// The lyric line being sung and the next, when the song has lyrics.
+    fn lyric(&self) -> Option<(&str, &str)> {
+        let track = self.music()?;
+        let (artist, title, lines) = self.lyrics.as_ref()?;
+        (self.settings.module_lyrics && track.artist == *artist && track.title == *title)
+            .then(|| lines.at(track.position_now()))
+    }
+
     fn on_events(&mut self, events: Vec<Event>) {
         self.events = events;
         // An event may already be close.
@@ -1170,6 +1207,15 @@ impl App {
         }
         self.ical_watch
             .set_url(Some(self.settings.ical_url.clone()));
+        // Lyrics just switched on: look up the song already playing.
+        if let (true, None, Some(track)) = (
+            self.settings.module_lyrics,
+            &self.lyrics,
+            self.track.as_ref(),
+        ) {
+            self.lyrics_watch
+                .request(&track.artist, &track.title, track.duration);
+        }
         if !self.idle_from_args {
             self.idle_after_ms = self.settings.idle_minutes * 60_000;
         }
@@ -1391,6 +1437,7 @@ impl App {
                 position: track.position_now(),
                 duration: track.duration,
                 bars: self.bars,
+                lyric: self.lyric(),
             }),
             music_visible: n.music_visible.value,
             card_visible: n.card_visible.value,
@@ -1589,6 +1636,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEWHEEL => {
             with_app(|app| app.on_wheel(wparam));
+            LRESULT(0)
+        }
+        lyrics::LYRICS_MSG => {
+            let found = lyrics::take_found(lparam);
+            with_app(|app| app.on_lyrics(found));
             LRESULT(0)
         }
         ical::EVENTS_MSG => {

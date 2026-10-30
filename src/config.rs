@@ -34,6 +34,7 @@ pub struct Settings {
     pub module_prayer: bool,
     pub module_eyes: bool,
     pub module_todo: bool,
+    pub module_lyrics: bool,
     /// Link to an iCalendar feed for the agenda; empty when none.
     pub ical_url: String,
     /// Health reminders, each after its minutes of use.
@@ -66,6 +67,7 @@ impl Default for Settings {
             module_prayer: true,
             module_eyes: true,
             module_todo: true,
+            module_lyrics: true,
             ical_url: String::new(),
             water: true,
             water_minutes: 60,
@@ -159,6 +161,8 @@ impl Settings {
              halaman_sholat = {}\n\
              mata = {}\n\
              tugas = {}\n\
+             ; Lirik dicari di lrclib.net dari judul dan penyanyi lagu.\n\
+             lirik = {}\n\
              \n\
              [agenda]\n\
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
@@ -192,6 +196,7 @@ impl Settings {
             flag(self.module_prayer),
             flag(self.module_eyes),
             flag(self.module_todo),
+            flag(self.module_lyrics),
             self.ical_url,
             health::BREAK_MINUTES,
             flag(self.water),
@@ -274,6 +279,7 @@ fn parse(text: &str) -> Settings {
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
+            "lirik" => s.module_lyrics = flag(true),
             "ical" => s.ical_url = value.to_string(),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
@@ -319,6 +325,7 @@ mod tests {
             module_prayer: true,
             module_eyes: false,
             module_todo: false,
+            module_lyrics: false,
             ical_url:
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),

@@ -103,9 +103,9 @@ const ICAL_FIELD: Rect = Rect::new(456.0, ICAL_TOP, 736.0, ICAL_TOP + 34.0);
 const CANCEL_BUTTON: Rect = Rect::new(526.0, 680.0, 626.0, 714.0);
 const SAVE_BUTTON: Rect = Rect::new(636.0, 680.0, 736.0, 714.0);
 
-/// Switches: five notifications, start with Windows, seven modules, then
+/// Switches: five notifications, start with Windows, eight modules, then
 /// three health reminders.
-const TOGGLES: [&str; 16] = [
+const TOGGLES: [&str; 17] = [
     "Wi-Fi tersambung dan terputus",
     "Perangkat Bluetooth",
     "Baterai lemah",
@@ -119,6 +119,7 @@ const TOGGLES: [&str; 16] = [
     "Halaman sholat",
     "Mata saat idle",
     "Tugas",
+    "Lirik lagu",
     "Minum air",
     "Istirahatkan mata",
     "Peregangan",
@@ -128,7 +129,7 @@ const FIRST_MODULE: usize = 6;
 /// Top of the modules grid, two switches per row under the prayer preview.
 const MODULES_TOP: f32 = 494.0;
 /// First health reminder switch, in the right column under "Umum".
-const FIRST_HEALTH: usize = 13;
+const FIRST_HEALTH: usize = 14;
 const HEALTH_TOP: f32 = 448.0;
 
 // Windows 11 dark palette, as 0xRRGGBB.
@@ -216,7 +217,7 @@ struct Window {
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 16],
+    toggles: [bool; 17],
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     status: String,
@@ -428,6 +429,7 @@ impl Window {
                 settings.module_prayer,
                 settings.module_eyes,
                 settings.module_todo,
+                settings.module_lyrics,
                 settings.water,
                 settings.eyes,
                 settings.stretch,
@@ -655,11 +657,12 @@ impl Window {
             module_prayer: self.toggles[10],
             module_eyes: self.toggles[11],
             module_todo: self.toggles[12],
-            water: self.toggles[13],
+            module_lyrics: self.toggles[13],
+            water: self.toggles[14],
             water_minutes: self.health_minutes[0],
-            eyes: self.toggles[14],
+            eyes: self.toggles[15],
             eyes_minutes: self.health_minutes[1],
-            stretch: self.toggles[15],
+            stretch: self.toggles[16],
             stretch_minutes: self.health_minutes[2],
         };
         if settings.save().is_err() {

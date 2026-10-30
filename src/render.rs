@@ -489,6 +489,8 @@ pub struct MusicScene<'a> {
     pub duration: f64,
     /// Level bar heights, 0..1.
     pub bars: [f32; 4],
+    /// The lyric line being sung and the next, when the song has synced lyrics.
+    pub lyric: Option<(&'a str, &'a str)>,
 }
 
 /// A measured line of text, ready to draw.
@@ -529,6 +531,9 @@ pub struct Renderer {
     tiny: IDWriteTextFormat,
     /// Centered single-line file names that end in an ellipsis.
     tile_text: IDWriteTextFormat,
+    /// Centered single-line lyrics: the line being sung, and the next.
+    lyric_text: IDWriteTextFormat,
+    lyric_next: IDWriteTextFormat,
     /// Small icon glyph for the remove buttons.
     close_glyph: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
@@ -677,6 +682,14 @@ impl Renderer {
             let tile_text = line(DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
             tile_text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             tile_text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let centered_line = |weight, size| -> Result<IDWriteTextFormat> {
+                let format = line(weight, size)?;
+                format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+                format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                Ok(format)
+            };
+            let lyric_text = centered_line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0)?;
+            let lyric_next = centered_line(DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
@@ -697,6 +710,8 @@ impl Renderer {
                 big_clock,
                 tiny,
                 tile_text,
+                lyric_text,
+                lyric_next,
                 close_glyph,
                 symbols,
                 symbols_small,
@@ -2015,6 +2030,23 @@ impl Renderer {
             if let Some(text) = self.text_layout(&remaining, &self.small_left, 80.0) {
                 self.draw_layout(&text.layout, right - text.width, 84.0, 0.55 * alpha);
             }
+        }
+
+        // Lyrics: the line being sung, the next one dimmer below it.
+        if let Some((line, next)) = music.lyric {
+            let cx = CANVAS.0 / 2.0;
+            let (x0, x1) = (cx - width / 2.0 + 18.0, cx + width / 2.0 - 18.0);
+            self.light.SetOpacity(0.08 * alpha);
+            self.target
+                .FillRectangle(&rect(x0, 106.0, x1, 107.0), &self.light);
+            let line = if line.is_empty() { "\u{266A}" } else { line };
+            self.draw_text(line, &self.lyric_text, rect(x0, 112.0, x1, 132.0), alpha);
+            self.draw_text(
+                next,
+                &self.lyric_next,
+                rect(x0, 132.0, x1, 150.0),
+                0.4 * alpha,
+            );
         }
     }
 

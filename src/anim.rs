@@ -17,6 +17,8 @@ pub const NOTICE_HEIGHT: f32 = 62.0;
 pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
 /// Notch size of the full music card.
 pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
+/// The music card with two lines of lyrics under the controls.
+pub const MUSIC_LYRICS_CARD: (f32, f32) = (380.0, 166.0);
 /// Notch size of the status card: clock, weather and battery.
 pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
 /// Notch size of the calendar and Pomodoro card.
