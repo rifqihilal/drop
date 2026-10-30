@@ -1529,12 +1529,8 @@ impl App {
                     place: &self.settings.city,
                 }),
                 weather_hint: self.weather_hint(),
-                // Read only while a card is showing; it is cheap anyway.
-                battery: if n.card_visible.value > 0.01 {
-                    system::battery_status()
-                } else {
-                    None
-                },
+                // A cheap call, and drawing happens only on changes.
+                battery: system::battery_status(),
             },
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);

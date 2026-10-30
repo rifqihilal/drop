@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::todo;
 
 /// Notch size while the computer is in use (logical pixels).
-pub const COMPACT: (f32, f32) = (132.0, 28.0);
+pub const COMPACT: (f32, f32) = (156.0, 28.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.

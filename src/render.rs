@@ -243,7 +243,7 @@ struct CalendarRects {
     previous_month: (f32, f32),
     next_month: (f32, f32),
     timer_left: f32,
-    start_pause: (f32, f32),
+    start_pause: D2D_RECT_F,
     reset: (f32, f32),
 }
 
@@ -257,8 +257,8 @@ impl CalendarRects {
             previous_month: (grid_right - 42.0, 24.0),
             next_month: (grid_right - 12.0, 24.0),
             timer_left,
-            start_pause: (timer_left + 18.0, 136.0),
-            reset: (timer_left + 66.0, 136.0),
+            start_pause: rect(timer_left, 122.0, timer_left + 92.0, 150.0),
+            reset: (timer_left + 114.0, 136.0),
         }
     }
 }
@@ -1354,26 +1354,29 @@ impl Renderer {
         if let Some(text) = self.text_layout(&caption, &self.subtitle_text, 140.0) {
             self.draw_layout(&text.layout, left, 80.0, 0.6 * alpha);
         }
-        let (px, py) = layout.start_pause;
-        self.light.SetOpacity(alpha);
+        let (icon, label) = if timer.running {
+            (glyph::PAUSE, "Jeda")
+        } else {
+            (glyph::PLAY, "Mulai")
+        };
+        let accent = if timer.on_break {
+            Accent::Teal
+        } else {
+            Accent::Red
+        };
+        self.draw_pill(layout.start_pause, icon, label, Some(accent), alpha);
+        let (rx, ry) = layout.reset;
+        self.light.SetOpacity(0.12 * alpha);
         self.target.FillEllipse(
             &D2D1_ELLIPSE {
-                point: pt(px, py),
-                radiusX: 17.0,
-                radiusY: 17.0,
+                point: pt(rx, ry),
+                radiusX: 14.0,
+                radiusY: 14.0,
             },
             &self.light,
         );
-        self.black.SetOpacity(alpha);
-        let icon = if timer.running {
-            glyph::PAUSE
-        } else {
-            glyph::PLAY
-        };
-        self.draw_glyph(icon, px, py, &self.black);
-        self.black.SetOpacity(1.0);
         self.light.SetOpacity(0.85 * alpha);
-        self.draw_glyph(glyph::RESET, layout.reset.0, layout.reset.1, &self.light);
+        self.draw_small_glyph_at(glyph::RESET, rx, ry, &self.light);
     }
 
     /// Keeps a thumbnail for each shelf file, making new ones as files arrive.
@@ -2039,10 +2042,13 @@ impl Renderer {
         let (y, width) = on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let layout = CalendarRects::new(cx - width / 2.0, cx + width / 2.0);
+        let pill = layout.start_pause;
+        if x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom {
+            return Some(CalendarControl::StartPause);
+        }
         [
             (layout.previous_month, CalendarControl::PreviousMonth),
             (layout.next_month, CalendarControl::NextMonth),
-            (layout.start_pause, CalendarControl::StartPause),
             (layout.reset, CalendarControl::Reset),
         ]
         .into_iter()
@@ -2667,6 +2673,37 @@ impl Renderer {
             scene.height,
         );
         self.draw_text(scene.clock, &self.text, bounds, 0.92 * alpha);
+
+        // With nothing live beside it, the clock sits between the battery and
+        // the temperature.
+        let alpha = alpha * (1.0 - scene.music_visible).clamp(0.0, 1.0);
+        if alpha <= 0.01 {
+            return;
+        }
+        let cy = scene.height / 2.0;
+        if let Some((percent, charging)) = scene.status.battery {
+            let fill = if charging {
+                accent_color(Accent::Green)
+            } else if percent <= 20 {
+                accent_color(Accent::Red)
+            } else {
+                color(1.0, 1.0, 1.0, 1.0)
+            };
+            let _ = self.draw_ring(
+                bounds.left + 18.0,
+                cy,
+                5.5,
+                percent as f32 / 100.0,
+                fill,
+                alpha,
+            );
+        }
+        if let Some(weather) = &scene.status.weather {
+            if let Some(text) = self.text_layout(&weather.temperature, &self.small_left, 50.0) {
+                let x = bounds.right - 13.0 - text.width;
+                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.75 * alpha);
+            }
+        }
     }
 
     unsafe fn draw_text(
