@@ -7,7 +7,11 @@
 use std::ffi::c_void;
 
 use windows::core::{implement, Result, GUID, PCWSTR};
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
     IAudioMeterInformation,
@@ -26,8 +30,12 @@ use windows::Win32::System::SystemServices::{
     GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
+use windows::Win32::UI::Shell::{
+    SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    PostMessageW, DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_APP,
+    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, PostMessageW,
+    DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_APP,
 };
 
 /// Volume changed. WPARAM: level in per mille, LPARAM: 1 when muted.
@@ -259,4 +267,46 @@ pub fn battery_status() -> Option<(u32, bool)> {
     }
     let charging = status.ACLineStatus == 1 || status.BatteryFlag & 8 != 0;
     Some((u32::from(status.BatteryLifePercent), charging))
+}
+
+/// True while another app fills the notch's monitor (a game, a full-screen
+/// video, a presentation), so the notch can step aside.
+pub fn fullscreen_app(own: HWND) -> bool {
+    unsafe {
+        if SHQueryUserNotificationState().is_ok_and(|state| {
+            state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
+        }) {
+            return true;
+        }
+        let window = GetForegroundWindow();
+        if window.is_invalid() || window == own || window == GetShellWindow() {
+            return false;
+        }
+        // The desktop itself covers the screen too.
+        let mut class = [0u16; 16];
+        let length = GetClassNameW(window, &mut class).max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..length]);
+        if class == "WorkerW" || class == "Progman" {
+            return false;
+        }
+        let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        if monitor != MonitorFromWindow(own, MONITOR_DEFAULTTONEAREST) {
+            return false;
+        }
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let mut bounds = RECT::default();
+        if !GetMonitorInfoW(monitor, &mut info).as_bool()
+            || GetWindowRect(window, &mut bounds).is_err()
+        {
+            return false;
+        }
+        let screen = info.rcMonitor;
+        bounds.left <= screen.left
+            && bounds.top <= screen.top
+            && bounds.right >= screen.right
+            && bounds.bottom >= screen.bottom
+    }
 }

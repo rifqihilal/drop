@@ -49,8 +49,8 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetLastInputInfo, ReleaseCapture, SetCapture, TrackMouseEvent, LASTINPUTINFO, TME_LEAVE,
-    TRACKMOUSEEVENT,
+    GetLastInputInfo, RegisterHotKey, ReleaseCapture, SetCapture, TrackMouseEvent, LASTINPUTINFO,
+    MOD_ALT, MOD_NOREPEAT, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -58,11 +58,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
     TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND, MF_CHECKED, MF_GRAYED,
-    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
@@ -119,6 +119,9 @@ const DRAG_THRESHOLD: f32 = 6.0;
 const PAGE_SWITCH: Duration = Duration::from_millis(260);
 /// A prayer this many minutes away or closer shows in the closed notch.
 const PRAYER_SOON_MINUTES: u32 = 30;
+/// How long the card stays open after Alt+N.
+const KEY_CARD: Duration = Duration::from_secs(8);
+const HOTKEY_ID: i32 = 1;
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
@@ -169,6 +172,8 @@ struct App {
     pomodoro: Pomodoro,
     /// Months away from the current one on the calendar page.
     month_offset: i32,
+    /// The notch is showing (it hides while another app is full screen).
+    shown: bool,
     /// A page switch in progress on the open card.
     page_switch: Option<PageSwitch>,
     /// Display-refresh frames while animating.
@@ -306,6 +311,7 @@ fn main() -> Result<()> {
             pomodoro: Pomodoro::default(),
             month_offset: 0,
             page_switch: None,
+            shown: true,
             pacer: Pacer::start(hwnd),
             shelf: Shelf::load(),
             drag_over: false,
@@ -326,6 +332,13 @@ fn main() -> Result<()> {
         osd::set_suppressed(true);
         keys::install(hwnd);
         dragdrop::accept_drops(hwnd);
+        // Alt+N opens the card and steps through its pages without the mouse.
+        let _ = RegisterHotKey(
+            Some(hwnd),
+            HOTKEY_ID,
+            MOD_ALT | MOD_NOREPEAT,
+            u32::from(b'N'),
+        );
         app.schedule(COMPACT_MS);
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // After the app exists: Windows answers right away with the current values.
@@ -394,6 +407,7 @@ impl App {
             self.on_phase_end(finished);
         }
         self.update_music(now);
+        self.step_aside_for_fullscreen();
         let switching = self
             .page_switch
             .as_ref()
@@ -651,6 +665,45 @@ impl App {
     }
 
     /// The wheel steps through the open card's pages, down for the next.
+    /// Hides the notch while another app is full screen, except while a banner
+    /// (a reminder, a level) needs to be seen.
+    fn step_aside_for_fullscreen(&mut self) {
+        let banner =
+            self.notch.banner_visible.target > 0.0 || self.notch.banner_visible.value > 0.01;
+        let show = banner || !system::fullscreen_app(self.hwnd);
+        if show != self.shown {
+            self.shown = show;
+            unsafe {
+                let _ = ShowWindow(self.hwnd, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            }
+        }
+    }
+
+    /// Alt+N: opens the card, then moves through its pages, then closes it.
+    fn on_hotkey(&mut self) {
+        let now = Instant::now();
+        let pages = self.pages();
+        let current = pages
+            .iter()
+            .position(|page| *page == self.shown_page())
+            .unwrap_or(0);
+        if self.notch.card_visible.target == 0.0 {
+            self.page = pages[0];
+            self.card_until = Some(now + KEY_CARD);
+        } else if current + 1 < pages.len() {
+            self.page_switch = Some(PageSwitch {
+                from: pages[current],
+                started: now,
+                direction: 1.0,
+            });
+            self.page = pages[current + 1];
+            self.card_until = Some(now + KEY_CARD);
+        } else {
+            self.card_until = None;
+        }
+        self.tick();
+    }
+
     fn on_wheel(&mut self, wparam: WPARAM) {
         if self.notch.card_visible.target == 0.0 {
             return;
@@ -1215,6 +1268,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 SetCursor(Some(cursor));
             }
             LRESULT(1)
+        }
+        WM_HOTKEY => {
+            with_app(App::on_hotkey);
+            LRESULT(0)
         }
         WM_MOUSEWHEEL => {
             with_app(|app| app.on_wheel(wparam));
