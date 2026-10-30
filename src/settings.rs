@@ -115,8 +115,8 @@ const PRAYER_TOP: f32 = 318.0;
 const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
 
 /// Switch states, in this order: five notifications, start with Windows,
-/// eight modules, then three health reminders.
-const TOGGLE_COUNT: usize = 17;
+/// eight modules, three health reminders, then the minimal notch.
+const TOGGLE_COUNT: usize = 18;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -177,6 +177,11 @@ static PAGES: [Page; 9] = [
             Group {
                 title: "Notch",
                 rows: &[
+                    Row::Switch {
+                        toggle: 17,
+                        title: "Notch minimal",
+                        note: "Bar hitam tipis saat tertutup, tab browser tetap terlihat",
+                    },
                     Row::Switch {
                         toggle: 11,
                         title: "Mata saat idle",
@@ -249,7 +254,7 @@ static PAGES: [Page; 9] = [
             rows: &[Row::Switch {
                 toggle: 6,
                 title: "Cuaca",
-                note: "Kartu cuaca, memakai lokasi di halaman Sholat",
+                note: "Suhu di notch dan kartu Hari Ini, memakai lokasi Sholat",
             }],
         }],
     },
@@ -278,7 +283,7 @@ static PAGES: [Page; 9] = [
                 rows: &[Row::Switch {
                     toggle: 8,
                     title: "Kalender & Pomodoro",
-                    note: "Kartu kalender dan pengatur waktu fokus",
+                    note: "Kartu kalender, agenda dan pengatur waktu fokus",
                 }],
             },
             Group {
@@ -303,7 +308,7 @@ static PAGES: [Page; 9] = [
                 Row::Switch {
                     toggle: 10,
                     title: "Halaman sholat",
-                    note: "Kartu jadwal sholat dan arah kiblat",
+                    note: "Kartu jadwal sholat dan posisi matahari",
                 },
                 Row::Switch {
                     toggle: 3,
@@ -718,6 +723,7 @@ impl Window {
                 settings.water,
                 settings.eyes,
                 settings.stretch,
+                settings.notch_minimal,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -971,6 +977,7 @@ impl Window {
             eyes_minutes: self.health_minutes[1],
             stretch: self.toggles[16],
             stretch_minutes: self.health_minutes[2],
+            notch_minimal: self.toggles[17],
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);
@@ -1178,6 +1185,7 @@ impl Window {
             if let Row::Switch { toggle, .. } = row {
                 let minutes = toggle
                     .checked_sub(FIRST_HEALTH)
+                    .filter(|&i| i < self.health_minutes.len())
                     .map(|i| self.health_minutes[i]);
                 match minutes {
                     Some(minutes) => self.text_at(

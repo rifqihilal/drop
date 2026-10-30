@@ -71,9 +71,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    agenda_card, shelf_card, todo_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD,
-    DROP_ZONE, MUSIC_CARD, MUSIC_LYRICS_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD,
-    TIMER_STRIP, WEATHER_CARD,
+    Accent, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, DROP_ZONE, MUSIC_STRIP,
+    PRAYER_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -84,8 +83,9 @@ use ical::{Event, IcalWatch};
 use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use render::{
-    glyph, AgendaItem, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer,
-    Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit, TodoScene, WeatherScene,
+    glyph, AgendaItem, CalendarControl, CalendarScene, MusicScene, Page, PomodoroControl,
+    PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit,
+    TodoScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -206,6 +206,8 @@ struct App {
     press: Option<(usize, f32, f32)>,
     /// Which page the open card shows when there is music.
     page: Page,
+    /// The page dots have opened into page icons.
+    nav_open: bool,
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
     ical_watch: IcalWatch,
@@ -365,6 +367,7 @@ fn main() -> Result<()> {
             editing: None,
             press: None,
             page: Page::Music,
+            nav_open: false,
             weather_watch: WeatherWatch::start(hwnd),
             ical_watch: IcalWatch::start(hwnd),
             lyrics_watch: LyricsWatch::start(hwnd),
@@ -422,7 +425,9 @@ impl App {
         let dt = (now - self.last_tick).as_secs_f32().min(0.05);
         self.last_tick = now;
 
-        let idle = self.settings.module_eyes && idle_ms() >= self.idle_after_ms;
+        let idle = self.settings.module_eyes
+            && !self.settings.notch_minimal
+            && idle_ms() >= self.idle_after_ms;
         self.notch.set_idle(idle, now);
         if self
             .wifi_lost
@@ -555,18 +560,15 @@ impl App {
             self.page = Page::Music;
             self.month_offset = 0;
             self.page_switch = None;
+            self.nav_open = false;
         }
-        let card = open.then(|| match self.shown_page() {
-            _ if self.drag_over => DROP_ZONE,
-            Page::Shelf => shelf_card(self.shelf.items().len()),
-            Page::Music if self.lyric().is_some() => MUSIC_LYRICS_CARD,
-            Page::Music => MUSIC_CARD,
-            Page::Status => STATUS_CARD,
-            Page::Calendar => CALENDAR_CARD,
-            Page::Prayer => PRAYER_CARD,
-            Page::Weather => WEATHER_CARD,
-            Page::Todo => todo_card(self.todo.tasks().len()),
-            Page::Agenda => agenda_card(self.upcoming().len()),
+        self.notch.set_nav(self.nav_open);
+        let card = open.then_some(if self.drag_over {
+            DROP_ZONE
+        } else if self.nav_open {
+            CARD_NAV
+        } else {
+            CARD
         });
         let strip = match self.strip() {
             Strip::Timer => Some(TIMER_STRIP),
@@ -581,7 +583,9 @@ impl App {
     /// timer first, then music that is playing, then a prayer close at hand.
     fn strip(&self) -> Strip {
         let modules = &self.settings;
-        if modules.module_calendar && !self.pomodoro.idle() {
+        if modules.notch_minimal {
+            Strip::None
+        } else if modules.module_calendar && !self.pomodoro.idle() {
             Strip::Timer
         } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
@@ -611,22 +615,19 @@ impl App {
     /// those, music and shelf only when they have something to show.
     fn pages(&self) -> Vec<Page> {
         let modules = &self.settings;
-        let mut pages = Vec::with_capacity(6);
+        let mut pages = Vec::with_capacity(8);
         if self.music().is_some() {
             pages.push(Page::Music);
         }
         pages.push(Page::Status);
-        if self.weather.is_some() {
-            pages.push(Page::Weather);
-        }
         if modules.module_prayer && self.prayer.is_some() {
             pages.push(Page::Prayer);
         }
-        if modules.module_calendar {
+        if modules.module_calendar || !modules.ical_url.is_empty() {
             pages.push(Page::Calendar);
         }
-        if !modules.ical_url.is_empty() {
-            pages.push(Page::Agenda);
+        if modules.module_calendar {
+            pages.push(Page::Pomodoro);
         }
         if modules.module_todo {
             pages.push(Page::Todo);
@@ -675,6 +676,7 @@ impl App {
     /// the caller runs the drag after letting go of the app state.
     fn on_move(&mut self, lparam: LPARAM) -> Option<PathBuf> {
         let (x, y) = self.logical_point(lparam);
+        self.update_nav(x, y);
         if let Some((index, px, py)) = self.press {
             if (x - px).abs() + (y - py).abs() > DRAG_THRESHOLD {
                 self.press = None;
@@ -720,6 +722,51 @@ impl App {
         let n = &self.notch;
         self.renderer
             .card_arrow_at(x, y, n.width.value, n.height.value)
+    }
+
+    /// The icon at (`x`, `y`) while the page icons show: an index into the
+    /// pages, or one past them for Settings.
+    fn nav_item_at(&self, x: f32, y: f32) -> Option<usize> {
+        if !self.nav_open {
+            return None;
+        }
+        self.renderer.nav_item_at(x, y, self.pages().len() + 1)
+    }
+
+    /// The page dots open into the icons under the mouse, and the card grows
+    /// to hold them until the mouse leaves that row.
+    fn update_nav(&mut self, x: f32, y: f32) {
+        let open = self.notch.card_visible.value >= 0.5
+            && !self.drag_over
+            && self
+                .renderer
+                .nav_zone_at(x, y, self.nav_open, self.pages().len());
+        if open != self.nav_open {
+            self.nav_open = open;
+            self.tick();
+        }
+    }
+
+    /// Goes to the page at `index`, or opens Settings just past the last one.
+    fn go_to(&mut self, index: usize) {
+        self.finish_editing(true, true);
+        let pages = self.pages();
+        let Some(&target) = pages.get(index) else {
+            settings::open(self.hwnd);
+            self.tick();
+            return;
+        };
+        let shown = self.shown_page();
+        let current = pages.iter().position(|page| *page == shown).unwrap_or(0);
+        if target != shown {
+            self.page_switch = Some(PageSwitch {
+                from: shown,
+                started: Instant::now(),
+                direction: if index > current { 1.0 } else { -1.0 },
+            });
+        }
+        self.page = target;
+        self.tick();
     }
 
     fn todo_hit(&self, x: f32, y: f32) -> Option<TodoHit> {
@@ -832,15 +879,19 @@ impl App {
             return false;
         }
         let width = self.notch.width.value;
-        if self.arrow_at(x, y).is_some() {
+        if self.arrow_at(x, y).is_some() || self.nav_item_at(x, y).is_some() {
             return true;
         }
         match self.shown_page() {
-            Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
+            Page::Music => self
+                .renderer
+                .music_control_at(x, y, width, self.lyric().is_some())
+                .is_some(),
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
+            Page::Pomodoro => self.renderer.pomodoro_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
             Page::Todo => self.todo_hit(x, y).is_some(),
-            Page::Status | Page::Prayer | Page::Weather | Page::Agenda => false,
+            Page::Status | Page::Prayer => false,
         }
     }
 
@@ -1121,6 +1172,7 @@ impl App {
 
     fn on_hover(&mut self, inside: bool) {
         let now = Instant::now();
+        self.nav_open &= inside;
         if inside {
             if self.hover_since.is_none() {
                 self.hover_since = Some(now);
@@ -1144,6 +1196,10 @@ impl App {
     fn on_click(&mut self, lparam: LPARAM) {
         let (x, y) = self.logical_point(lparam);
         if self.notch.card_visible.value >= 0.5 && !self.drag_over {
+            if let Some(index) = self.nav_item_at(x, y) {
+                self.go_to(index);
+                return;
+            }
             if let Some(direction) = self.arrow_at(x, y) {
                 self.step_page(direction > 0.0);
                 return;
@@ -1165,8 +1221,15 @@ impl App {
             match self.renderer.calendar_control_at(x, y, width) {
                 Some(CalendarControl::PreviousMonth) => self.month_offset -= 1,
                 Some(CalendarControl::NextMonth) => self.month_offset += 1,
-                Some(CalendarControl::StartPause) => self.pomodoro.toggle(Instant::now()),
-                Some(CalendarControl::Reset) => self.pomodoro.reset(),
+                None => return,
+            }
+            self.tick();
+            return;
+        }
+        if self.shown_page() == Page::Pomodoro {
+            match self.renderer.pomodoro_control_at(x, y, width) {
+                Some(PomodoroControl::StartPause) => self.pomodoro.toggle(Instant::now()),
+                Some(PomodoroControl::Reset) => self.pomodoro.reset(),
                 None => return,
             }
             self.tick();
@@ -1175,7 +1238,8 @@ impl App {
         if self.shown_page() != Page::Music {
             return;
         }
-        let Some(command) = self.renderer.music_control_at(x, y, width) else {
+        let lyrics = self.lyric().is_some();
+        let Some(command) = self.renderer.music_control_at(x, y, width, lyrics) else {
             return;
         };
         if let Some(media) = &self.media {
@@ -1221,6 +1285,7 @@ impl App {
     fn apply_settings(&mut self, announce: bool) {
         self.settings = Settings::load();
         dragdrop::set_accepting(self.settings.module_shelf);
+        self.notch.set_minimal(self.settings.notch_minimal);
         let place = self.settings.latitude.zip(self.settings.longitude);
         let weather_place = place.filter(|_| self.settings.weather);
         if weather_place.is_none() {
@@ -1299,7 +1364,7 @@ impl App {
     }
 
     /// The prayer page: the next prayer (tomorrow's Subuh after Isya), how
-    /// long until it, today's times, and the qibla.
+    /// long until it, today's times, and the sun's place among them.
     fn prayer_scene(&self) -> Option<PrayerScene> {
         let day = self.prayer.as_ref()?;
         let now = minutes_now();
@@ -1318,15 +1383,14 @@ impl App {
                 (0, tomorrow[0] + 24 * 60)
             }
         };
-        let qibla = prayer::qibla(day.settings.location);
         Some(PrayerScene {
             next_name: prayer::NAMES[next],
             next_time: prayer::format_time(time % (24 * 60)),
             wait: prayer::format_wait(time.saturating_sub(now)),
             times: day.times.map(prayer::format_time),
             next_today,
-            qibla,
-            direction: prayer::compass_point(qibla),
+            progress: prayer::wait_progress(&day.times, now, time),
+            sun: prayer::day_position(&day.times, now),
         })
     }
 
@@ -1472,7 +1536,8 @@ impl App {
                 .iter()
                 .position(|page| *page == self.shown_page())
                 .unwrap_or(0),
-            pages: self.pages().len(),
+            page_list: self.pages(),
+            nav_visible: n.nav_visible.value,
             calendar: {
                 let (year, month, day) = prayer::today();
                 let (shown_year, shown_month) =
@@ -1496,11 +1561,12 @@ impl App {
                 running: self.pomodoro.running(),
                 on_break: self.pomodoro.phase == Phase::Break,
                 session: self.pomodoro.session,
+                progress: self.pomodoro.progress(Instant::now()),
             }),
             strip: self.strip(),
             prayer_soon: soon.as_deref().unwrap_or(""),
             prayer: self.prayer_scene(),
-            forecast: self.weather.as_ref(),
+            minimal: self.settings.notch_minimal,
             place: &self.settings.city,
             shelf: ShelfScene {
                 items: self.shelf.items(),

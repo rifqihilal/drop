@@ -21,7 +21,7 @@ lirik tampil.
 - **Hari Ini:** cuaca, sholat berikutnya, dan baterai.
 - **Sedang Diputar:** kontrol musik, sampul album, dan lirik tersinkron dari [LRCLIB](https://lrclib.net).
 - **Prakiraan Cuaca:** enam jam ke depan dan tujuh hari, dari [Open-Meteo](https://open-meteo.com).
-- **Waktu Sholat:** jadwal Kemenag RI dan arah kiblat.
+- **Waktu Sholat:** jadwal Kemenag RI dengan posisi matahari.
 - **Kalender & Fokus:** kalender bulanan dan Pomodoro.
 - **Agenda Acara:** acara dari tautan kalender `.ics`, dengan pengingat 10 menit sebelumnya.
 - **Daftar Tugas:** tugas singkat yang diketik langsung di notch.

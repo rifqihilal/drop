@@ -177,30 +177,31 @@ pub fn next_day(year: u16, month: u16, day: u16) -> (u16, u16, u16) {
     }
 }
 
-/// Great-circle bearing to the Kaaba, in degrees clockwise from true north.
-pub fn qibla(location: Location) -> f64 {
-    const KAABA: (f64, f64) = (21.4225, 39.8262);
-    let delta = KAABA.1 - location.longitude;
-    let bearing = atan2(
-        sin(delta),
-        cos(location.latitude) * tan(KAABA.0) - sin(location.latitude) * cos(delta),
-    );
-    bearing.rem_euclid(360.0)
+/// Where `now` falls among the day's prayers: 0 at Subuh, 4 at Isya, and in
+/// between by the time passed from one prayer to the next.
+pub fn day_position(times: &Schedule, now: u32) -> f32 {
+    if now <= times[0] {
+        return 0.0;
+    }
+    for (index, pair) in times.windows(2).enumerate() {
+        if now < pair[1] {
+            let span = pair[1].saturating_sub(pair[0]).max(1);
+            return index as f32 + (now - pair[0]) as f32 / span as f32;
+        }
+    }
+    4.0
 }
 
-/// Compass point for a bearing, in Indonesian: "Barat Laut".
-pub fn compass_point(bearing: f64) -> &'static str {
-    const POINTS: [&str; 8] = [
-        "Utara",
-        "Timur Laut",
-        "Timur",
-        "Tenggara",
-        "Selatan",
-        "Barat Daya",
-        "Barat",
-        "Barat Laut",
-    ];
-    POINTS[((bearing.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8]
+/// How far `now` is from the last prayer to the next one, 0..1. `next` is in
+/// minutes after today's midnight, so tomorrow's Subuh is past 24 hours.
+pub fn wait_progress(times: &Schedule, now: u32, next: u32) -> f32 {
+    let last = times
+        .iter()
+        .rev()
+        .find(|&&time| time <= now)
+        .map_or(i64::from(times[4]) - 24 * 60, |&time| i64::from(time));
+    let span = (i64::from(next) - last).max(1);
+    ((i64::from(now) - last) as f32 / span as f32).clamp(0.0, 1.0)
 }
 
 /// "1 jam 12 mnt", "12 mnt", "< 1 mnt".
@@ -320,17 +321,22 @@ mod tests {
     }
 
     #[test]
-    fn qibla_from_indonesia_points_west_north_west() {
-        // Kemenag gives about 295° for Jakarta.
-        let jakarta = qibla(JAKARTA);
-        assert!((jakarta - 295.15).abs() < 0.5, "Jakarta qibla {jakarta}");
-        assert_eq!(compass_point(jakarta), "Barat Laut");
-        let aimas = qibla(Location {
-            latitude: -0.95698,
-            longitude: 131.33534,
-            elevation: 9.0,
-        });
-        assert!((285.0..300.0).contains(&aimas), "Aimas qibla {aimas}");
+    fn follows_the_day_between_prayers() {
+        let times = [240, 720, 900, 1080, 1140];
+        assert_eq!(day_position(&times, 100), 0.0);
+        assert_eq!(day_position(&times, 480), 0.5);
+        assert_eq!(day_position(&times, 1080), 3.0);
+        assert_eq!(day_position(&times, 1300), 4.0);
+    }
+
+    #[test]
+    fn measures_the_wait_from_the_last_prayer() {
+        let times = [240, 720, 900, 1080, 1140];
+        assert_eq!(wait_progress(&times, 480, 720), 0.5);
+        // After Isya, on the way to tomorrow's Subuh.
+        assert_eq!(wait_progress(&times, 1140, 240 + 24 * 60), 0.0);
+        // Before Subuh, the wait began at yesterday's Isya.
+        assert_eq!(wait_progress(&times, 105, 240), 0.75);
     }
 
     #[test]

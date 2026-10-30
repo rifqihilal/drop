@@ -2,10 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::todo;
-
 /// Notch size while the computer is in use (logical pixels).
 pub const COMPACT: (f32, f32) = (156.0, 28.0);
+/// Notch size in the minimal setting: a thin bar that leaves browser tabs free.
+pub const MINIMAL: (f32, f32) = (120.0, 6.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.
@@ -22,53 +22,16 @@ pub const CARD_SIDE: f32 = 30.0;
 /// Pages sit this far down, under the card's header row.
 pub const CARD_TOP: f32 = 22.0;
 
-/// A card whose page is `height` tall.
-const fn card(height: f32) -> (f32, f32) {
-    (CARD_WIDTH, CARD_TOP + height)
-}
-
-/// Notch size of the full music card.
-pub const MUSIC_CARD: (f32, f32) = card(112.0);
-/// The music card with two lines of lyrics under the controls.
-pub const MUSIC_LYRICS_CARD: (f32, f32) = card(166.0);
-/// Notch size of the status card: weather, the next prayer and battery.
-pub const STATUS_CARD: (f32, f32) = card(104.0);
-/// Notch size of the calendar and Pomodoro card.
-pub const CALENDAR_CARD: (f32, f32) = card(198.0);
-/// Notch size of the weather card.
-pub const WEATHER_CARD: (f32, f32) = card(196.0);
-/// Notch size of the prayer card.
-pub const PRAYER_CARD: (f32, f32) = card(166.0);
+/// Every open card is this size, so the arrows stay put between pages.
+pub const CARD: (f32, f32) = (CARD_WIDTH, CARD_TOP + 150.0);
+/// The open card grown downward to hold the page icons.
+pub const CARD_NAV: (f32, f32) = (CARD_WIDTH, CARD.1 + 40.0);
 /// Notch size while files are dragged over it.
 pub const DROP_ZONE: (f32, f32) = (320.0, 84.0);
-/// The shelf card holds two rows at most.
-pub const SHELF_CARD_MAX: (f32, f32) = card(226.0);
-
-/// Shelf card size for `count` files: one row of five per 82 px.
-pub fn shelf_card(count: usize) -> (f32, f32) {
-    let rows = count.div_ceil(5).clamp(1, 2) as f32;
-    card(62.0 + rows * 82.0)
-}
-/// The task card at its fullest.
-pub const TODO_CARD_MAX: (f32, f32) = card(62.0 + todo::CAPACITY as f32 * TODO_ROW);
 /// Height of one task on the task card.
 pub const TODO_ROW: f32 = 28.0;
-
-/// Task card size for `count` tasks; an empty list keeps one row for its hint.
-pub fn todo_card(count: usize) -> (f32, f32) {
-    let rows = count.clamp(1, todo::CAPACITY) as f32;
-    card(62.0 + rows * TODO_ROW)
-}
-/// Events listed on the agenda card at most.
-pub const AGENDA_ROWS: usize = 5;
-/// Top of the first event on the agenda page.
-pub const AGENDA_TOP: f32 = 12.0;
-
-/// Agenda card size for `count` events; none keeps one row for its hint.
-pub fn agenda_card(count: usize) -> (f32, f32) {
-    let rows = count.clamp(1, AGENDA_ROWS) as f32;
-    card(AGENDA_TOP + rows * TODO_ROW + 22.0)
-}
+/// Events listed beside the month at most.
+pub const AGENDA_ROWS: usize = 3;
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
 /// Notch size while a prayer is close: the clock with the name and wait.
@@ -298,29 +261,35 @@ pub struct Notch {
     pub music_visible: Spring,
     /// How visible the full music card is, 0..1.
     pub card_visible: Spring,
+    /// How far the page dots have turned into page icons, 0..1.
+    pub nav_visible: Spring,
     idle: bool,
     banner_active: bool,
     /// Size of the live strip (music or timer), if one shows.
     strip_size: Option<(f32, f32)>,
     /// Size of the open card (music or status), if one is open.
     card_size: Option<(f32, f32)>,
+    /// Size with nothing else to show.
+    resting: (f32, f32),
 }
 
 impl Notch {
     pub fn new(now: Instant, seed: u64) -> Self {
         Self {
-            width: Spring::new(COMPACT.0, 380.0, 30.0, 0.05),
-            height: Spring::new(COMPACT.1, 380.0, 30.0, 0.05),
+            width: Spring::new(COMPACT.0, 240.0, 30.0, 0.05),
+            height: Spring::new(COMPACT.1, 240.0, 30.0, 0.05),
             eyes_visible: Spring::new(0.0, 260.0, 32.0, 0.002),
             eyes: Eyes::new(now, seed),
             banner_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
             banner: None,
             music_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
             card_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
+            nav_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             idle: false,
             banner_active: false,
             strip_size: None,
             card_size: None,
+            resting: COMPACT,
         }
     }
 
@@ -424,6 +393,7 @@ impl Notch {
         moving |= self.banner_visible.step(dt);
         moving |= self.music_visible.step(dt);
         moving |= self.card_visible.step(dt);
+        moving |= self.nav_visible.step(dt);
         if let Some(Banner {
             content: Content::Level { level, .. },
             ..
@@ -452,7 +422,7 @@ impl Notch {
             (Some(shown), _, _) if banner => shown.size,
             (_, Some(size), _) | (_, None, Some(size)) => size,
             _ if eyes => IDLE,
-            _ => COMPACT,
+            _ => self.resting,
         };
         self.width.target = w;
         self.height.target = h;
@@ -461,6 +431,17 @@ impl Notch {
         self.card_visible.target = on(card.is_some());
         self.music_visible.target = on(strip.is_some());
         self.eyes_visible.target = on(eyes);
+    }
+
+    /// Rests as the thin bar, or as the usual notch with the clock.
+    pub fn set_minimal(&mut self, minimal: bool) {
+        self.resting = if minimal { MINIMAL } else { COMPACT };
+        self.retarget();
+    }
+
+    /// Turns the page dots into page icons, or back.
+    pub fn set_nav(&mut self, open: bool) {
+        self.nav_visible.target = if open { 1.0 } else { 0.0 };
     }
 
     /// Shows a live strip and/or opens a card, each of the given size.

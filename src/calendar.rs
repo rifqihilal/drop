@@ -118,6 +118,15 @@ impl Pomodoro {
         }
     }
 
+    /// How much of the current phase has gone, 0..1.
+    pub fn progress(&self, now: Instant) -> f32 {
+        let total = match self.phase {
+            Phase::Focus => FOCUS,
+            Phase::Break => BREAK,
+        };
+        1.0 - self.left(now).as_secs_f32() / total.as_secs_f32()
+    }
+
     pub fn toggle(&mut self, now: Instant) {
         match self.ends_at.take() {
             Some(end) => self.left = end.saturating_duration_since(now),
@@ -171,6 +180,16 @@ pub fn format_left(left: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_runs_from_empty_to_full() {
+        let mut pomodoro = Pomodoro::default();
+        let now = Instant::now();
+        assert_eq!(pomodoro.progress(now), 0.0);
+        pomodoro.toggle(now);
+        let halfway = pomodoro.progress(now + FOCUS / 2);
+        assert!((halfway - 0.5).abs() < 0.01, "{halfway}");
+    }
 
     #[test]
     fn knows_month_lengths_and_weekdays() {
