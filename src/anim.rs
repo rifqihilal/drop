@@ -17,6 +17,10 @@ pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
 pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
 /// Notch size of the status card: clock, weather and battery.
 pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
+/// Notch size of the calendar and Pomodoro card.
+pub const CALENDAR_CARD: (f32, f32) = (400.0, 198.0);
+/// Notch size while the Pomodoro timer runs.
+pub const TIMER_STRIP: (f32, f32) = (170.0, 30.0);
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -244,7 +248,8 @@ pub struct Notch {
     pub card_visible: Spring,
     idle: bool,
     banner_active: bool,
-    music_playing: bool,
+    /// Size of the live strip (music or timer), if one shows.
+    strip_size: Option<(f32, f32)>,
     /// Size of the open card (music or status), if one is open.
     card_size: Option<(f32, f32)>,
 }
@@ -262,7 +267,7 @@ impl Notch {
             card_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
             idle: false,
             banner_active: false,
-            music_playing: false,
+            strip_size: None,
             card_size: None,
         }
     }
@@ -385,16 +390,15 @@ impl Notch {
 
     /// Picks the shape and content for the current state. A banner wins over
     /// the eyes so a key press or notification while idle is still seen.
-    /// Order of precedence: banner, music card, playing strip, eyes, clock.
+    /// Order of precedence: banner, card, live strip, eyes, clock.
     fn retarget(&mut self) {
         let banner = self.banner_active;
         let card = self.card_size.filter(|_| !banner);
-        let strip = self.music_playing && !banner && card.is_none();
-        let eyes = self.idle && !banner && card.is_none() && !strip;
-        let (w, h) = match (&self.banner, card) {
-            (Some(shown), _) if banner => shown.size,
-            (_, Some(size)) => size,
-            _ if strip => MUSIC_STRIP,
+        let strip = self.strip_size.filter(|_| !banner && card.is_none());
+        let eyes = self.idle && !banner && card.is_none() && strip.is_none();
+        let (w, h) = match (&self.banner, card, strip) {
+            (Some(shown), _, _) if banner => shown.size,
+            (_, Some(size), _) | (_, None, Some(size)) => size,
             _ if eyes => IDLE,
             _ => COMPACT,
         };
@@ -403,14 +407,14 @@ impl Notch {
         let on = |visible: bool| if visible { 1.0 } else { 0.0 };
         self.banner_visible.target = on(banner);
         self.card_visible.target = on(card.is_some());
-        self.music_visible.target = on(strip);
+        self.music_visible.target = on(strip.is_some());
         self.eyes_visible.target = on(eyes);
     }
 
-    /// `playing` shows the music strip; `card` opens a card of that size.
-    pub fn set_music(&mut self, playing: bool, card: Option<(f32, f32)>) {
-        if (playing, card) != (self.music_playing, self.card_size) {
-            self.music_playing = playing;
+    /// Shows a live strip and/or opens a card, each of the given size.
+    pub fn set_live(&mut self, strip: Option<(f32, f32)>, card: Option<(f32, f32)>) {
+        if (strip, card) != (self.strip_size, self.card_size) {
+            self.strip_size = strip;
             self.card_size = card;
             self.retarget();
         }

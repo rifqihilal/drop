@@ -11,6 +11,7 @@
 mod anim;
 mod autostart;
 mod bluetooth;
+mod calendar;
 mod config;
 mod geo;
 mod keys;
@@ -56,11 +57,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST, WS_POPUP,
 };
 
-use anim::{LevelKind, Notch, Notice, MUSIC_CARD, STATUS_CARD};
+use anim::{
+    Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, MUSIC_CARD, MUSIC_STRIP,
+    STATUS_CARD, TIMER_STRIP,
+};
 use bluetooth::{Bluetooth, DeviceEvent};
+use calendar::{Phase, Pomodoro};
 use config::{PrayerSettings, Settings};
 use media::{Command, Media, Track};
-use render::{MusicScene, Page, Renderer, Scene, StatusScene, WeatherScene};
+use render::{
+    glyph, CalendarControl, CalendarScene, MusicScene, Page, Renderer, Scene, StatusScene,
+    TimerScene, WeatherScene,
+};
 use system::{Audio, PowerEvent};
 use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
@@ -140,6 +148,9 @@ struct App {
     card_until: Option<Instant>,
     bars: [f32; 4],
     bar_phase: f32,
+    pomodoro: Pomodoro,
+    /// Months away from the current one on the calendar page.
+    month_offset: i32,
     /// Which page the open card shows when there is music.
     page: Page,
     weather_watch: WeatherWatch,
@@ -250,6 +261,8 @@ fn main() -> Result<()> {
             card_until: None,
             bars: [0.0; 4],
             bar_phase: 0.0,
+            pomodoro: Pomodoro::default(),
+            month_offset: 0,
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
             weather: None,
@@ -327,13 +340,18 @@ impl App {
             self.update_prayer();
         }
 
+        if let Some(finished) = self.pomodoro.advance(now) {
+            self.on_phase_end(finished);
+        }
         self.update_music(now);
         let moving = self.notch.step(now, dt);
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
         let card_open = self.notch.card_visible.value > 0.01;
+        // A running timer counts down every second, in the strip or the card.
+        let timer_running = self.pomodoro.running();
 
-        if moving || clock_changed || bars_moving || card_open {
+        if moving || clock_changed || bars_moving || card_open || timer_running {
             self.draw();
         }
         let waiting =
@@ -384,36 +402,89 @@ impl App {
             .is_some_and(|since| now.duration_since(since) >= HOVER_DELAY);
         self.card_until = self.card_until.filter(|until| now < *until);
         let open = hovering || self.card_until.is_some();
-        if !open || self.track.is_none() {
-            // The next opening starts on the music page when there is music.
+        if !open {
+            // The next opening starts on the first page, this month.
             self.page = Page::Music;
+            self.month_offset = 0;
         }
         let card = open.then(|| match self.shown_page() {
             Page::Music => MUSIC_CARD,
             Page::Status => STATUS_CARD,
+            Page::Calendar => CALENDAR_CARD,
         });
+        // A running or paused timer takes the strip over from music.
         let playing = self.track.as_ref().is_some_and(|track| track.playing);
-        self.notch.set_music(playing, card);
+        let strip = if !self.pomodoro.idle() {
+            Some(TIMER_STRIP)
+        } else if playing {
+            Some(MUSIC_STRIP)
+        } else {
+            None
+        };
+        self.notch.set_live(strip, card);
     }
 
-    /// The music page needs something playing; otherwise the status page.
-    fn shown_page(&self) -> Page {
+    /// The card's pages, in wheel order; music only while there is some.
+    fn pages(&self) -> &'static [Page] {
         if self.track.is_some() {
+            &[Page::Music, Page::Status, Page::Calendar]
+        } else {
+            &[Page::Status, Page::Calendar]
+        }
+    }
+
+    fn shown_page(&self) -> Page {
+        let pages = self.pages();
+        if pages.contains(&self.page) {
             self.page
         } else {
-            Page::Status
+            pages[0]
         }
     }
 
-    /// The wheel flips between the music and status pages of an open card.
-    fn on_wheel(&mut self) {
-        if self.track.is_some() && self.notch.card_visible.target > 0.0 {
-            self.page = match self.page {
-                Page::Music => Page::Status,
-                Page::Status => Page::Music,
-            };
-            self.tick();
+    /// The wheel steps through the open card's pages, down for the next.
+    fn on_wheel(&mut self, wparam: WPARAM) {
+        if self.notch.card_visible.target == 0.0 {
+            return;
         }
+        let pages = self.pages();
+        let current = pages
+            .iter()
+            .position(|page| *page == self.shown_page())
+            .unwrap_or(0);
+        let down = ((wparam.0 >> 16) as i16) < 0;
+        let next = if down {
+            (current + 1) % pages.len()
+        } else {
+            (current + pages.len() - 1) % pages.len()
+        };
+        self.page = pages[next];
+        self.tick();
+    }
+
+    /// Announces the end of a Pomodoro phase.
+    fn on_phase_end(&mut self, finished: Phase) {
+        let notice = match finished {
+            Phase::Focus => Notice {
+                icon: glyph::TIMER,
+                accent: Accent::Green,
+                progress: 1.0,
+                title: "Waktunya istirahat".to_string(),
+                subtitle: format!("Sesi {} selesai · istirahat dimulai", self.pomodoro.session),
+                trailing: Trailing::Text(calendar::format_left(self.pomodoro.left(Instant::now()))),
+                dim: false,
+            },
+            Phase::Break => Notice {
+                icon: glyph::TIMER,
+                accent: Accent::Teal,
+                progress: 1.0,
+                title: "Istirahat selesai".to_string(),
+                subtitle: "Mulai sesi fokus berikutnya".to_string(),
+                trailing: Trailing::None,
+                dim: false,
+            },
+        };
+        self.notify_for(notice, PRAYER_NOTICE_DURATION);
     }
 
     fn on_weather(&mut self, weather: Weather) {
@@ -475,13 +546,28 @@ impl App {
     }
 
     fn on_click(&mut self, lparam: LPARAM) {
-        if self.notch.card_visible.value < 0.5 || self.shown_page() != Page::Music {
+        if self.notch.card_visible.value < 0.5 {
             return;
         }
         let scale = window_scale(self.hwnd);
         let x = (lparam.0 & 0xffff) as i16 as f32 / scale;
         let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale;
-        let Some(command) = self.renderer.music_control_at(x, y, self.notch.width.value) else {
+        let width = self.notch.width.value;
+        if self.shown_page() == Page::Calendar {
+            match self.renderer.calendar_control_at(x, y, width) {
+                Some(CalendarControl::PreviousMonth) => self.month_offset -= 1,
+                Some(CalendarControl::NextMonth) => self.month_offset += 1,
+                Some(CalendarControl::StartPause) => self.pomodoro.toggle(Instant::now()),
+                Some(CalendarControl::Reset) => self.pomodoro.reset(),
+                None => return,
+            }
+            self.tick();
+            return;
+        }
+        if self.shown_page() != Page::Music {
+            return;
+        }
+        let Some(command) = self.renderer.music_control_at(x, y, width) else {
             return;
         };
         if let Some(media) = &self.media {
@@ -713,7 +799,30 @@ impl App {
             music_visible: n.music_visible.value,
             card_visible: n.card_visible.value,
             page: self.shown_page(),
-            pages: if self.track.is_some() { 2 } else { 1 },
+            page_index: self
+                .pages()
+                .iter()
+                .position(|page| *page == self.shown_page())
+                .unwrap_or(0),
+            pages: self.pages().len(),
+            calendar: {
+                let (year, month, day) = prayer::today();
+                let (shown_year, shown_month) =
+                    calendar::shift(year as i32, month as u32, self.month_offset);
+                CalendarScene {
+                    year: shown_year,
+                    month: shown_month,
+                    today: (self.month_offset == 0).then_some(day as u32),
+                }
+            },
+            timer: Some(TimerScene {
+                label: self.pomodoro.label(),
+                left: calendar::format_left(self.pomodoro.left(Instant::now())),
+                running: self.pomodoro.running(),
+                on_break: self.pomodoro.phase == Phase::Break,
+                session: self.pomodoro.session,
+            }),
+            timer_strip: !self.pomodoro.idle(),
             status: StatusScene {
                 time: &self.clock,
                 date: &date,
@@ -787,7 +896,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
-            with_app(App::on_wheel);
+            with_app(|app| app.on_wheel(wparam));
             LRESULT(0)
         }
         weather::WEATHER_MSG => {

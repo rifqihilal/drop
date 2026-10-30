@@ -49,23 +49,32 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
-    Accent, Content, LevelKind, Notice, Trailing, IDLE, LEVEL, MUSIC_CARD, NOTICE_HEIGHT,
-    NOTICE_WIDTH, STATUS_CARD,
+    Accent, Content, LevelKind, Notice, Trailing, CALENDAR_CARD, IDLE, LEVEL, MUSIC_CARD,
+    NOTICE_HEIGHT, NOTICE_WIDTH, STATUS_CARD,
 };
+use crate::calendar;
 use crate::media::Command;
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
-    max(
-        max(max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1), MUSIC_CARD.0),
+    max_of(&[
+        IDLE.0,
+        LEVEL.0,
+        NOTICE_WIDTH.1,
+        MUSIC_CARD.0,
         STATUS_CARD.0,
-    ) + 2.0 * EAR,
-    max(
-        max(max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT), MUSIC_CARD.1),
+        CALENDAR_CARD.0,
+    ]) + 2.0 * EAR,
+    max_of(&[
+        IDLE.1,
+        LEVEL.1,
+        NOTICE_HEIGHT,
+        MUSIC_CARD.1,
         STATUS_CARD.1,
-    ),
+        CALENDAR_CARD.1,
+    ]),
 );
 
 /// Album art is decoded at most this many pixels square.
@@ -107,6 +116,35 @@ fn format_duration(seconds: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
+// Calendar card layout.
+const CELL: (f32, f32) = (28.0, 20.0);
+const GRID_TOP: f32 = 60.0;
+
+struct CalendarRects {
+    grid_left: f32,
+    previous_month: (f32, f32),
+    next_month: (f32, f32),
+    timer_left: f32,
+    start_pause: (f32, f32),
+    reset: (f32, f32),
+}
+
+impl CalendarRects {
+    fn new(x0: f32, _x1: f32) -> Self {
+        let grid_left = x0 + 20.0;
+        let grid_right = grid_left + 7.0 * CELL.0;
+        let timer_left = x0 + 250.0;
+        Self {
+            grid_left,
+            previous_month: (grid_right - 42.0, 24.0),
+            next_month: (grid_right - 12.0, 24.0),
+            timer_left,
+            start_pause: (timer_left + 18.0, 136.0),
+            reset: (timer_left + 66.0, 136.0),
+        }
+    }
+}
+
 // Notice card layout, left to right.
 const CARD_PAD_LEFT: f32 = 14.0;
 const RING: f32 = 38.0;
@@ -126,6 +164,16 @@ const fn max(a: f32, b: f32) -> f32 {
     }
 }
 
+const fn max_of(values: &[f32]) -> f32 {
+    let mut largest = values[0];
+    let mut i = 1;
+    while i < values.len() {
+        largest = max(largest, values[i]);
+        i += 1;
+    }
+    largest
+}
+
 /// Segoe Fluent Icons glyphs.
 pub mod glyph {
     pub const MUTE: &str = "\u{E74F}";
@@ -142,6 +190,10 @@ pub mod glyph {
     pub const PAUSE: &str = "\u{E769}";
     pub const PREVIOUS: &str = "\u{E892}";
     pub const NEXT: &str = "\u{E893}";
+    pub const CHEVRON_LEFT: &str = "\u{E76B}";
+    pub const CHEVRON_RIGHT: &str = "\u{E76C}";
+    pub const RESET: &str = "\u{E72C}";
+    pub const TIMER: &str = "\u{E916}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -185,7 +237,12 @@ pub struct Scene<'a> {
     pub card_visible: f32,
     /// Which page the open card shows, and how many it has.
     pub page: Page,
+    pub page_index: usize,
     pub pages: usize,
+    pub calendar: CalendarScene,
+    /// The Pomodoro timer; `timer_strip` puts it in the live strip.
+    pub timer: Option<TimerScene>,
+    pub timer_strip: bool,
     pub status: StatusScene<'a>,
 }
 
@@ -193,6 +250,32 @@ pub struct Scene<'a> {
 pub enum Page {
     Music,
     Status,
+    Calendar,
+}
+
+pub struct TimerScene {
+    pub label: &'static str,
+    /// "24:12"
+    pub left: String,
+    pub running: bool,
+    pub on_break: bool,
+    pub session: u32,
+}
+
+/// The month shown on the calendar page.
+pub struct CalendarScene {
+    pub year: i32,
+    pub month: u32,
+    /// Today's day number when the shown month is the current one.
+    pub today: Option<u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CalendarControl {
+    PreviousMonth,
+    NextMonth,
+    StartPause,
+    Reset,
 }
 
 pub struct StatusScene<'a> {
@@ -255,6 +338,8 @@ pub struct Renderer {
     small_left: IDWriteTextFormat,
     /// Large clock on the status card.
     big_clock: IDWriteTextFormat,
+    /// Small centered text: calendar days.
+    tiny: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
     symbols: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -378,6 +463,7 @@ impl Renderer {
             let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
             let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
+            let tiny = format(font, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
             symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
@@ -393,6 +479,7 @@ impl Renderer {
                 trailing_text,
                 small_left,
                 big_clock,
+                tiny,
                 symbols,
                 icons,
                 black,
@@ -600,15 +687,22 @@ impl Renderer {
         .map(|(_, command)| command)
     }
 
-    /// The playing strip and the open card (music or status page).
+    /// The live strip (timer or music) and the open card's page.
     unsafe fn draw_music(&self, scene: &Scene) {
         let cx = CANVAS.0 / 2.0;
         let (x0, x1) = (cx - scene.width / 2.0, cx + scene.width / 2.0);
         let notch = rect(x0, 0.0, x1, scene.height);
-        if let Some(music) = scene.music.as_ref().filter(|_| scene.music_visible > 0.01) {
+        if scene.music_visible > 0.01 {
+            let alpha = scene.music_visible.min(1.0);
             self.target
                 .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            self.draw_music_strip(music, x0, x1, scene.height, scene.music_visible.min(1.0));
+            match (&scene.timer, &scene.music) {
+                (Some(timer), _) if scene.timer_strip => {
+                    self.draw_timer_strip(timer, x0, x1, scene.height, alpha)
+                }
+                (_, Some(music)) => self.draw_music_strip(music, x0, x1, scene.height, alpha),
+                _ => {}
+            }
             self.target.PopAxisAlignedClip();
         }
         if scene.card_visible <= 0.01 {
@@ -617,20 +711,23 @@ impl Renderer {
         let alpha = scene.card_visible.min(1.0);
         self.target
             .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        match (scene.page, &scene.music) {
-            (Page::Music, Some(music)) => self.draw_music_card(music, scene.width, alpha),
+        match (scene.page, &scene.music, &scene.timer) {
+            (Page::Music, Some(music), _) => self.draw_music_card(music, scene.width, alpha),
+            (Page::Calendar, _, Some(timer)) => {
+                self.draw_calendar_card(&scene.calendar, timer, x0, x1, alpha)
+            }
             _ => self.draw_status_card(&scene.status, x0, x1, alpha),
         }
         if scene.pages > 1 {
-            // Page dots: which of the card's pages is showing.
-            let index = if scene.page == Page::Music { 0 } else { 1 };
+            // Page dots: which of the card's pages is showing, at its foot.
+            let y = scene.height - 8.0;
             for dot in 0..scene.pages {
                 let x = cx + (dot as f32 - (scene.pages - 1) as f32 / 2.0) * 10.0;
                 self.light
-                    .SetOpacity(if dot == index { 0.9 } else { 0.3 } * alpha);
+                    .SetOpacity(if dot == scene.page_index { 0.9 } else { 0.3 } * alpha);
                 self.target.FillEllipse(
                     &D2D1_ELLIPSE {
-                        point: pt(x, 104.0),
+                        point: pt(x, y),
                         radiusX: 2.5,
                         radiusY: 2.5,
                     },
@@ -639,6 +736,169 @@ impl Renderer {
             }
         }
         self.target.PopAxisAlignedClip();
+    }
+
+    /// A phase-coloured dot and the time left.
+    unsafe fn draw_timer_strip(&self, timer: &TimerScene, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let cy = h / 2.0;
+        let color = accent_color(if timer.on_break {
+            Accent::Teal
+        } else {
+            Accent::Green
+        });
+        self.accent.SetColor(&color);
+        self.accent
+            .SetOpacity(if timer.running { 1.0 } else { 0.45 } * alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(x0 + 20.0, cy),
+                radiusX: 4.0,
+                radiusY: 4.0,
+            },
+            &self.accent,
+        );
+        let text = format!("{} {}", timer.label, timer.left);
+        self.draw_text(
+            &text,
+            &self.text,
+            rect(x0 + 28.0, 0.0, x1 - 12.0, h),
+            0.95 * alpha,
+        );
+    }
+
+    /// Month grid on the left, Pomodoro on the right.
+    unsafe fn draw_calendar_card(
+        &self,
+        calendar: &CalendarScene,
+        timer: &TimerScene,
+        x0: f32,
+        x1: f32,
+        alpha: f32,
+    ) {
+        let layout = CalendarRects::new(x0, x1);
+        let heading = format!(
+            "{} {}",
+            calendar::MONTHS[calendar.month as usize - 1],
+            calendar.year
+        );
+        if let Some(text) = self.text_layout(&heading, &self.title_text, 150.0) {
+            self.draw_layout(&text.layout, layout.grid_left, 14.0, alpha);
+        }
+        self.light.SetOpacity(0.8 * alpha);
+        for ((cx, cy), icon) in [
+            (layout.previous_month, glyph::CHEVRON_LEFT),
+            (layout.next_month, glyph::CHEVRON_RIGHT),
+        ] {
+            self.draw_glyph(icon, cx, cy, &self.light);
+        }
+
+        let cell = |column: u32, row: f32| {
+            let left = layout.grid_left + column as f32 * CELL.0;
+            rect(left, row, left + CELL.0, row + CELL.1)
+        };
+        for (column, name) in calendar::WEEKDAYS.iter().enumerate() {
+            self.draw_text(name, &self.tiny, cell(column as u32, 40.0), 0.45 * alpha);
+        }
+        let first = calendar::weekday(calendar.year, calendar.month, 1);
+        let days = calendar::days_in_month(calendar.year, calendar.month);
+        for day in 1..=days {
+            let index = first + day - 1;
+            let (column, row) = (index % 7, index / 7);
+            let bounds = cell(column, GRID_TOP + row as f32 * CELL.1);
+            let today = calendar.today == Some(day);
+            if today {
+                self.accent.SetColor(&accent_color(Accent::Teal));
+                self.accent.SetOpacity(alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(
+                            (bounds.left + bounds.right) / 2.0,
+                            (bounds.top + bounds.bottom) / 2.0,
+                        ),
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                );
+            }
+            let number = day.to_string();
+            if today {
+                self.black.SetOpacity(alpha);
+                let wide: Vec<u16> = number.encode_utf16().collect();
+                self.target.DrawText(
+                    &wide,
+                    &self.tiny,
+                    &bounds,
+                    &self.black,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                self.black.SetOpacity(1.0);
+            } else if column == 6 {
+                // Sundays in red, as on Indonesian calendars.
+                self.accent.SetColor(&color(1.0, 0.45, 0.45, 1.0));
+                self.accent.SetOpacity(0.9 * alpha);
+                let wide: Vec<u16> = number.encode_utf16().collect();
+                self.target.DrawText(
+                    &wide,
+                    &self.tiny,
+                    &bounds,
+                    &self.accent,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            } else {
+                self.draw_text(&number, &self.tiny, bounds, 0.9 * alpha);
+            }
+        }
+
+        // Pomodoro.
+        let left = layout.timer_left;
+        if let Some(text) = self.text_layout("Pomodoro", &self.subtitle_text, 140.0) {
+            self.draw_layout(&text.layout, left, 18.0, 0.55 * alpha);
+        }
+        if let Some(text) = self.text_layout(&timer.left, &self.big_clock, 140.0) {
+            self.draw_layout(&text.layout, left, 38.0, alpha);
+        }
+        let caption = format!("{} · sesi {}", timer.label, timer.session);
+        if let Some(text) = self.text_layout(&caption, &self.subtitle_text, 140.0) {
+            self.draw_layout(&text.layout, left, 80.0, 0.6 * alpha);
+        }
+        let (px, py) = layout.start_pause;
+        self.light.SetOpacity(alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(px, py),
+                radiusX: 17.0,
+                radiusY: 17.0,
+            },
+            &self.light,
+        );
+        self.black.SetOpacity(alpha);
+        let icon = if timer.running {
+            glyph::PAUSE
+        } else {
+            glyph::PLAY
+        };
+        self.draw_glyph(icon, px, py, &self.black);
+        self.black.SetOpacity(1.0);
+        self.light.SetOpacity(0.85 * alpha);
+        self.draw_glyph(glyph::RESET, layout.reset.0, layout.reset.1, &self.light);
+    }
+
+    /// Which calendar or timer control sits at (`x`, `y`) on the open card.
+    pub fn calendar_control_at(&self, x: f32, y: f32, width: f32) -> Option<CalendarControl> {
+        let cx = CANVAS.0 / 2.0;
+        let layout = CalendarRects::new(cx - width / 2.0, cx + width / 2.0);
+        [
+            (layout.previous_month, CalendarControl::PreviousMonth),
+            (layout.next_month, CalendarControl::NextMonth),
+            (layout.start_pause, CalendarControl::StartPause),
+            (layout.reset, CalendarControl::Reset),
+        ]
+        .into_iter()
+        .find(|((cx, cy), _)| (x - cx).powi(2) + (y - cy).powi(2) <= HIT_RADIUS.powi(2))
+        .map(|(_, control)| control)
     }
 
     /// Clock and date, weather, and battery, left to right.
