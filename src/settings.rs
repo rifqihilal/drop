@@ -58,7 +58,7 @@ pub const SAVED_MSG: u32 = WM_APP + 6;
 /// Place search finished. LPARAM: `Box<Result<Vec<Place>, String>>`.
 const SEARCH_DONE_MSG: u32 = WM_APP + 7;
 
-const CLIENT: (f32, f32) = (760.0, 556.0);
+const CLIENT: (f32, f32) = (760.0, 690.0);
 
 // Child control IDs.
 const ID_SEARCH: usize = 101;
@@ -95,19 +95,29 @@ const RIGHT: (f32, f32) = (456.0, 736.0);
 const TOGGLE_TOP: f32 = 90.0;
 const ROW: f32 = 40.0;
 const GENERAL_TOP: f32 = 324.0;
-const IDLE_FIELD: Rect = Rect::new(672.0, 407.0, 736.0, 441.0);
-const CANCEL_BUTTON: Rect = Rect::new(526.0, 506.0, 626.0, 540.0);
-const SAVE_BUTTON: Rect = Rect::new(636.0, 506.0, 736.0, 540.0);
+const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
+const CANCEL_BUTTON: Rect = Rect::new(526.0, 640.0, 626.0, 674.0);
+const SAVE_BUTTON: Rect = Rect::new(636.0, 640.0, 736.0, 674.0);
 
-const TOGGLES: [&str; 7] = [
+/// Switches: five notifications, start with Windows, then six modules.
+const TOGGLES: [&str; 12] = [
     "Wi-Fi tersambung dan terputus",
     "Perangkat Bluetooth",
     "Baterai lemah",
     "Pengingat sholat",
     "Bunyi notifikasi",
     "Jalankan saat Windows menyala",
-    "Tampilkan cuaca",
+    "Cuaca",
+    "Musik",
+    "Kalender & Pomodoro",
+    "Shelf",
+    "Halaman sholat",
+    "Mata saat idle",
 ];
+/// First switch of the modules grid.
+const FIRST_MODULE: usize = 6;
+/// Top of the modules grid, two switches per row under the prayer preview.
+const MODULES_TOP: f32 = 494.0;
 
 // Windows 11 dark palette, as 0xRRGGBB.
 const BACKGROUND: u32 = 0x202020;
@@ -149,10 +159,16 @@ impl Rect {
 
 /// Row `index` of the switches column (notifications, then general).
 fn toggle_row(index: usize) -> Rect {
+    if index >= FIRST_MODULE {
+        let (column, row) = ((index - FIRST_MODULE) % 2, (index - FIRST_MODULE) / 2);
+        let left = 24.0 + column as f32 * 208.0;
+        let top = MODULES_TOP + row as f32 * ROW;
+        return Rect::new(left, top, left + 192.0, top + ROW);
+    }
     let top = if index < 5 {
         TOGGLE_TOP + index as f32 * ROW
     } else {
-        GENERAL_TOP + (index - 5) as f32 * ROW
+        GENERAL_TOP
     };
     Rect::new(RIGHT.0, top, RIGHT.1, top + ROW)
 }
@@ -184,7 +200,7 @@ struct Window {
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 7],
+    toggles: [bool; 12],
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -387,6 +403,11 @@ impl Window {
                 settings.sound,
                 autostart::is_enabled(),
                 settings.weather,
+                settings.module_music,
+                settings.module_calendar,
+                settings.module_shelf,
+                settings.module_prayer,
+                settings.module_eyes,
             ],
             status: "Cari nama kota, kabupaten atau desa".to_string(),
             status_is_error: false,
@@ -599,6 +620,11 @@ impl Window {
             sound: self.toggles[4],
             idle_minutes: idle,
             weather: self.toggles[6],
+            module_music: self.toggles[7],
+            module_calendar: self.toggles[8],
+            module_shelf: self.toggles[9],
+            module_prayer: self.toggles[10],
+            module_eyes: self.toggles[11],
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);
@@ -697,6 +723,13 @@ impl Window {
             );
         }
         self.preview_card();
+        self.text_at(
+            "Modul",
+            &f.section,
+            Rect::new(24.0, MODULES_TOP - 30.0, 424.0, MODULES_TOP - 6.0),
+            0xffffff,
+            0.7,
+        );
         self.results_dropdown();
 
         // Switches column.
@@ -741,7 +774,7 @@ impl Window {
 
         // Footer.
         self.brush.SetColor(&rgb(BORDER, 1.0));
-        t.FillRectangle(&Rect::new(0.0, 490.0, CLIENT.0, 491.0).d2d(), &self.brush);
+        t.FillRectangle(&Rect::new(0.0, 624.0, CLIENT.0, 625.0).d2d(), &self.brush);
         self.button("Batal", CANCEL_BUTTON, false);
         self.button("Simpan", SAVE_BUTTON, true);
 

@@ -26,6 +26,12 @@ pub struct Settings {
     pub idle_minutes: u32,
     /// Fetch the weather for the prayer location.
     pub weather: bool,
+    /// Modules: each adds a page (and, for some, the live strip).
+    pub module_music: bool,
+    pub module_calendar: bool,
+    pub module_shelf: bool,
+    pub module_prayer: bool,
+    pub module_eyes: bool,
 }
 
 impl Default for Settings {
@@ -43,6 +49,11 @@ impl Default for Settings {
             sound: true,
             idle_minutes: 2,
             weather: true,
+            module_music: true,
+            module_calendar: true,
+            module_shelf: true,
+            module_prayer: true,
+            module_eyes: true,
         }
     }
 }
@@ -111,8 +122,15 @@ impl Settings {
              [umum]\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
              mata_setelah_menit = {}\n\
-             ; Ambil cuaca untuk lokasi di atas dari Open-Meteo.\n\
-             cuaca = {}\n",
+             \n\
+             [modul]\n\
+             ; Cuaca diambil dari Open-Meteo untuk lokasi di atas.\n\
+             cuaca = {}\n\
+             musik = {}\n\
+             kalender = {}\n\
+             shelf = {}\n\
+             halaman_sholat = {}\n\
+             mata = {}\n",
             self.city,
             number(self.latitude),
             number(self.longitude),
@@ -125,6 +143,11 @@ impl Settings {
             flag(self.sound),
             self.idle_minutes,
             flag(self.weather),
+            flag(self.module_music),
+            flag(self.module_calendar),
+            flag(self.module_shelf),
+            flag(self.module_prayer),
+            flag(self.module_eyes),
         )
     }
 }
@@ -192,6 +215,11 @@ fn parse(text: &str) -> Settings {
                 s.idle_minutes = number().map_or(2, |v| v.clamp(1.0, 120.0) as u32)
             }
             "cuaca" => s.weather = flag(true),
+            "musik" => s.module_music = flag(true),
+            "kalender" => s.module_calendar = flag(true),
+            "shelf" => s.module_shelf = flag(true),
+            "halaman_sholat" => s.module_prayer = flag(true),
+            "mata" => s.module_eyes = flag(true),
             _ => {}
         }
     }
@@ -224,6 +252,11 @@ mod tests {
             sound: false,
             idle_minutes: 5,
             weather: false,
+            module_music: false,
+            module_calendar: true,
+            module_shelf: false,
+            module_prayer: true,
+            module_eyes: false,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
     }

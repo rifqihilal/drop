@@ -29,6 +29,18 @@ pub const DROP_MSG: u32 = WM_APP + 11;
 /// Set while a shelf file is being dragged out, so the notch does not offer
 /// to take it back.
 static DRAGGING_OUT: AtomicBool = AtomicBool::new(false);
+/// Cleared while the shelf module is switched off.
+static ACCEPTING: AtomicBool = AtomicBool::new(true);
+
+/// Whether files dragged onto the notch are taken (the shelf is on).
+pub fn set_accepting(on: bool) {
+    ACCEPTING.store(on, Ordering::Relaxed);
+}
+
+/// Files may be dropped: the shelf is on and not dragging one of its own.
+fn taking() -> bool {
+    ACCEPTING.load(Ordering::Relaxed) && !DRAGGING_OUT.load(Ordering::Relaxed)
+}
 
 #[implement(IDropTarget)]
 struct DropTarget {
@@ -56,7 +68,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        let files = !DRAGGING_OUT.load(Ordering::Relaxed)
+        let files = taking()
             && data
                 .as_ref()
                 .is_some_and(|data| unsafe { data.QueryGetData(&hdrop_format()) } == S_OK);
@@ -80,10 +92,10 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         unsafe {
-            *effect = if DRAGGING_OUT.load(Ordering::Relaxed) {
-                DROPEFFECT_NONE
-            } else {
+            *effect = if taking() {
                 choose_effect(*effect)
+            } else {
+                DROPEFFECT_NONE
             };
         }
         Ok(())
@@ -102,7 +114,11 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         self.post(DRAG_MSG, 0, 0);
-        let paths = data.as_ref().map(read_paths).unwrap_or_default();
+        let paths = if taking() {
+            data.as_ref().map(read_paths).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         unsafe {
             *effect = if paths.is_empty() {
                 DROPEFFECT_NONE

@@ -369,7 +369,8 @@ impl App {
         let dt = (now - self.last_tick).as_secs_f32().min(0.05);
         self.last_tick = now;
 
-        self.notch.set_idle(idle_ms() >= self.idle_after_ms, now);
+        let idle = self.settings.module_eyes && idle_ms() >= self.idle_after_ms;
+        self.notch.set_idle(idle, now);
         if self
             .wifi_lost
             .as_ref()
@@ -457,7 +458,11 @@ impl App {
         };
         // A new song opens the card for a moment; the song already playing
         // when Drop starts does not.
-        if new_song && self.tracks_seen && track.as_ref().is_some_and(|t| t.playing) {
+        if new_song
+            && self.tracks_seen
+            && self.settings.module_music
+            && track.as_ref().is_some_and(|t| t.playing)
+        {
             self.card_until = Some(now + SONG_CARD);
             self.page = Page::Music;
         }
@@ -501,11 +506,12 @@ impl App {
     /// What the closed notch shows beside the clock: a running or paused
     /// timer first, then music that is playing, then a prayer close at hand.
     fn strip(&self) -> Strip {
-        if !self.pomodoro.idle() {
+        let modules = &self.settings;
+        if modules.module_calendar && !self.pomodoro.idle() {
             Strip::Timer
-        } else if self.track.as_ref().is_some_and(|track| track.playing) {
+        } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
-        } else if self.prayer_soon().is_some() {
+        } else if modules.module_prayer && self.prayer_soon().is_some() {
             Strip::Prayer
         } else {
             Strip::None
@@ -522,23 +528,30 @@ impl App {
             .then(|| format!("{} {}", prayer::NAMES[next], prayer::format_wait(wait)))
     }
 
-    /// The card's pages, in wheel order; music only while there is some.
-    /// The card's pages, in wheel order; music and shelf only when they have
-    /// something to show.
+    /// The track playing, unless the music module is off.
+    fn music(&self) -> Option<&Track> {
+        self.track.as_ref().filter(|_| self.settings.module_music)
+    }
+
+    /// The card's pages, in wheel order: those whose module is on, and of
+    /// those, music and shelf only when they have something to show.
     fn pages(&self) -> Vec<Page> {
-        let mut pages = Vec::with_capacity(4);
-        if self.track.is_some() {
+        let modules = &self.settings;
+        let mut pages = Vec::with_capacity(6);
+        if self.music().is_some() {
             pages.push(Page::Music);
         }
         pages.push(Page::Status);
         if self.weather.is_some() {
             pages.push(Page::Weather);
         }
-        if self.prayer.is_some() {
+        if modules.module_prayer && self.prayer.is_some() {
             pages.push(Page::Prayer);
         }
-        pages.push(Page::Calendar);
-        if !self.shelf.is_empty() {
+        if modules.module_calendar {
+            pages.push(Page::Calendar);
+        }
+        if modules.module_shelf && !self.shelf.is_empty() {
             pages.push(Page::Shelf);
         }
         pages
@@ -882,6 +895,7 @@ impl App {
     /// a new prayer location with a notice.
     fn apply_settings(&mut self, announce: bool) {
         self.settings = Settings::load();
+        dragdrop::set_accepting(self.settings.module_shelf);
         let place = self.settings.latitude.zip(self.settings.longitude);
         let weather_place = place.filter(|_| self.settings.weather);
         if weather_place.is_none() {
