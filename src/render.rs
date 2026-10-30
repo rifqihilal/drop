@@ -5,8 +5,9 @@
 //! what makes a webview-based notch heavy.
 
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 
-use windows::core::{w, Result};
+use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
@@ -16,11 +17,12 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
     ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE,
-    D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_SOLID,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_ARC_SIZE_SMALL, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT,
+    D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
@@ -35,25 +37,27 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, AC_SRC_ALPHA,
     AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
-    HGDIOBJ,
+    HGDIOBJ, HPALETTE,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
     WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
-    WICDecodeMetadataCacheOnLoad, WICRect,
+    WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnLoad, WICRect,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-use windows::Win32::UI::Shell::SHCreateMemStream;
+use windows::Win32::UI::Shell::{
+    IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateMemStream, SIIGBF_RESIZETOFIT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
-    Accent, Content, LevelKind, Notice, Trailing, CALENDAR_CARD, IDLE, LEVEL, MUSIC_CARD,
-    NOTICE_HEIGHT, NOTICE_WIDTH, STATUS_CARD,
+    Accent, Content, LevelKind, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, IDLE, LEVEL,
+    MUSIC_CARD, NOTICE_HEIGHT, NOTICE_WIDTH, SHELF_CARD_MAX, STATUS_CARD,
 };
-use crate::calendar;
 use crate::media::Command;
+use crate::{calendar, shelf};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
@@ -66,6 +70,8 @@ pub const CANVAS: (f32, f32) = (
         MUSIC_CARD.0,
         STATUS_CARD.0,
         CALENDAR_CARD.0,
+        DROP_ZONE.0,
+        SHELF_CARD_MAX.0,
     ]) + 2.0 * EAR,
     max_of(&[
         IDLE.1,
@@ -74,6 +80,8 @@ pub const CANVAS: (f32, f32) = (
         MUSIC_CARD.1,
         STATUS_CARD.1,
         CALENDAR_CARD.1,
+        DROP_ZONE.1,
+        SHELF_CARD_MAX.1,
     ]),
 );
 
@@ -114,6 +122,40 @@ impl CardRects {
 fn format_duration(seconds: f64) -> String {
     let total = seconds.max(0.0).round() as u64;
     format!("{}:{:02}", total / 60, total % 60)
+}
+
+/// Shelf thumbnails are made at most this many pixels square.
+const THUMB_PIXELS: u32 = 96;
+
+// Shelf card layout: five 64 px tiles per row.
+const TILE: (f32, f32) = (64.0, 76.0);
+const TILE_GAP: f32 = 11.0;
+
+struct ShelfRects {
+    left: f32,
+    clear: D2D_RECT_F,
+}
+
+impl ShelfRects {
+    fn new(x0: f32, x1: f32) -> Self {
+        Self {
+            left: x0 + 18.0,
+            clear: rect(x1 - 112.0, 14.0, x1 - 18.0, 36.0),
+        }
+    }
+
+    fn tile(&self, index: usize) -> D2D_RECT_F {
+        let (column, row) = ((index % 5) as f32, (index / 5) as f32);
+        let left = self.left + column * (TILE.0 + TILE_GAP);
+        let top = 46.0 + row * (TILE.1 + 6.0);
+        rect(left, top, left + TILE.0, top + TILE.1)
+    }
+
+    /// Center of the remove button on a tile.
+    fn remove(&self, index: usize) -> (f32, f32) {
+        let tile = self.tile(index);
+        (tile.right - 6.0, tile.top + 6.0)
+    }
 }
 
 // Calendar card layout.
@@ -194,6 +236,9 @@ pub mod glyph {
     pub const CHEVRON_RIGHT: &str = "\u{E76C}";
     pub const RESET: &str = "\u{E72C}";
     pub const TIMER: &str = "\u{E916}";
+    pub const DOWNLOAD: &str = "\u{E896}";
+    pub const CLOSE: &str = "\u{E711}";
+    pub const FILE: &str = "\u{E8A5}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -243,6 +288,9 @@ pub struct Scene<'a> {
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
     pub timer_strip: bool,
+    pub shelf: ShelfScene<'a>,
+    /// Files are being dragged over the notch.
+    pub drop_zone: bool,
     pub status: StatusScene<'a>,
 }
 
@@ -251,6 +299,20 @@ pub enum Page {
     Music,
     Status,
     Calendar,
+    Shelf,
+}
+
+pub struct ShelfScene<'a> {
+    pub items: &'a [PathBuf],
+    /// The tile under the mouse.
+    pub hover: Option<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ShelfHit {
+    Tile(usize),
+    Remove(usize),
+    ClearAll,
 }
 
 pub struct TimerScene {
@@ -340,6 +402,10 @@ pub struct Renderer {
     big_clock: IDWriteTextFormat,
     /// Small centered text: calendar days.
     tiny: IDWriteTextFormat,
+    /// Centered single-line file names that end in an ellipsis.
+    tile_text: IDWriteTextFormat,
+    /// Small icon glyph for the remove buttons.
+    close_glyph: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
     symbols: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -350,6 +416,10 @@ pub struct Renderer {
     round_caps: ID2D1StrokeStyle,
     /// Album art of the current track, decoded once per song.
     art: Option<ID2D1Bitmap>,
+    /// Shelf thumbnails, in shelf order.
+    thumbs: Vec<(PathBuf, Option<ID2D1Bitmap>)>,
+    /// Dashed outline of the drop zone.
+    dashes: ID2D1StrokeStyle,
     dc: HDC,
     bitmap: HBITMAP,
     previous: HGDIOBJ,
@@ -409,6 +479,18 @@ impl Renderer {
             let black = target.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 1.0), None)?;
             let light = target.CreateSolidColorBrush(&EYE_COLOR, None)?;
             let accent = target.CreateSolidColorBrush(&accent_color(Accent::Blue), None)?;
+            let dashes = factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_DASH,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
             let round_caps = factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -464,6 +546,10 @@ impl Renderer {
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
             let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
             let tiny = format(font, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
+            let tile_text = line(DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
+            tile_text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            tile_text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
             symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
@@ -480,6 +566,8 @@ impl Renderer {
                 small_left,
                 big_clock,
                 tiny,
+                tile_text,
+                close_glyph,
                 symbols,
                 icons,
                 black,
@@ -487,6 +575,8 @@ impl Renderer {
                 accent,
                 round_caps,
                 art: None,
+                thumbs: Vec::new(),
+                dashes,
                 dc,
                 bitmap,
                 previous,
@@ -712,13 +802,15 @@ impl Renderer {
         self.target
             .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         match (scene.page, &scene.music, &scene.timer) {
+            _ if scene.drop_zone => self.draw_drop_zone(x0, x1, scene.height, alpha),
+            (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
             (Page::Music, Some(music), _) => self.draw_music_card(music, scene.width, alpha),
             (Page::Calendar, _, Some(timer)) => {
                 self.draw_calendar_card(&scene.calendar, timer, x0, x1, alpha)
             }
             _ => self.draw_status_card(&scene.status, x0, x1, alpha),
         }
-        if scene.pages > 1 {
+        if scene.pages > 1 && !scene.drop_zone {
             // Page dots: which of the card's pages is showing, at its foot.
             let y = scene.height - 8.0;
             for dot in 0..scene.pages {
@@ -884,6 +976,201 @@ impl Renderer {
         self.black.SetOpacity(1.0);
         self.light.SetOpacity(0.85 * alpha);
         self.draw_glyph(glyph::RESET, layout.reset.0, layout.reset.1, &self.light);
+    }
+
+    /// Keeps a thumbnail for each shelf file, making new ones as files arrive.
+    pub fn sync_thumbnails(&mut self, paths: &[PathBuf]) {
+        let mut thumbs = Vec::with_capacity(paths.len());
+        for path in paths {
+            let existing = self
+                .thumbs
+                .iter()
+                .position(|(known, _)| known == path)
+                .map(|index| self.thumbs.swap_remove(index));
+            thumbs.push(existing.unwrap_or_else(|| {
+                let bitmap = unsafe { self.thumbnail(path).ok() };
+                (path.clone(), bitmap)
+            }));
+        }
+        self.thumbs = thumbs;
+    }
+
+    /// The shell's own preview: a picture for images and videos, the file
+    /// type icon for everything else.
+    unsafe fn thumbnail(&self, path: &Path) -> Result<ID2D1Bitmap> {
+        let factory: IShellItemImageFactory =
+            SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
+        let side = THUMB_PIXELS as i32;
+        let bitmap = factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT)?;
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let source = wic.CreateBitmapFromHBITMAP(
+            bitmap,
+            HPALETTE::default(),
+            WICBitmapUsePremultipliedAlpha,
+        );
+        let _ = DeleteObject(bitmap.into());
+        let converter = wic.CreateFormatConverter()?;
+        converter.Initialize(
+            &source?,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeMedianCut,
+        )?;
+        self.target.CreateBitmapFromWicBitmap(&converter, None)
+    }
+
+    /// Dashed outline with an invitation to drop.
+    unsafe fn draw_drop_zone(&self, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let inset = rect(x0 + 10.0, 8.0, x1 - 10.0, h - 10.0);
+        self.light.SetOpacity(0.45 * alpha);
+        self.target.DrawRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: inset,
+                radiusX: 14.0,
+                radiusY: 14.0,
+            },
+            &self.light,
+            1.5,
+            &self.dashes,
+        );
+        let cy = (inset.top + inset.bottom) / 2.0;
+        self.light.SetOpacity(alpha);
+        self.draw_glyph(glyph::DOWNLOAD, x0 + 42.0, cy, &self.light);
+        if let Some(title) = self.text_layout("Lepaskan untuk menyimpan", &self.title_text, 230.0) {
+            self.draw_layout(&title.layout, x0 + 66.0, cy - 19.0, alpha);
+        }
+        if let Some(note) =
+            self.text_layout("Berkas tetap di tempat aslinya", &self.subtitle_text, 230.0)
+        {
+            self.draw_layout(&note.layout, x0 + 66.0, cy + 1.0, 0.55 * alpha);
+        }
+    }
+
+    /// File tiles with their names, a remove button on the one under the
+    /// mouse, and "Hapus semua".
+    unsafe fn draw_shelf_card(&self, shelf: &ShelfScene, x0: f32, x1: f32, alpha: f32) {
+        let layout = ShelfRects::new(x0, x1);
+        let heading = format!("Shelf · {} berkas", shelf.items.len());
+        if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
+            self.draw_layout(&text.layout, x0 + 20.0, 14.0, alpha);
+        }
+        self.draw_text("Hapus semua", &self.tiny, layout.clear, 0.6 * alpha);
+
+        for (index, path) in shelf.items.iter().enumerate() {
+            let tile = layout.tile(index);
+            if shelf.hover == Some(index) {
+                self.light.SetOpacity(0.08 * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: tile,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.light,
+                );
+            }
+            let thumb = rect(
+                tile.left + 10.0,
+                tile.top + 4.0,
+                tile.left + 54.0,
+                tile.top + 48.0,
+            );
+            let bitmap = self
+                .thumbs
+                .iter()
+                .find(|(known, _)| known == path)
+                .and_then(|(_, bitmap)| bitmap.as_ref());
+            match bitmap {
+                Some(bitmap) => {
+                    // Fit inside the square, keeping the picture's shape.
+                    let size = bitmap.GetSize();
+                    let fit = (44.0 / size.width).min(44.0 / size.height);
+                    let (w, h) = (size.width * fit, size.height * fit);
+                    let cx = (thumb.left + thumb.right) / 2.0;
+                    let cy = (thumb.top + thumb.bottom) / 2.0;
+                    self.target.DrawBitmap(
+                        bitmap,
+                        Some(&rect(
+                            cx - w / 2.0,
+                            cy - h / 2.0,
+                            cx + w / 2.0,
+                            cy + h / 2.0,
+                        )),
+                        alpha,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                        None,
+                    );
+                }
+                None => {
+                    self.light.SetOpacity(0.7 * alpha);
+                    let cx = (thumb.left + thumb.right) / 2.0;
+                    self.draw_glyph(
+                        glyph::FILE,
+                        cx,
+                        (thumb.top + thumb.bottom) / 2.0,
+                        &self.light,
+                    );
+                }
+            }
+            let name = rect(
+                tile.left - 2.0,
+                tile.top + 52.0,
+                tile.right + 2.0,
+                tile.top + 70.0,
+            );
+            self.draw_text(
+                &shelf::display_name(path),
+                &self.tile_text,
+                name,
+                0.85 * alpha,
+            );
+
+            if shelf.hover == Some(index) {
+                let (cx, cy) = layout.remove(index);
+                self.light.SetOpacity(0.9 * alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(cx, cy),
+                        radiusX: 8.0,
+                        radiusY: 8.0,
+                    },
+                    &self.light,
+                );
+                self.black.SetOpacity(alpha);
+                let wide: Vec<u16> = glyph::CLOSE.encode_utf16().collect();
+                self.target.DrawText(
+                    &wide,
+                    &self.close_glyph,
+                    &rect(cx - 8.0, cy - 8.0, cx + 8.0, cy + 8.0),
+                    &self.black,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                self.black.SetOpacity(1.0);
+            }
+        }
+    }
+
+    /// What sits at (`x`, `y`) on the shelf card holding `count` files.
+    pub fn shelf_hit(&self, x: f32, y: f32, width: f32, count: usize) -> Option<ShelfHit> {
+        let cx = CANVAS.0 / 2.0;
+        let layout = ShelfRects::new(cx - width / 2.0, cx + width / 2.0);
+        let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        if inside(layout.clear) {
+            return Some(ShelfHit::ClearAll);
+        }
+        for index in 0..count {
+            let (rx, ry) = layout.remove(index);
+            if (x - rx).powi(2) + (y - ry).powi(2) <= 81.0 {
+                return Some(ShelfHit::Remove(index));
+            }
+        }
+        (0..count)
+            .find(|&index| inside(layout.tile(index)))
+            .map(ShelfHit::Tile)
     }
 
     /// Which calendar or timer control sits at (`x`, `y`) on the open card.

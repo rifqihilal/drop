@@ -19,6 +19,16 @@ pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
 pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
 /// Notch size of the calendar and Pomodoro card.
 pub const CALENDAR_CARD: (f32, f32) = (400.0, 198.0);
+/// Notch size while files are dragged over it.
+pub const DROP_ZONE: (f32, f32) = (320.0, 84.0);
+/// The shelf card holds two rows at most.
+pub const SHELF_CARD_MAX: (f32, f32) = (400.0, 226.0);
+
+/// Shelf card size for `count` files: one row of five per 82 px.
+pub fn shelf_card(count: usize) -> (f32, f32) {
+    let rows = count.div_ceil(5).clamp(1, 2) as f32;
+    (SHELF_CARD_MAX.0, 62.0 + rows * 82.0)
+}
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (170.0, 30.0);
 /// How long the level stays up after the last change.

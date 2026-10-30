@@ -13,6 +13,7 @@ mod autostart;
 mod bluetooth;
 mod calendar;
 mod config;
+mod dragdrop;
 mod geo;
 mod keys;
 mod media;
@@ -21,12 +22,14 @@ mod osd;
 mod prayer;
 mod render;
 mod settings;
+mod shelf;
 mod system;
 mod tray;
 mod weather;
 mod wifi;
 
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -35,8 +38,8 @@ use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -44,31 +47,34 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetLastInputInfo, TrackMouseEvent, LASTINPUTINFO, TME_LEAVE, TRACKMOUSEEVENT,
+    GetLastInputInfo, ReleaseCapture, SetCapture, TrackMouseEvent, LASTINPUTINFO, TME_LEAVE,
+    TRACKMOUSEEVENT,
 };
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
-    Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, MUSIC_CARD, MUSIC_STRIP,
-    STATUS_CARD, TIMER_STRIP,
+    shelf_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, MUSIC_CARD,
+    MUSIC_STRIP, STATUS_CARD, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
 use config::{PrayerSettings, Settings};
 use media::{Command, Media, Track};
 use render::{
-    glyph, CalendarControl, CalendarScene, MusicScene, Page, Renderer, Scene, StatusScene,
-    TimerScene, WeatherScene,
+    glyph, CalendarControl, CalendarScene, MusicScene, Page, Renderer, Scene, ShelfHit, ShelfScene,
+    StatusScene, TimerScene, WeatherScene,
 };
+use shelf::Shelf;
 use system::{Audio, PowerEvent};
 use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
@@ -101,6 +107,10 @@ const SONG_CARD: Duration = Duration::from_secs(4);
 const HOVER_DELAY: Duration = Duration::from_millis(250);
 /// The card stays open this long after the mouse leaves.
 const LEAVE_GRACE: Duration = Duration::from_millis(400);
+/// How long the shelf card stays open after files are dropped.
+const SHELF_SHOWN: Duration = Duration::from_secs(3);
+/// Logical pixels a pressed shelf tile must move before it is dragged out.
+const DRAG_THRESHOLD: f32 = 6.0;
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
@@ -151,6 +161,14 @@ struct App {
     pomodoro: Pomodoro,
     /// Months away from the current one on the calendar page.
     month_offset: i32,
+    /// Files parked in the notch.
+    shelf: Shelf,
+    /// Files are being dragged over the notch.
+    drag_over: bool,
+    /// Shelf tile under the mouse.
+    shelf_hover: Option<usize>,
+    /// A shelf tile pressed and the logical point it was pressed at.
+    press: Option<(usize, f32, f32)>,
     /// Which page the open card shows when there is music.
     page: Page,
     weather_watch: WeatherWatch,
@@ -203,7 +221,8 @@ fn main() -> Result<()> {
         }
 
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        // OLE, not just COM: dropping files onto the notch needs it.
+        OleInitialize(None)?;
 
         let instance = GetModuleHandleW(None)?;
         let class = WNDCLASSEXW {
@@ -263,6 +282,10 @@ fn main() -> Result<()> {
             bar_phase: 0.0,
             pomodoro: Pomodoro::default(),
             month_offset: 0,
+            shelf: Shelf::load(),
+            drag_over: false,
+            shelf_hover: None,
+            press: None,
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
             weather: None,
@@ -271,11 +294,13 @@ fn main() -> Result<()> {
         // Load quietly: the "schedule ready" notice is for later edits only.
         app.config_stamp = config::modified();
         app.apply_settings(false);
+        app.renderer.sync_thumbnails(app.shelf.items());
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         tray::add(hwnd);
         osd::set_suppressed(true);
         keys::install(hwnd);
+        dragdrop::accept_drops(hwnd);
         app.schedule(COMPACT_MS);
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // After the app exists: Windows answers right away with the current values.
@@ -401,13 +426,16 @@ impl App {
             .hover_since
             .is_some_and(|since| now.duration_since(since) >= HOVER_DELAY);
         self.card_until = self.card_until.filter(|until| now < *until);
-        let open = hovering || self.card_until.is_some();
+        // Files dragged over the notch always open the drop zone.
+        let open = hovering || self.card_until.is_some() || self.drag_over;
         if !open {
             // The next opening starts on the first page, this month.
             self.page = Page::Music;
             self.month_offset = 0;
         }
         let card = open.then(|| match self.shown_page() {
+            _ if self.drag_over => DROP_ZONE,
+            Page::Shelf => shelf_card(self.shelf.items().len()),
             Page::Music => MUSIC_CARD,
             Page::Status => STATUS_CARD,
             Page::Calendar => CALENDAR_CARD,
@@ -425,12 +453,115 @@ impl App {
     }
 
     /// The card's pages, in wheel order; music only while there is some.
-    fn pages(&self) -> &'static [Page] {
+    /// The card's pages, in wheel order; music and shelf only when they have
+    /// something to show.
+    fn pages(&self) -> Vec<Page> {
+        let mut pages = Vec::with_capacity(4);
         if self.track.is_some() {
-            &[Page::Music, Page::Status, Page::Calendar]
-        } else {
-            &[Page::Status, Page::Calendar]
+            pages.push(Page::Music);
         }
+        pages.extend([Page::Status, Page::Calendar]);
+        if !self.shelf.is_empty() {
+            pages.push(Page::Shelf);
+        }
+        pages
+    }
+
+    fn on_drag(&mut self, over: bool) {
+        self.drag_over = over;
+        self.tick();
+    }
+
+    /// Files dropped on the notch go on the shelf, which opens to show them.
+    fn on_drop(&mut self, paths: Vec<PathBuf>) {
+        let added = self
+            .shelf
+            .add(paths.into_iter().filter(|path| path.exists()));
+        if added == 0 {
+            return;
+        }
+        self.renderer.sync_thumbnails(self.shelf.items());
+        self.page = Page::Shelf;
+        self.card_until = Some(Instant::now() + SHELF_SHOWN);
+        self.tick();
+    }
+
+    /// A press on a shelf tile may become a drag out.
+    fn on_press(&mut self, lparam: LPARAM) {
+        if self.shown_page() != Page::Shelf || self.notch.card_visible.value < 0.5 {
+            return;
+        }
+        let (x, y) = self.logical_point(lparam);
+        if let Some(ShelfHit::Tile(index)) = self.shelf_hit(x, y) {
+            self.press = Some((index, x, y));
+            unsafe {
+                SetCapture(self.hwnd);
+            }
+        }
+    }
+
+    /// Mouse movement over the card: tile highlight, and the start of a drag
+    /// out once a pressed tile moves far enough. Returns the file to drag;
+    /// the caller runs the drag after letting go of the app state.
+    fn on_move(&mut self, lparam: LPARAM) -> Option<PathBuf> {
+        let (x, y) = self.logical_point(lparam);
+        if let Some((index, px, py)) = self.press {
+            if (x - px).abs() + (y - py).abs() > DRAG_THRESHOLD {
+                self.press = None;
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+                return self.shelf.items().get(index).cloned();
+            }
+        }
+        let hover = match self.shelf_hit(x, y) {
+            Some(ShelfHit::Tile(index) | ShelfHit::Remove(index)) => Some(index),
+            _ => None,
+        };
+        if hover != self.shelf_hover {
+            self.shelf_hover = hover;
+            self.draw();
+        }
+        None
+    }
+
+    fn shelf_hit(&self, x: f32, y: f32) -> Option<ShelfHit> {
+        if self.shown_page() != Page::Shelf || self.notch.card_visible.value < 0.5 {
+            return None;
+        }
+        self.renderer
+            .shelf_hit(x, y, self.notch.width.value, self.shelf.items().len())
+    }
+
+    /// Click on the shelf page: open, remove one, or clear all.
+    fn on_shelf_click(&mut self, x: f32, y: f32) {
+        let pressed = self.press.take();
+        if pressed.is_some() {
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+        }
+        match self.shelf_hit(x, y) {
+            Some(ShelfHit::Tile(index)) if pressed.is_some_and(|(i, ..)| i == index) => {
+                if let Some(path) = self.shelf.items().get(index) {
+                    open_file(path);
+                }
+            }
+            Some(ShelfHit::Remove(index)) => self.shelf.remove(index),
+            Some(ShelfHit::ClearAll) => self.shelf.clear(),
+            _ => return,
+        }
+        self.shelf_hover = None;
+        self.renderer.sync_thumbnails(self.shelf.items());
+        self.tick();
+    }
+
+    fn logical_point(&self, lparam: LPARAM) -> (f32, f32) {
+        let scale = window_scale(self.hwnd);
+        (
+            (lparam.0 & 0xffff) as i16 as f32 / scale,
+            ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale,
+        )
     }
 
     fn shown_page(&self) -> Page {
@@ -546,12 +677,14 @@ impl App {
     }
 
     fn on_click(&mut self, lparam: LPARAM) {
+        let (x, y) = self.logical_point(lparam);
+        if self.shown_page() == Page::Shelf {
+            self.on_shelf_click(x, y);
+            return;
+        }
         if self.notch.card_visible.value < 0.5 {
             return;
         }
-        let scale = window_scale(self.hwnd);
-        let x = (lparam.0 & 0xffff) as i16 as f32 / scale;
-        let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale;
         let width = self.notch.width.value;
         if self.shown_page() == Page::Calendar {
             match self.renderer.calendar_control_at(x, y, width) {
@@ -823,6 +956,11 @@ impl App {
                 session: self.pomodoro.session,
             }),
             timer_strip: !self.pomodoro.idle(),
+            shelf: ShelfScene {
+                items: self.shelf.items(),
+                hover: self.shelf_hover,
+            },
+            drop_zone: self.drag_over,
             status: StatusScene {
                 time: &self.clock,
                 date: &date,
@@ -864,6 +1002,7 @@ impl App {
     fn relayout(&mut self) {
         if let Ok(renderer) = Renderer::new(window_scale(self.hwnd)) {
             self.renderer = renderer;
+            self.renderer.sync_thumbnails(self.shelf.items());
             // Bitmaps belong to the old surface; decode the art again.
             let art = self.track.as_ref().and_then(|track| track.art.clone());
             self.renderer
@@ -891,8 +1030,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(|app| app.on_click(lparam));
             LRESULT(0)
         }
+        WM_LBUTTONDOWN => {
+            with_app(|app| app.on_press(lparam));
+            LRESULT(0)
+        }
+        dragdrop::DRAG_MSG => {
+            with_app(|app| app.on_drag(wparam.0 == 1));
+            LRESULT(0)
+        }
+        dragdrop::DROP_MSG => {
+            let paths = dragdrop::take_paths(lparam);
+            with_app(|app| app.on_drop(paths));
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
-            with_app(|app| app.on_hover(true));
+            let drag = with_app(|app| {
+                app.on_hover(true);
+                app.on_move(lparam)
+            });
+            // Outside the app borrow: dragging runs its own message loop.
+            if let Some(path) = drag.flatten() {
+                dragdrop::drag_out(&path);
+            }
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
@@ -987,14 +1146,11 @@ fn handle_menu(hwnd: HWND) {
 
 /// Runs `f` on the app unless it is already borrowed (window messages can
 /// re-enter while a frame is being presented).
-fn with_app(f: impl FnOnce(&mut App)) {
+fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|cell| {
-        if let Ok(mut app) = cell.try_borrow_mut() {
-            if let Some(app) = app.as_mut() {
-                f(app);
-            }
-        }
-    });
+        let mut app = cell.try_borrow_mut().ok()?;
+        app.as_mut().map(f)
+    })
 }
 
 fn show_menu(hwnd: HWND) -> usize {
@@ -1248,5 +1404,19 @@ mod notices {
             4 => bluetooth("Galaxy Buds2 Pro".to_string(), false, true, None),
             _ => wifi("Rumah 5G", false),
         }
+    }
+}
+
+/// Opens a file with its default app, as a double click in Explorer would.
+fn open_file(path: &Path) {
+    unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(path.as_os_str()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        );
     }
 }
