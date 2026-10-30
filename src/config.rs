@@ -34,6 +34,8 @@ pub struct Settings {
     pub module_prayer: bool,
     pub module_eyes: bool,
     pub module_todo: bool,
+    /// Link to an iCalendar feed for the agenda; empty when none.
+    pub ical_url: String,
     /// Health reminders, each after its minutes of use.
     pub water: bool,
     pub water_minutes: u32,
@@ -64,6 +66,7 @@ impl Default for Settings {
             module_prayer: true,
             module_eyes: true,
             module_todo: true,
+            ical_url: String::new(),
             water: true,
             water_minutes: 60,
             eyes: false,
@@ -157,6 +160,11 @@ impl Settings {
              mata = {}\n\
              tugas = {}\n\
              \n\
+             [agenda]\n\
+             ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
+             ; dalam format iCal). Kosongkan untuk mematikan agenda.\n\
+             ical = {}\n\
+             \n\
              [kesehatan]\n\
              ; Pengingat setelah sekian menit memakai komputer; menjauh dari\n\
              ; komputer {} menit atau lebih memulai hitungan dari awal.\n\
@@ -184,6 +192,7 @@ impl Settings {
             flag(self.module_prayer),
             flag(self.module_eyes),
             flag(self.module_todo),
+            self.ical_url,
             health::BREAK_MINUTES,
             flag(self.water),
             self.water_minutes,
@@ -265,6 +274,7 @@ fn parse(text: &str) -> Settings {
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
+            "ical" => s.ical_url = value.to_string(),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
             "istirahat_mata" => s.eyes = flag(false),
@@ -309,6 +319,9 @@ mod tests {
             module_prayer: true,
             module_eyes: false,
             module_todo: false,
+            ical_url:
+                "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
+                    .to_string(),
             water: false,
             water_minutes: 45,
             eyes: true,

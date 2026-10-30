@@ -68,6 +68,7 @@ const ID_LONGITUDE: usize = 104;
 const ID_ELEVATION: usize = 105;
 const ID_REMIND: usize = 106;
 const ID_IDLE: usize = 107;
+const ID_ICAL: usize = 108;
 
 // Layout, in logical pixels.
 const SEARCH_FIELD: Rect = Rect::new(24.0, 90.0, 324.0, 124.0);
@@ -96,6 +97,9 @@ const TOGGLE_TOP: f32 = 90.0;
 const ROW: f32 = 40.0;
 const GENERAL_TOP: f32 = 324.0;
 const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
+/// Calendar feed link, under its heading at the foot of the right column.
+const ICAL_TOP: f32 = 608.0;
+const ICAL_FIELD: Rect = Rect::new(456.0, ICAL_TOP, 736.0, ICAL_TOP + 34.0);
 const CANCEL_BUTTON: Rect = Rect::new(526.0, 680.0, 626.0, 714.0);
 const SAVE_BUTTON: Rect = Rect::new(636.0, 680.0, 736.0, 714.0);
 
@@ -375,6 +379,7 @@ impl Window {
             ),
             (ID_REMIND, REMIND_FIELD, settings.remind_minutes.to_string()),
             (ID_IDLE, IDLE_FIELD, settings.idle_minutes.to_string()),
+            (ID_ICAL, ICAL_FIELD, settings.ical_url.clone()),
         ];
         let mut fields = Vec::new();
         for (id, rect, text) in field_specs {
@@ -642,6 +647,7 @@ impl Window {
             notify_prayer: self.toggles[3],
             sound: self.toggles[4],
             idle_minutes: idle,
+            ical_url: self.text(ID_ICAL).trim().to_string(),
             weather: self.toggles[6],
             module_music: self.toggles[7],
             module_calendar: self.toggles[8],
@@ -774,6 +780,13 @@ impl Window {
             "Umum",
             &f.section,
             Rect::new(RIGHT.0, GENERAL_TOP - 30.0, RIGHT.1, GENERAL_TOP - 6.0),
+            0xffffff,
+            0.7,
+        );
+        self.text_at(
+            "Agenda \u{b7} tautan kalender .ics",
+            &f.section,
+            Rect::new(RIGHT.0, ICAL_TOP - 30.0, RIGHT.1, ICAL_TOP - 6.0),
             0xffffff,
             0.7,
         );

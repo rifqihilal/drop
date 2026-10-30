@@ -284,6 +284,7 @@ pub mod glyph {
     pub const CLOSE: &str = "\u{E711}";
     pub const FILE: &str = "\u{E8A5}";
     pub const ADD: &str = "\u{E710}";
+    pub const CALENDAR: &str = "\u{E787}";
     pub const CHECK: &str = "\u{E73E}";
     pub const WATER: &str = "\u{EB42}";
     pub const EYE: &str = "\u{E890}";
@@ -342,6 +343,7 @@ pub struct Scene<'a> {
     pub prayer_soon: &'a str,
     pub shelf: ShelfScene<'a>,
     pub todo: TodoScene<'a>,
+    pub agenda: Vec<AgendaItem<'a>>,
     pub prayer: Option<PrayerScene>,
     /// Forecast for the weather page, and the place it is for.
     pub forecast: Option<&'a Weather>,
@@ -365,6 +367,17 @@ pub enum Page {
     Shelf,
     Prayer,
     Todo,
+    Agenda,
+}
+
+/// One upcoming event on the agenda card.
+pub struct AgendaItem<'a> {
+    /// "Hari ini", "Besok", "Sab 7".
+    pub day: String,
+    /// "09:00", or "Seharian" for an all-day event.
+    pub time: String,
+    pub summary: &'a str,
+    pub today: bool,
 }
 
 /// Live information shown on both sides of the clock in the closed notch.
@@ -438,6 +451,8 @@ pub struct CalendarScene {
     pub month: u32,
     /// Today's day number when the shown month is the current one.
     pub today: Option<u32>,
+    /// Days of the shown month with an event on the agenda.
+    pub marked: Vec<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -966,6 +981,7 @@ impl Renderer {
         match (page, &scene.music, &scene.timer) {
             (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
             (Page::Todo, _, _) => self.draw_todo_card(&scene.todo, x0, x1, alpha),
+            (Page::Agenda, _, _) => self.draw_agenda_card(&scene.agenda, x0, x1, alpha),
             (Page::Weather, _, _) if scene.forecast.is_some() => {
                 if let Some(weather) = scene.forecast {
                     self.draw_weather_card(weather, scene.place, x0, x1, alpha)
@@ -1131,6 +1147,19 @@ impl Renderer {
                 );
             } else {
                 self.draw_text(&number, &self.tiny, bounds, 0.9 * alpha);
+            }
+            if calendar.marked.contains(&day) {
+                // A dot under days with something on the agenda.
+                self.accent.SetColor(&accent_color(Accent::Blue));
+                self.accent.SetOpacity(alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt((bounds.left + bounds.right) / 2.0, bounds.bottom - 1.0),
+                        radiusX: 1.6,
+                        radiusY: 1.6,
+                    },
+                    &self.accent,
+                );
             }
         }
 
@@ -1480,6 +1509,53 @@ impl Renderer {
                 let (rx, ry) = layout.remove(index);
                 self.light.SetOpacity(0.6 * alpha);
                 self.draw_small_glyph(glyph::CLOSE, rx, ry, &self.light);
+            }
+        }
+    }
+
+    /// The next events from the calendar feed: day, time and title.
+    unsafe fn draw_agenda_card(&self, items: &[AgendaItem], x0: f32, x1: f32, alpha: f32) {
+        if let Some(text) = self.text_layout("Agenda", &self.title_text, 220.0) {
+            self.draw_layout(&text.layout, x0 + 20.0, 14.0, alpha);
+        }
+        if items.is_empty() {
+            self.draw_text(
+                "Tidak ada acara dalam dua minggu ke depan",
+                &self.tiny,
+                rect(x0, 46.0, x1, 46.0 + TODO_ROW),
+                0.5 * alpha,
+            );
+        }
+        for (index, item) in items.iter().enumerate() {
+            let top = 46.0 + index as f32 * TODO_ROW;
+            let cy = top + TODO_ROW / 2.0;
+            let columns = [
+                (item.day.as_str(), &self.small_left, x0 + 20.0, 78.0, 0.55),
+                (item.time.as_str(), &self.small_left, x0 + 100.0, 60.0, 0.85),
+                (
+                    item.summary,
+                    &self.subtitle_text,
+                    x0 + 164.0,
+                    x1 - 20.0 - (x0 + 164.0),
+                    0.95,
+                ),
+            ];
+            for (text, format, left, room, opacity) in columns {
+                if let Some(text) = self.text_layout(text, format, room) {
+                    self.draw_layout(&text.layout, left, cy - text.height / 2.0, opacity * alpha);
+                }
+            }
+            if item.today {
+                self.accent.SetColor(&accent_color(Accent::Blue));
+                self.accent.SetOpacity(alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x0 + 12.0, cy),
+                        radiusX: 2.5,
+                        radiusY: 2.5,
+                    },
+                    &self.accent,
+                );
             }
         }
     }

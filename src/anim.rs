@@ -45,6 +45,14 @@ pub fn todo_card(count: usize) -> (f32, f32) {
     let rows = count.clamp(1, todo::CAPACITY) as f32;
     (TODO_CARD_MAX.0, 62.0 + rows * TODO_ROW)
 }
+/// Events listed on the agenda card at most.
+pub const AGENDA_ROWS: usize = 5;
+
+/// Agenda card size for `count` events; none keeps one row for its hint.
+pub fn agenda_card(count: usize) -> (f32, f32) {
+    let rows = count.clamp(1, AGENDA_ROWS) as f32;
+    (TODO_CARD_MAX.0, 62.0 + rows * TODO_ROW)
+}
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
 /// Notch size while a prayer is close: the clock with the name and wait.

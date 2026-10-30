@@ -17,6 +17,7 @@ mod dragdrop;
 mod frames;
 mod geo;
 mod health;
+mod ical;
 mod keys;
 mod media;
 mod net;
@@ -69,18 +70,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    shelf_card, todo_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE,
-    MUSIC_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP, WEATHER_CARD,
+    agenda_card, shelf_card, todo_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD,
+    DROP_ZONE, MUSIC_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP,
+    WEATHER_CARD,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
 use config::{PrayerSettings, Settings};
 use frames::Pacer;
 use health::Health;
+use ical::{Event, IcalWatch};
 use media::{Command, Media, Track};
 use render::{
-    glyph, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer, Scene,
-    ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit, TodoScene, WeatherScene,
+    glyph, AgendaItem, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer,
+    Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit, TodoScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -130,6 +133,12 @@ const HOTKEY_ID: i32 = 1;
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
+/// Agenda events are announced this many minutes ahead.
+const EVENT_LEAD: u32 = 10;
+/// The agenda looks this many days ahead.
+const AGENDA_DAYS: i64 = 14;
+/// A timed event stays on the agenda this long after it starts.
+const AGENDA_GRACE: u32 = 30;
 /// Half a blink of the text cursor, in milliseconds.
 const CARET_BLINK: u128 = 530;
 
@@ -197,6 +206,11 @@ struct App {
     page: Page,
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
+    ical_watch: IcalWatch,
+    /// Events around today from the calendar feed.
+    events: Vec<Event>,
+    /// Events already announced: (day, minute, title).
+    event_reminded: Vec<(i64, u32, String)>,
     health: Health,
     todo: Todo,
     /// Task under the mouse.
@@ -347,6 +361,9 @@ fn main() -> Result<()> {
             press: None,
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
+            ical_watch: IcalWatch::start(hwnd),
+            events: Vec::new(),
+            event_reminded: Vec::new(),
             weather: None,
             health: Health::default(),
         };
@@ -432,6 +449,7 @@ impl App {
         if clock_changed {
             self.update_prayer();
             self.update_health();
+            self.update_agenda();
         }
 
         if let Some(finished) = self.pomodoro.advance(now) {
@@ -531,6 +549,7 @@ impl App {
             Page::Prayer => PRAYER_CARD,
             Page::Weather => WEATHER_CARD,
             Page::Todo => todo_card(self.todo.tasks().len()),
+            Page::Agenda => agenda_card(self.upcoming().len()),
         });
         let strip = match self.strip() {
             Strip::Timer => Some(TIMER_STRIP),
@@ -588,6 +607,9 @@ impl App {
         }
         if modules.module_calendar {
             pages.push(Page::Calendar);
+        }
+        if !modules.ical_url.is_empty() {
+            pages.push(Page::Agenda);
         }
         if modules.module_todo {
             pages.push(Page::Todo);
@@ -788,7 +810,7 @@ impl App {
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
             Page::Todo => self.todo_hit(x, y).is_some(),
-            Page::Status | Page::Prayer | Page::Weather => false,
+            Page::Status | Page::Prayer | Page::Weather | Page::Agenda => false,
         }
     }
 
@@ -933,6 +955,78 @@ impl App {
         self.notify_for(notice, PRAYER_NOTICE_DURATION);
     }
 
+    fn on_events(&mut self, events: Vec<Event>) {
+        self.events = events;
+        // An event may already be close.
+        self.update_agenda();
+        self.draw();
+    }
+
+    /// The next events: all-day ones from today, timed ones that have not
+    /// begun more than half an hour ago, for two weeks.
+    fn upcoming(&self) -> Vec<&Event> {
+        let today = today_number();
+        let now = minutes_now();
+        self.events
+            .iter()
+            .filter(|event| match (event.day - today, event.minute) {
+                (0, Some(minute)) => minute + AGENDA_GRACE >= now,
+                (days, _) => (0..=AGENDA_DAYS).contains(&days),
+            })
+            .take(anim::AGENDA_ROWS)
+            .collect()
+    }
+
+    fn agenda_scene(&self) -> Vec<AgendaItem<'_>> {
+        const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+        let today = today_number();
+        self.upcoming()
+            .into_iter()
+            .map(|event| {
+                let (year, month, date) = calendar::civil_from_days(event.day);
+                AgendaItem {
+                    day: match event.day - today {
+                        0 => "Hari ini".to_string(),
+                        1 => "Besok".to_string(),
+                        _ => format!(
+                            "{} {date}",
+                            DAYS[calendar::weekday(year, month, date) as usize]
+                        ),
+                    },
+                    time: event
+                        .minute
+                        .map_or("Seharian".to_string(), prayer::format_time),
+                    summary: &event.summary,
+                    today: event.day == today,
+                }
+            })
+            .collect()
+    }
+
+    /// Announces an event a few minutes before it starts.
+    fn update_agenda(&mut self) {
+        let today = today_number();
+        let now = minutes_now();
+        let due: Vec<(u32, String)> = self
+            .events
+            .iter()
+            .filter(|event| event.day == today)
+            .filter_map(|event| Some((event.minute?, event.summary.clone())))
+            .filter(|(minute, _)| now + EVENT_LEAD >= *minute && now < *minute)
+            .filter(|(minute, summary)| {
+                !self
+                    .event_reminded
+                    .iter()
+                    .any(|seen| *seen == (today, *minute, summary.clone()))
+            })
+            .collect();
+        for (minute, summary) in due {
+            self.event_reminded.push((today, minute, summary.clone()));
+            self.notify(notices::event(&summary, minute - now, minute));
+        }
+        self.event_reminded.retain(|(day, ..)| *day == today);
+    }
+
     fn on_weather(&mut self, weather: Weather) {
         self.weather = Some(weather);
         self.draw();
@@ -1071,6 +1165,11 @@ impl App {
             self.weather = None;
         }
         self.weather_watch.set_location(weather_place);
+        if self.settings.ical_url.is_empty() {
+            self.events.clear();
+        }
+        self.ical_watch
+            .set_url(Some(self.settings.ical_url.clone()));
         if !self.idle_from_args {
             self.idle_after_ms = self.settings.idle_minutes * 60_000;
         }
@@ -1310,6 +1409,13 @@ impl App {
                     year: shown_year,
                     month: shown_month,
                     today: (self.month_offset == 0).then_some(day as u32),
+                    marked: self
+                        .events
+                        .iter()
+                        .map(|event| calendar::civil_from_days(event.day))
+                        .filter(|&(y, m, _)| (y, m) == (shown_year, shown_month))
+                        .map(|(_, _, d)| d)
+                        .collect(),
                 }
             },
             timer: Some(TimerScene {
@@ -1329,6 +1435,7 @@ impl App {
                 hover: self.shelf_hover,
             },
             todo: self.todo_scene(),
+            agenda: self.agenda_scene(),
             drop_zone: self.drag_over,
             previous_page: self.page_switch.as_ref().map(|switch| switch.from),
             page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
@@ -1482,6 +1589,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEWHEEL => {
             with_app(|app| app.on_wheel(wparam));
+            LRESULT(0)
+        }
+        ical::EVENTS_MSG => {
+            let events = ical::take_events(lparam);
+            with_app(|app| app.on_events(events));
             LRESULT(0)
         }
         weather::WEATHER_MSG => {
@@ -1671,6 +1783,12 @@ fn current_clock() -> String {
     format!("{:02}:{:02}", time.wHour, time.wMinute)
 }
 
+/// Today as days since 1970-01-01.
+fn today_number() -> i64 {
+    let (year, month, day) = prayer::today();
+    calendar::days_from_civil(year as i32, month as u32, day as u32)
+}
+
 /// Local minutes after midnight.
 fn minutes_now() -> u32 {
     let time = unsafe { GetLocalTime() };
@@ -1816,6 +1934,19 @@ mod notices {
             title: "Jadwal sholat aktif".to_string(),
             subtitle: format!("{city} · berikutnya {}", NAMES[next]),
             trailing: Trailing::Text(format_time(day.times[next])),
+            dim: false,
+        }
+    }
+
+    /// The event's title, how soon it starts, and its time on the right.
+    pub fn event(summary: &str, minutes_left: u32, start: u32) -> Notice {
+        Notice {
+            icon: glyph::CALENDAR,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: summary.to_string(),
+            subtitle: format!("Agenda \u{b7} {minutes_left} menit lagi"),
+            trailing: Trailing::Text(format_time(start)),
             dim: false,
         }
     }

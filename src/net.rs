@@ -1,4 +1,5 @@
-//! Minimal HTTPS GET over WinHTTP, for the place search and the weather.
+//! Minimal HTTP(S) GET over WinHTTP, for the place search, the weather and
+//! calendar feeds.
 //! Calls block, so they run on worker threads.
 
 use std::ffi::c_void;
@@ -7,13 +8,45 @@ use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
-    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
+    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPEN_REQUEST_FLAGS,
 };
 
 const TIMEOUT_MS: i32 = 10_000;
 
 /// HTTPS GET of `path` on `host`; None on any network failure.
 pub fn get(host: &str, path: &str) -> Option<Vec<u8>> {
+    request(host, 443, path, true)
+}
+
+/// GET of a full link: `https://`, `http://`, or `webcal://` (a calendar
+/// feed served over HTTPS), with an optional port.
+pub fn get_url(url: &str) -> Option<Vec<u8>> {
+    let url = url.trim();
+    let (secure, rest) = if let Some(rest) = strip_scheme(url, "https://") {
+        (true, rest)
+    } else if let Some(rest) = strip_scheme(url, "webcal://") {
+        (true, rest)
+    } else {
+        (false, strip_scheme(url, "http://")?)
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(slash) => rest.split_at(slash),
+        None => (rest, "/"),
+    };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse().ok()?),
+        None => (authority, if secure { 443 } else { 80 }),
+    };
+    request(host, port, path, secure)
+}
+
+fn strip_scheme<'a>(url: &'a str, scheme: &str) -> Option<&'a str> {
+    let head = url.get(..scheme.len())?;
+    head.eq_ignore_ascii_case(scheme)
+        .then(|| &url[scheme.len()..])
+}
+
+fn request(host: &str, port: u16, path: &str, secure: bool) -> Option<Vec<u8>> {
     unsafe {
         let session = Handle(WinHttpOpen(
             w!("Drop"),
@@ -24,7 +57,7 @@ pub fn get(host: &str, path: &str) -> Option<Vec<u8>> {
         ));
         session.valid()?;
         let _ = WinHttpSetTimeouts(session.0, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS);
-        let connection = Handle(WinHttpConnect(session.0, &HSTRING::from(host), 443, 0));
+        let connection = Handle(WinHttpConnect(session.0, &HSTRING::from(host), port, 0));
         connection.valid()?;
         let request = Handle(WinHttpOpenRequest(
             connection.0,
@@ -33,7 +66,11 @@ pub fn get(host: &str, path: &str) -> Option<Vec<u8>> {
             PCWSTR::null(),
             PCWSTR::null(),
             std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
+            if secure {
+                WINHTTP_FLAG_SECURE
+            } else {
+                WINHTTP_OPEN_REQUEST_FLAGS(0)
+            },
         ));
         request.valid()?;
         WinHttpSendRequest(request.0, None, None, 0, 0, 0).ok()?;
