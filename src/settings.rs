@@ -117,7 +117,7 @@ const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, then opening
 /// the card by click.
-const TOGGLE_COUNT: usize = 19;
+const TOGGLE_COUNT: usize = 21;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -241,6 +241,11 @@ static PAGES: [Page; 9] = [
                     toggle: 2,
                     title: "Baterai lemah",
                     note: "Peringatan saat daya baterai hampir habis",
+                },
+                Row::Switch {
+                    toggle: 19,
+                    title: "Notifikasi aplikasi",
+                    note: "Pesan dari aplikasi lain, seperti WhatsApp",
                 },
             ],
         }],
@@ -379,11 +384,18 @@ static PAGES: [Page; 9] = [
         top: CONTENT_TOP,
         groups: &[Group {
             title: "Modul",
-            rows: &[Row::Switch {
-                toggle: 9,
-                title: "Shelf",
-                note: "Tampung berkas yang diseret ke notch",
-            }],
+            rows: &[
+                Row::Switch {
+                    toggle: 9,
+                    title: "Shelf",
+                    note: "Tampung berkas yang diseret ke notch",
+                },
+                Row::Switch {
+                    toggle: 20,
+                    title: "Screenshot otomatis",
+                    note: "Screenshot baru langsung masuk shelf",
+                },
+            ],
         }],
     },
 ];
@@ -760,6 +772,8 @@ impl Window {
                 settings.stretch,
                 settings.notch_minimal,
                 settings.open_on_click,
+                settings.notify_apps,
+                settings.shelf_screenshots,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -997,6 +1011,8 @@ impl Window {
             notify_bluetooth: self.toggles[1],
             notify_battery: self.toggles[2],
             notify_prayer: self.toggles[3],
+            notify_apps: self.toggles[19],
+            shelf_screenshots: self.toggles[20],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_url: self.text(ID_ICAL).trim().to_string(),

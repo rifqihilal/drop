@@ -323,6 +323,11 @@ impl ShelfRects {
         let tile = self.tile(index);
         (tile.right - 6.0, tile.top + 6.0)
     }
+
+    fn copy(&self, index: usize) -> (f32, f32) {
+        let tile = self.tile(index);
+        (tile.left + 6.0, tile.top + 6.0)
+    }
 }
 
 /// How far, in logical pixels, pages slide while switching.
@@ -438,6 +443,9 @@ pub mod glyph {
     pub const WALK: &str = "\u{E805}";
     pub const HOME: &str = "\u{E80F}";
     pub const SETTINGS: &str = "\u{E713}";
+    pub const MESSAGE: &str = "\u{E8BD}";
+    pub const CAMERA: &str = "\u{E722}";
+    pub const COPY: &str = "\u{E8C8}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -564,12 +572,15 @@ pub struct ShelfScene<'a> {
     pub items: &'a [PathBuf],
     /// The tile under the mouse.
     pub hover: Option<usize>,
+    /// The tile whose file was just copied.
+    pub copied: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ShelfHit {
     Tile(usize),
     Remove(usize),
+    Copy(usize),
     ClearAll,
 }
 
@@ -1850,37 +1861,42 @@ impl Renderer {
                 tile.right + 2.0,
                 tile.top + 45.0,
             );
-            self.draw_text(
-                &shelf::display_name(path),
-                &self.tile_text,
-                name,
-                0.85 * alpha,
-            );
+            let label = if shelf.copied == Some(index) {
+                "Tersalin".to_string()
+            } else {
+                shelf::display_name(path)
+            };
+            self.draw_text(&label, &self.tile_text, name, 0.85 * alpha);
 
             if shelf.hover == Some(index) {
-                let (cx, cy) = layout.remove(index);
-                self.light.SetOpacity(0.9 * alpha);
-                self.target.FillEllipse(
-                    &D2D1_ELLIPSE {
-                        point: pt(cx, cy),
-                        radiusX: 8.0,
-                        radiusY: 8.0,
-                    },
-                    &self.light,
-                );
-                self.black.SetOpacity(alpha);
-                let wide: Vec<u16> = glyph::CLOSE.encode_utf16().collect();
-                self.target.DrawText(
-                    &wide,
-                    &self.close_glyph,
-                    &rect(cx - 8.0, cy - 8.0, cx + 8.0, cy + 8.0),
-                    &self.black,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
-                self.black.SetOpacity(1.0);
+                self.draw_tile_button(glyph::CLOSE, layout.remove(index), alpha);
+                self.draw_tile_button(glyph::COPY, layout.copy(index), alpha);
             }
         }
+    }
+
+    /// A small round button on the corner of a shelf tile.
+    unsafe fn draw_tile_button(&self, icon: &str, (cx, cy): (f32, f32), alpha: f32) {
+        self.light.SetOpacity(0.9 * alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: 8.0,
+                radiusY: 8.0,
+            },
+            &self.light,
+        );
+        self.black.SetOpacity(alpha);
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.close_glyph,
+            &rect(cx - 8.0, cy - 8.0, cx + 8.0, cy + 8.0),
+            &self.black,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+        self.black.SetOpacity(1.0);
     }
 
     /// What sits at (`x`, `y`) on the shelf card holding `count` files.
@@ -1896,6 +1912,10 @@ impl Renderer {
             let (rx, ry) = layout.remove(index);
             if (x - rx).powi(2) + (y - ry).powi(2) <= 81.0 {
                 return Some(ShelfHit::Remove(index));
+            }
+            let (rx, ry) = layout.copy(index);
+            if (x - rx).powi(2) + (y - ry).powi(2) <= 81.0 {
+                return Some(ShelfHit::Copy(index));
             }
         }
         (0..count)

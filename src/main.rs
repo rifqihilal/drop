@@ -22,14 +22,17 @@ mod keys;
 mod lyrics;
 mod media;
 mod net;
+mod notifications;
 mod osd;
 mod prayer;
 mod render;
+mod screenshots;
 mod settings;
 mod shelf;
 mod system;
 mod todo;
 mod tray;
+mod watch;
 mod weather;
 mod wifi;
 
@@ -123,6 +126,8 @@ const HOVER_DELAY: Duration = Duration::from_millis(150);
 const LEAVE_GRACE: Duration = Duration::from_millis(400);
 /// How long the shelf card stays open after files are dropped.
 const SHELF_SHOWN: Duration = Duration::from_secs(3);
+/// How long a shelf tile says its file was copied.
+const COPIED_SHOWN: Duration = Duration::from_millis(1500);
 /// Logical pixels a pressed shelf tile must move before it is dragged out.
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
@@ -202,6 +207,8 @@ struct App {
     drag_over: bool,
     /// Shelf tile under the mouse.
     shelf_hover: Option<usize>,
+    /// Shelf tile just copied, and when.
+    shelf_copied: Option<(usize, Instant)>,
     /// A shelf tile pressed and the logical point it was pressed at.
     press: Option<(usize, f32, f32)>,
     /// Which page the open card shows when there is music.
@@ -370,6 +377,7 @@ fn main() -> Result<()> {
             shelf: Shelf::load(),
             drag_over: false,
             shelf_hover: None,
+            shelf_copied: None,
             todo: Todo::load(),
             todo_hover: None,
             editing: None,
@@ -411,6 +419,8 @@ fn main() -> Result<()> {
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // After the app exists: Windows answers right away with the current values.
         system::watch_power(hwnd);
+        screenshots::watch(hwnd);
+        notifications::watch(hwnd);
         if has_flag("--settings") {
             settings::open(hwnd);
         }
@@ -675,6 +685,27 @@ impl App {
         self.tick();
     }
 
+    /// A new screenshot goes on the shelf with a notice, not the whole card,
+    /// so it stays out of the way of whatever was captured.
+    fn on_screenshot(&mut self, path: PathBuf) {
+        if !self.settings.module_shelf || !self.settings.shelf_screenshots {
+            return;
+        }
+        if self.shelf.add([path]) == 0 {
+            return;
+        }
+        self.renderer.sync_thumbnails(self.shelf.items());
+        self.notify(notices::screenshot(system::clipboard_has_image()));
+        self.tick();
+    }
+
+    fn on_app_notice(&mut self, notice: notifications::AppNotice) {
+        if self.settings.notify_apps {
+            self.notify(notices::app(&notice));
+            self.tick();
+        }
+    }
+
     /// Whether the music card's volume slider is at (`x`, `y`).
     fn volume_at(&self, x: f32, y: f32) -> bool {
         self.volume_open
@@ -756,7 +787,9 @@ impl App {
             }
         }
         let hover = match self.shelf_hit(x, y) {
-            Some(ShelfHit::Tile(index) | ShelfHit::Remove(index)) => Some(index),
+            Some(ShelfHit::Tile(index) | ShelfHit::Remove(index) | ShelfHit::Copy(index)) => {
+                Some(index)
+            }
             _ => None,
         };
         let todo_hover = match self.todo_hit(x, y) {
@@ -979,7 +1012,7 @@ impl App {
             .shelf_hit(x, y, self.notch.width.value, self.shelf.items().len())
     }
 
-    /// Click on the shelf page: open, remove one, or clear all.
+    /// Click on the shelf page: open, copy, remove one, or clear all.
     fn on_shelf_click(&mut self, x: f32, y: f32) {
         let pressed = self.press.take();
         if pressed.is_some() {
@@ -993,10 +1026,20 @@ impl App {
                     open_file(path);
                 }
             }
+            Some(ShelfHit::Copy(index)) => {
+                if let Some(path) = self.shelf.items().get(index) {
+                    if system::copy_file(self.hwnd, path) {
+                        self.shelf_copied = Some((index, Instant::now()));
+                        self.draw();
+                    }
+                }
+                return;
+            }
             Some(ShelfHit::Remove(index)) => self.shelf.remove(index),
             Some(ShelfHit::ClearAll) => self.shelf.clear(),
             _ => return,
         }
+        self.shelf_copied = None;
         self.shelf_hover = None;
         self.renderer.sync_thumbnails(self.shelf.items());
         self.tick();
@@ -1696,6 +1739,10 @@ impl App {
             shelf: ShelfScene {
                 items: self.shelf.items(),
                 hover: self.shelf_hover,
+                copied: self
+                    .shelf_copied
+                    .filter(|(_, at)| at.elapsed() < COPIED_SHOWN)
+                    .map(|(index, _)| index),
             },
             todo: self.todo_scene(),
             agenda: self.agenda_scene(),
@@ -1847,6 +1894,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEWHEEL => {
             with_app(|app| app.on_wheel(wparam));
+            LRESULT(0)
+        }
+        screenshots::SCREENSHOT_MSG => {
+            let path = screenshots::take_path(lparam);
+            with_app(|app| app.on_screenshot(path));
+            LRESULT(0)
+        }
+        notifications::APP_NOTICE_MSG => {
+            let notice = notifications::take_notice(lparam);
+            with_app(|app| app.on_app_notice(notice));
             LRESULT(0)
         }
         lyrics::LYRICS_MSG => {
@@ -2097,9 +2154,51 @@ fn chime() {
 mod notices {
     use crate::anim::{Accent, Notice, Trailing};
     use crate::health::Kind;
+    use crate::notifications::{one_line, AppNotice};
     use crate::prayer::{format_time, NAMES};
     use crate::render::glyph;
     use crate::{minutes_now, PrayerDay};
+
+    /// Characters of a toast that fit a notice.
+    const TITLE_CHARS: usize = 28;
+    const SUBTITLE_CHARS: usize = 38;
+
+    /// A toast from another app: the sender over the app and message.
+    pub fn app(notice: &AppNotice) -> Notice {
+        Notice {
+            icon: glyph::MESSAGE,
+            accent: Accent::Green,
+            progress: 1.0,
+            title: one_line(&notice.title, TITLE_CHARS),
+            subtitle: if notice.app.is_empty() {
+                one_line(&notice.body, SUBTITLE_CHARS)
+            } else {
+                one_line(
+                    &format!("{} \u{b7} {}", notice.app, notice.body),
+                    SUBTITLE_CHARS,
+                )
+            },
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
+
+    /// `copied` says the picture is on the clipboard, so a paste is enough.
+    pub fn screenshot(copied: bool) -> Notice {
+        Notice {
+            icon: glyph::CAMERA,
+            accent: Accent::Teal,
+            progress: 1.0,
+            title: "Screenshot masuk Rak Berkas".to_string(),
+            subtitle: if copied {
+                "Siap ditempel dengan Ctrl+V".to_string()
+            } else {
+                "Salin dari Rak Berkas".to_string()
+            },
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
 
     pub fn wifi(ssid: &str, connected: bool) -> Notice {
         Notice {

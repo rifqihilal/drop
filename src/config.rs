@@ -40,6 +40,10 @@ pub struct Settings {
     pub notify_bluetooth: bool,
     pub notify_battery: bool,
     pub notify_prayer: bool,
+    /// Show toasts from other apps in the notch.
+    pub notify_apps: bool,
+    /// Put new screenshots on the shelf.
+    pub shelf_screenshots: bool,
     /// Play the notification sound with notices.
     pub sound: bool,
     /// Minutes without input before the eyes appear.
@@ -82,6 +86,8 @@ impl Default for Settings {
             notify_bluetooth: true,
             notify_battery: true,
             notify_prayer: true,
+            notify_apps: true,
+            shelf_screenshots: true,
             sound: true,
             idle_minutes: 2,
             weather: true,
@@ -173,6 +179,8 @@ impl Settings {
              bluetooth = {}\n\
              baterai = {}\n\
              sholat = {}\n\
+             ; Notifikasi aplikasi lain, seperti WhatsApp.\n\
+             aplikasi = {}\n\
              bunyi = {}\n\
              \n\
              [umum]\n\
@@ -185,6 +193,8 @@ impl Settings {
              musik = {}\n\
              kalender = {}\n\
              shelf = {}\n\
+             ; Screenshot baru langsung masuk shelf.\n\
+             screenshot = {}\n\
              halaman_sholat = {}\n\
              mata = {}\n\
              tugas = {}\n\
@@ -220,12 +230,14 @@ impl Settings {
             flag(self.notify_bluetooth),
             flag(self.notify_battery),
             flag(self.notify_prayer),
+            flag(self.notify_apps),
             flag(self.sound),
             self.idle_minutes,
             flag(self.weather),
             flag(self.module_music),
             flag(self.module_calendar),
             flag(self.module_shelf),
+            flag(self.shelf_screenshots),
             flag(self.module_prayer),
             flag(self.module_eyes),
             flag(self.module_todo),
@@ -304,6 +316,7 @@ fn parse(text: &str) -> Settings {
             "bluetooth" => s.notify_bluetooth = flag(true),
             "baterai" => s.notify_battery = flag(true),
             "sholat" => s.notify_prayer = flag(true),
+            "aplikasi" => s.notify_apps = flag(true),
             "bunyi" => s.sound = flag(true),
             "mata_setelah_menit" => {
                 s.idle_minutes = number().map_or(2, |v| v.clamp(1.0, 120.0) as u32)
@@ -312,6 +325,7 @@ fn parse(text: &str) -> Settings {
             "musik" => s.module_music = flag(true),
             "kalender" => s.module_calendar = flag(true),
             "shelf" => s.module_shelf = flag(true),
+            "screenshot" => s.shelf_screenshots = flag(true),
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
@@ -361,6 +375,8 @@ mod tests {
             notify_bluetooth: true,
             notify_battery: false,
             notify_prayer: true,
+            notify_apps: false,
+            shelf_screenshots: false,
             sound: false,
             idle_minutes: 5,
             weather: false,

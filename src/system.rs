@@ -5,13 +5,21 @@
 //! manager broadcasts brightness and battery changes, so nothing polls.
 
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 
-use windows::core::{implement, Result, GUID, PCWSTR};
+use windows::core::{implement, Result, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Foundation::RECT;
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
+use windows::Win32::Foundation::{
+    GlobalFree, GENERIC_READ, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MonitorFromWindow, BITMAPINFOHEADER, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
@@ -21,10 +29,13 @@ use windows::Win32::Media::Audio::{
     eConsole, eRender, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, CLSCTX_INPROC_SERVER};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    SetClipboardData,
+};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::System::Power::{
     GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
     SYSTEM_POWER_STATUS,
@@ -35,7 +46,7 @@ use windows::Win32::System::SystemServices::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::Shell::{
-    SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    SHQueryUserNotificationState, DROPFILES, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, PostMessageW,
@@ -329,6 +340,117 @@ pub fn fullscreen_app(own: HWND) -> bool {
             && bounds.right >= screen.right
             && bounds.bottom >= screen.bottom
     }
+}
+
+/// Pictures larger than this are copied as a file only: their pixels would
+/// sit in this process for as long as they stay on the clipboard.
+const CLIPBOARD_PIXELS: u64 = 16_000_000;
+
+/// Whether a picture is on the clipboard.
+pub fn clipboard_has_image() -> bool {
+    unsafe { IsClipboardFormatAvailable(CF_DIB.0 as u32).is_ok() }
+}
+
+/// Puts a file on the clipboard, as Explorer's copy does, and for a picture
+/// its pixels too, so it pastes into chats and editors as well as folders.
+pub fn copy_file(owner: HWND, path: &Path) -> bool {
+    let picture = unsafe { read_picture(path) }.ok();
+    unsafe {
+        if OpenClipboard(Some(owner)).is_err() {
+            return false;
+        }
+        let copied = EmptyClipboard().is_ok() && set_bytes(CF_HDROP.0, &file_list(path));
+        if let Some(picture) = picture.filter(|_| copied) {
+            set_bytes(CF_DIB.0, &picture);
+        }
+        let _ = CloseClipboard();
+        copied
+    }
+}
+
+/// `path` in the layout of a file drop: a header, then a double-null-ended
+/// list of wide strings.
+fn file_list(path: &Path) -> Vec<u8> {
+    let header = DROPFILES {
+        pFiles: size_of::<DROPFILES>() as u32,
+        fWide: true.into(),
+        ..Default::default()
+    };
+    let mut bytes = unsafe {
+        std::slice::from_raw_parts((&raw const header).cast::<u8>(), size_of::<DROPFILES>())
+    }
+    .to_vec();
+    let units = path.as_os_str().encode_wide().chain([0, 0]);
+    bytes.extend(units.flat_map(u16::to_le_bytes));
+    bytes
+}
+
+/// Reads a picture as a device-independent bitmap, the clipboard's format.
+unsafe fn read_picture(path: &Path) -> Result<Vec<u8>> {
+    let wic: IWICImagingFactory =
+        CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+    let decoder = wic.CreateDecoderFromFilename(
+        &HSTRING::from(path.as_os_str()),
+        None,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnDemand,
+    )?;
+    let frame = decoder.GetFrame(0)?;
+    let (mut width, mut height) = (0, 0);
+    frame.GetSize(&mut width, &mut height)?;
+    if u64::from(width) * u64::from(height) > CLIPBOARD_PIXELS {
+        return Err(windows::core::Error::empty());
+    }
+    let converter = wic.CreateFormatConverter()?;
+    converter.Initialize(
+        &frame,
+        &GUID_WICPixelFormat32bppBGRA,
+        WICBitmapDitherTypeNone,
+        None,
+        0.0,
+        WICBitmapPaletteTypeMedianCut,
+    )?;
+    let stride = width as usize * 4;
+    let mut pixels = vec![0u8; stride * height as usize];
+    converter.CopyPixels(std::ptr::null(), stride as u32, &mut pixels)?;
+
+    let header = BITMAPINFOHEADER {
+        biSize: size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: width as i32,
+        biHeight: height as i32,
+        biPlanes: 1,
+        biBitCount: 32,
+        ..Default::default()
+    };
+    let mut bytes = Vec::with_capacity(size_of::<BITMAPINFOHEADER>() + pixels.len());
+    bytes.extend_from_slice(std::slice::from_raw_parts(
+        (&raw const header).cast::<u8>(),
+        size_of::<BITMAPINFOHEADER>(),
+    ));
+    // Bitmaps run from the bottom row up.
+    for row in pixels.rchunks_exact(stride) {
+        bytes.extend_from_slice(row);
+    }
+    Ok(bytes)
+}
+
+/// Copies `bytes` onto the open clipboard, which then owns the memory.
+unsafe fn set_bytes(format: u16, bytes: &[u8]) -> bool {
+    let Ok(memory) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else {
+        return false;
+    };
+    let target = GlobalLock(memory) as *mut u8;
+    if target.is_null() {
+        let _ = GlobalFree(Some(memory));
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
+    let _ = GlobalUnlock(memory);
+    if SetClipboardData(format.into(), Some(HANDLE(memory.0))).is_err() {
+        let _ = GlobalFree(Some(memory));
+        return false;
+    }
+    true
 }
 
 /// Text on the clipboard, if there is any.

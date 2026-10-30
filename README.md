@@ -25,13 +25,14 @@ lirik tampil.
 - **Kalender:** kalender bulanan dan agenda dari tautan `.ics`, dengan pengingat 10 menit sebelumnya.
 - **Fokus:** timer Pomodoro.
 - **Daftar Tugas:** tugas singkat yang diketik langsung di notch.
-- **Rak Berkas:** seret berkas ke notch, lalu seret keluar ke aplikasi lain.
+- **Rak Berkas:** seret berkas ke notch, lalu seret keluar ke aplikasi lain atau salin dengan tombolnya. Screenshot baru masuk ke sini otomatis.
 
 **Notifikasi di notch**
 
 - Volume dan kecerahan, menggantikan tampilan bawaan Windows.
 - Wi-Fi tersambung atau terputus, perangkat Bluetooth dengan persen baterainya, dan baterai lemah.
 - Pengingat sholat, minum air, istirahat mata, dan peregangan.
+- Notifikasi aplikasi lain, seperti WhatsApp.
 
 Setiap modul bisa dimatikan di Pengaturan (klik kanan notch atau ikon tray).
 
@@ -62,6 +63,9 @@ Semua tersimpan di `%APPDATA%\Drop`, berupa berkas teks yang bisa disunting:
 | `drop.ini` | Pengaturan; dibaca ulang dalam satu menit setelah diubah |
 | `todo.txt` | Daftar tugas |
 | `shelf.txt` | Lokasi berkas di rak (hanya lokasi, berkasnya tidak disalin) |
+
+Notifikasi aplikasi dibaca dari pusat notifikasi Windows dan hanya ditampilkan,
+tidak disimpan atau dikirim ke mana pun.
 
 Drop menghubungi layanan luar hanya untuk fitur yang memerlukannya:
 
