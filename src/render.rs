@@ -34,12 +34,27 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use windows_numerics::Vector2;
 
-use crate::anim::IDLE;
+use crate::anim::{HudKind, HUD, IDLE};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
-pub const CANVAS: (f32, f32) = (IDLE.0 + 2.0 * EAR, IDLE.1);
+pub const CANVAS: (f32, f32) = (max(IDLE.0, HUD.0) + 2.0 * EAR, max(IDLE.1, HUD.1));
+
+const fn max(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+// Segoe Fluent Icons glyphs.
+const GLYPH_MUTE: &str = "\u{E74F}";
+const GLYPH_VOLUME_LOW: &str = "\u{E993}";
+const GLYPH_VOLUME_MID: &str = "\u{E994}";
+const GLYPH_VOLUME_HIGH: &str = "\u{E995}";
+const GLYPH_BRIGHTNESS: &str = "\u{E706}";
 
 const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 0.93,
@@ -56,12 +71,22 @@ pub struct Scene<'a> {
     pub blink: f32,
     pub look: f32,
     pub clock: &'a str,
+    pub hud_visible: f32,
+    pub hud: Option<HudScene>,
+}
+
+pub struct HudScene {
+    pub kind: HudKind,
+    pub level: f32,
+    pub muted: bool,
 }
 
 pub struct Renderer {
     factory: ID2D1Factory,
     target: ID2D1DCRenderTarget,
     text: IDWriteTextFormat,
+    small_text: IDWriteTextFormat,
+    icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
     dc: HDC,
@@ -124,22 +149,30 @@ impl Renderer {
             let light = target.CreateSolidColorBrush(&EYE_COLOR, None)?;
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let text = dwrite.CreateTextFormat(
-                w!("Segoe UI Variable Display"),
-                None,
-                DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                13.0,
-                w!("id-id"),
-            )?;
-            text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
-            text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let format = |family, size| -> Result<IDWriteTextFormat> {
+                let format = dwrite.CreateTextFormat(
+                    family,
+                    None,
+                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    size,
+                    w!("id-id"),
+                )?;
+                format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+                format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                Ok(format)
+            };
+            let text = format(w!("Segoe UI Variable Display"), 13.0)?;
+            let small_text = format(w!("Segoe UI Variable Display"), 12.0)?;
+            let icons = format(w!("Segoe Fluent Icons"), 15.0)?;
 
             Ok(Self {
                 factory,
                 target,
                 text,
+                small_text,
+                icons,
                 black,
                 light,
                 dc,
@@ -162,6 +195,7 @@ impl Renderer {
             t.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
             self.draw_shape(scene)?;
             self.draw_eyes(scene);
+            self.draw_hud(scene);
             self.draw_clock(scene);
             t.EndDraw(None, None)?;
 
@@ -253,28 +287,103 @@ impl Renderer {
         }
     }
 
+    /// Icon, level bar and percentage, laid out against the notch's current
+    /// edges so they ride along while it grows.
+    unsafe fn draw_hud(&self, scene: &Scene) {
+        let Some(hud) = &scene.hud else {
+            return;
+        };
+        let alpha = scene.hud_visible.clamp(0.0, 1.0);
+        if alpha < 0.01 {
+            return;
+        }
+        let cx = CANVAS.0 / 2.0;
+        let (x0, x1) = (cx - scene.width / 2.0, cx + scene.width / 2.0);
+        let (h, cy) = (scene.height, scene.height / 2.0);
+        let level = hud.level.clamp(0.0, 1.0);
+
+        let glyph = match hud.kind {
+            HudKind::Brightness => GLYPH_BRIGHTNESS,
+            HudKind::Volume if hud.muted || level < 0.005 => GLYPH_MUTE,
+            HudKind::Volume if level < 0.34 => GLYPH_VOLUME_LOW,
+            HudKind::Volume if level < 0.67 => GLYPH_VOLUME_MID,
+            HudKind::Volume => GLYPH_VOLUME_HIGH,
+        };
+        self.draw_text(glyph, &self.icons, rect(x0 + 8.0, 0.0, x0 + 38.0, h), alpha);
+
+        let (left, right) = (x0 + 42.0, x1 - 46.0);
+        let bar = |end: f32, opacity: f32| {
+            self.light.SetOpacity(opacity * alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(left, cy - 2.5, end, cy + 2.5),
+                    radiusX: 2.5,
+                    radiusY: 2.5,
+                },
+                &self.light,
+            );
+        };
+        bar(right, 0.22);
+        if level > 0.0 {
+            // Never thinner than its own rounded ends.
+            bar(
+                (left + (right - left) * level).max(left + 5.0),
+                if hud.muted { 0.4 } else { 1.0 },
+            );
+        }
+
+        let percent = format!("{}", (level * 100.0).round() as u32);
+        self.draw_text(
+            &percent,
+            &self.small_text,
+            rect(x1 - 44.0, 0.0, x1 - 10.0, h),
+            0.92 * alpha,
+        );
+    }
+
     unsafe fn draw_clock(&self, scene: &Scene) {
-        // The clock steps aside quickly so it never overlaps the eyes.
-        let alpha = (1.0 - scene.eyes_visible * 1.6).clamp(0.0, 1.0);
+        // The clock steps aside quickly so it never overlaps the eyes or level.
+        let cover = scene.eyes_visible.max(scene.hud_visible);
+        let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
         if alpha <= 0.0 {
             return;
         }
         let cx = CANVAS.0 / 2.0;
-        let text: Vec<u16> = scene.clock.encode_utf16().collect();
-        self.light.SetOpacity(0.92 * alpha);
+        let bounds = rect(
+            cx - scene.width / 2.0,
+            0.0,
+            cx + scene.width / 2.0,
+            scene.height,
+        );
+        self.draw_text(scene.clock, &self.text, bounds, 0.92 * alpha);
+    }
+
+    unsafe fn draw_text(
+        &self,
+        text: &str,
+        format: &IDWriteTextFormat,
+        bounds: D2D_RECT_F,
+        alpha: f32,
+    ) {
+        let text: Vec<u16> = text.encode_utf16().collect();
+        self.light.SetOpacity(alpha);
         self.target.DrawText(
             &text,
-            &self.text,
-            &D2D_RECT_F {
-                left: cx - scene.width / 2.0,
-                top: 0.0,
-                right: cx + scene.width / 2.0,
-                bottom: scene.height,
-            },
+            format,
+            &bounds,
             &self.light,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
             DWRITE_MEASURING_MODE_NATURAL,
         );
+    }
+}
+
+fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
     }
 }
 

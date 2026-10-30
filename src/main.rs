@@ -3,12 +3,16 @@
 //! Drop: a lightweight native notch for Windows.
 //!
 //! Prototype scope: a compact notch with a clock while the computer is in use,
-//! growing into a pair of animated eyes once it has been idle for a while.
+//! growing into a pair of animated eyes once it has been idle for a while, and
+//! showing volume and brightness changes in place of Windows' own flyout.
 //! Right-click the notch or the tray icon for the menu.
 
 mod anim;
 mod autostart;
+mod keys;
+mod osd;
 mod render;
+mod system;
 mod tray;
 
 use std::cell::RefCell;
@@ -18,6 +22,7 @@ use windows::core::{w, Result};
 use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
 use windows::Win32::System::Threading::CreateMutexW;
@@ -31,18 +36,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
     MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_NULL,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use anim::Notch;
-use render::{Renderer, Scene};
+use anim::{HudKind, Notch};
+use render::{HudScene, Renderer, Scene};
+use system::Audio;
 
 const TIMER_ID: usize = 1;
 /// Frame interval while something is animating (~60 fps).
 const FRAME_MS: u32 = 16;
-/// Wake-up interval while the eyes are showing: catches the next blink or glance.
-const EYES_MS: u32 = 100;
+/// Wake-up interval while the eyes or a level are showing: catches the next
+/// blink or glance, and the moment the level should hide.
+const BUSY_MS: u32 = 100;
 /// Wake-up interval while compact: only the idle check and the clock need it.
 const COMPACT_MS: u32 = 500;
 const DEFAULT_IDLE_SECS: u32 = 120;
@@ -57,6 +64,10 @@ struct App {
     last_tick: Instant,
     timer_ms: u32,
     clock: String,
+    /// Kept alive so Core Audio keeps calling back.
+    audio: Option<Audio>,
+    /// Last known brightness; None until Windows reports the starting value.
+    brightness: Option<u32>,
 }
 
 thread_local! {
@@ -74,6 +85,7 @@ fn main() -> Result<()> {
         }
 
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
 
         let instance = GetModuleHandleW(None)?;
         let class = WNDCLASSEXW {
@@ -111,12 +123,18 @@ fn main() -> Result<()> {
             last_tick: now,
             timer_ms: 0,
             clock: current_clock(),
+            audio: Audio::new(hwnd).ok(),
+            brightness: None,
         };
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         tray::add(hwnd);
+        osd::set_suppressed(true);
+        keys::install(hwnd);
         app.schedule(COMPACT_MS);
         APP.with(|cell| *cell.borrow_mut() = Some(app));
+        // After the app exists: Windows answers right away with the current value.
+        system::watch_brightness(hwnd);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -124,6 +142,10 @@ fn main() -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // Release the COM and Direct2D objects now. Left to the thread-local
+    // destructor, they are released during process teardown, which stalls
+    // the exit for several seconds.
+    APP.with(|cell| drop(cell.borrow_mut().take()));
     Ok(())
 }
 
@@ -145,11 +167,39 @@ impl App {
         }
         self.schedule(if moving {
             FRAME_MS
-        } else if self.notch.eyes_showing() {
-            EYES_MS
+        } else if self.notch.busy() {
+            BUSY_MS
         } else {
             COMPACT_MS
         });
+    }
+
+    fn show_level(&mut self, kind: HudKind, level: f32, muted: bool) {
+        // Older shells host the flyout in a window that gets recreated; keep
+        // it hidden. Newer Windows 11 draws it inside Explorer, where only
+        // taking over the keys helps (see `keys`).
+        osd::set_suppressed(true);
+        self.notch.show_hud(kind, level, muted, Instant::now());
+        self.tick();
+    }
+
+    fn on_volume(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        self.show_level(HudKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
+    }
+
+    fn on_volume_key(&mut self, vk: u16) {
+        let result = self.audio.as_ref().and_then(|audio| audio.press(vk));
+        if let Some((level, muted)) = result {
+            self.show_level(HudKind::Volume, level, muted);
+        }
+    }
+
+    fn on_brightness(&mut self, brightness: u32) {
+        let previous = self.brightness.replace(brightness);
+        // The first report is the starting value, not a change.
+        if previous.is_some_and(|previous| previous != brightness) {
+            self.show_level(HudKind::Brightness, brightness as f32 / 100.0, false);
+        }
     }
 
     fn draw(&self) {
@@ -161,6 +211,12 @@ impl App {
             blink: n.eyes.blink,
             look: n.eyes.look.value,
             clock: &self.clock,
+            hud_visible: n.hud_visible.value,
+            hud: n.hud.as_ref().map(|hud| HudScene {
+                kind: hud.kind,
+                level: hud.level.value,
+                muted: hud.muted,
+            }),
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);
     }
@@ -204,6 +260,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             handle_menu(hwnd);
             LRESULT(0)
         }
+        system::VOLUME_MSG => {
+            with_app(|app| app.on_volume(wparam, lparam));
+            LRESULT(0)
+        }
+        keys::VOLUME_KEY_MSG => {
+            with_app(|app| app.on_volume_key(wparam.0 as u16));
+            LRESULT(0)
+        }
+        system::DEVICE_MSG => {
+            with_app(|app| {
+                if let Some(audio) = app.audio.as_mut() {
+                    audio.rebind();
+                }
+            });
+            LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            if let Some(brightness) = system::brightness_from(wparam, lparam) {
+                with_app(|app| app.on_brightness(brightness));
+            }
+            LRESULT(1)
+        }
         tray::CALLBACK_MSG => {
             let event = lparam.0 as u32;
             if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
@@ -218,6 +296,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DESTROY => {
             tray::remove(hwnd);
+            osd::set_suppressed(false);
             PostQuitMessage(0);
             LRESULT(0)
         }

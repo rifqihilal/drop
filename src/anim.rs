@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 pub const COMPACT: (f32, f32) = (132.0, 28.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
+/// Notch size while showing the volume or brightness level.
+pub const HUD: (f32, f32) = (220.0, 36.0);
+/// How long the level stays up after the last change.
+const HUD_DURATION: Duration = Duration::from_millis(1600);
 
 /// A damped spring that eases `value` toward `target`.
 pub struct Spring {
@@ -152,6 +156,21 @@ impl Eyes {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum HudKind {
+    Volume,
+    Brightness,
+}
+
+/// A volume or brightness level shown in the notch.
+pub struct Hud {
+    pub kind: HudKind,
+    /// Level 0..1, eased so the bar slides between key presses.
+    pub level: Spring,
+    pub muted: bool,
+    until: Instant,
+}
+
 /// The notch's animated state.
 pub struct Notch {
     pub width: Spring,
@@ -159,7 +178,12 @@ pub struct Notch {
     /// How visible the eyes are, 0..1.
     pub eyes_visible: Spring,
     pub eyes: Eyes,
+    /// How visible the level is, 0..1.
+    pub hud_visible: Spring,
+    /// Kept while fading out so the last level stays drawn.
+    pub hud: Option<Hud>,
     idle: bool,
+    hud_active: bool,
 }
 
 impl Notch {
@@ -169,7 +193,10 @@ impl Notch {
             height: Spring::new(COMPACT.1, 380.0, 30.0, 0.05),
             eyes_visible: Spring::new(0.0, 260.0, 32.0, 0.002),
             eyes: Eyes::new(now, seed),
+            hud_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
+            hud: None,
             idle: false,
+            hud_active: false,
         }
     }
 
@@ -178,27 +205,77 @@ impl Notch {
             return;
         }
         self.idle = idle;
-        let (w, h) = if idle { IDLE } else { COMPACT };
-        self.width.target = w;
-        self.height.target = h;
-        self.eyes_visible.target = if idle { 1.0 } else { 0.0 };
         if idle {
             self.eyes.wake(now);
         }
+        self.retarget();
     }
 
-    pub fn eyes_showing(&self) -> bool {
-        self.eyes_visible.value > 0.01 || self.idle
+    pub fn show_hud(&mut self, kind: HudKind, level: f32, muted: bool, now: Instant) {
+        match &mut self.hud {
+            Some(hud) if hud.kind == kind => {
+                hud.level.target = level;
+                hud.muted = muted;
+                hud.until = now + HUD_DURATION;
+            }
+            _ => {
+                self.hud = Some(Hud {
+                    kind,
+                    level: Spring::new(level, 500.0, 40.0, 0.001),
+                    muted,
+                    until: now + HUD_DURATION,
+                });
+            }
+        }
+        self.hud_active = true;
+        self.retarget();
+    }
+
+    /// True while anything other than the clock needs periodic wake-ups.
+    pub fn busy(&self) -> bool {
+        self.eyes_visible.value > 0.01 || self.idle || self.hud.is_some()
     }
 
     /// Advances every animation. Returns true while anything is still moving.
     pub fn step(&mut self, now: Instant, dt: f32) -> bool {
+        if self.hud_active && self.hud.as_ref().is_some_and(|hud| now >= hud.until) {
+            self.hud_active = false;
+            self.retarget();
+        }
+
         let mut moving = self.width.step(dt);
         moving |= self.height.step(dt);
         moving |= self.eyes_visible.step(dt);
-        if self.eyes_showing() {
+        moving |= self.hud_visible.step(dt);
+        if let Some(hud) = &mut self.hud {
+            moving |= hud.level.step(dt);
+        }
+        if !self.hud_active && self.hud_visible.value == 0.0 {
+            self.hud = None;
+        }
+        if self.eyes_visible.value > 0.01 || self.idle {
             moving |= self.eyes.step(now, dt);
         }
         moving
+    }
+
+    /// Picks the shape and content for the current state. The level wins over
+    /// the eyes so a key press while idle still shows what changed.
+    fn retarget(&mut self) {
+        let (w, h) = if self.hud_active {
+            HUD
+        } else if self.idle {
+            IDLE
+        } else {
+            COMPACT
+        };
+        self.width.target = w;
+        self.height.target = h;
+        self.hud_visible.target = if self.hud_active { 1.0 } else { 0.0 };
+        self.eyes_visible.target = if self.idle && !self.hud_active {
+            1.0
+        } else {
+            0.0
+        };
     }
 }
