@@ -57,7 +57,7 @@ use crate::anim::{
     MUSIC_CARD, NOTICE_HEIGHT, NOTICE_WIDTH, SHELF_CARD_MAX, STATUS_CARD,
 };
 use crate::media::Command;
-use crate::{calendar, shelf};
+use crate::{calendar, prayer, shelf};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
@@ -290,8 +290,12 @@ pub struct Scene<'a> {
     pub calendar: CalendarScene,
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
-    pub timer_strip: bool,
+    /// What the live strip beside the clock shows.
+    pub strip: Strip,
+    /// "Maghrib 12 mnt", while a prayer is close.
+    pub prayer_soon: &'a str,
     pub shelf: ShelfScene<'a>,
+    pub prayer: Option<PrayerScene>,
     /// Files are being dragged over the notch.
     pub drop_zone: bool,
     /// While switching pages: the page being left, how far the switch has
@@ -308,6 +312,31 @@ pub enum Page {
     Status,
     Calendar,
     Shelf,
+    Prayer,
+}
+
+/// Live information shown on both sides of the clock in the closed notch.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Strip {
+    None,
+    Music,
+    Timer,
+    Prayer,
+}
+
+pub struct PrayerScene {
+    pub next_name: &'static str,
+    /// "15:20"
+    pub next_time: String,
+    /// "1 jam 12 mnt"
+    pub wait: String,
+    /// Today's five times, "04:37" and so on.
+    pub times: [String; 5],
+    /// Which of today's prayers comes next, if any is left today.
+    pub next_today: Option<usize>,
+    /// Degrees clockwise from north.
+    pub qibla: f64,
+    pub direction: &'static str,
 }
 
 pub struct ShelfScene<'a> {
@@ -406,6 +435,8 @@ pub struct Renderer {
     trailing_text: IDWriteTextFormat,
     /// Small left-aligned text: track times.
     small_left: IDWriteTextFormat,
+    /// Clock-sized left-aligned text: the timer countdown in the strip.
+    text_left: IDWriteTextFormat,
     /// Large clock on the status card.
     big_clock: IDWriteTextFormat,
     /// Small centered text: calendar days.
@@ -552,6 +583,7 @@ impl Renderer {
             let subtitle_text = line(DWRITE_FONT_WEIGHT_NORMAL, 12.5)?;
             let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
+            let text_left = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
             let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
             let tiny = format(font, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let tile_text = line(DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
@@ -572,6 +604,7 @@ impl Renderer {
                 subtitle_text,
                 trailing_text,
                 small_left,
+                text_left,
                 big_clock,
                 tiny,
                 tile_text,
@@ -794,11 +827,16 @@ impl Renderer {
             let alpha = scene.music_visible.min(1.0);
             self.target
                 .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            match (&scene.timer, &scene.music) {
-                (Some(timer), _) if scene.timer_strip => {
+            match (scene.strip, &scene.timer, &scene.music) {
+                (Strip::Timer, Some(timer), _) => {
                     self.draw_timer_strip(timer, x0, x1, scene.height, alpha)
                 }
-                (_, Some(music)) => self.draw_music_strip(music, x0, x1, scene.height, alpha),
+                (Strip::Music, _, Some(music)) => {
+                    self.draw_music_strip(music, x0, x1, scene.height, alpha)
+                }
+                (Strip::Prayer, _, _) => {
+                    self.draw_prayer_strip(scene.prayer_soon, x0, x1, scene.height, alpha)
+                }
                 _ => {}
             }
             self.target.PopAxisAlignedClip();
@@ -852,6 +890,11 @@ impl Renderer {
         }
         match (page, &scene.music, &scene.timer) {
             (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
+            (Page::Prayer, _, _) if scene.prayer.is_some() => {
+                if let Some(prayer) = &scene.prayer {
+                    self.draw_prayer_card(prayer, x0, x1, alpha)
+                }
+            }
             (Page::Music, Some(music), _) => self.draw_music_card(music, scene.width, alpha),
             (Page::Calendar, _, Some(timer)) => {
                 self.draw_calendar_card(&scene.calendar, timer, x0, x1, alpha)
@@ -886,6 +929,8 @@ impl Renderer {
         } else {
             Accent::Green
         });
+        // Phase dot on the left, the countdown on the right; the clock stays
+        // in the middle.
         self.accent.SetColor(&color);
         self.accent
             .SetOpacity(if timer.running { 1.0 } else { 0.45 } * alpha);
@@ -897,13 +942,29 @@ impl Renderer {
             },
             &self.accent,
         );
-        let text = format!("{} {}", timer.label, timer.left);
-        self.draw_text(
-            &text,
-            &self.text,
-            rect(x0 + 28.0, 0.0, x1 - 12.0, h),
-            0.95 * alpha,
-        );
+        if let Some(text) = self.text_layout(&timer.left, &self.text_left, 80.0) {
+            let x = x1 - 14.0 - text.width;
+            self.accent
+                .SetOpacity(if timer.running { 1.0 } else { 0.6 } * alpha);
+            self.target.DrawTextLayout(
+                pt(x, cy - text.height / 2.0),
+                &text.layout,
+                &self.accent,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
+        }
+    }
+
+    /// A prayer icon on the left, "Maghrib 12 mnt" on the right.
+    unsafe fn draw_prayer_strip(&self, label: &str, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let cy = h / 2.0;
+        self.accent.SetColor(&accent_color(Accent::Green));
+        self.accent.SetOpacity(alpha);
+        self.draw_glyph(glyph::PRAYER, x0 + 24.0, cy, &self.accent);
+        if let Some(text) = self.text_layout(label, &self.small_left, 120.0) {
+            let x = x1 - 14.0 - text.width;
+            self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.9 * alpha);
+        }
     }
 
     /// Month grid on the left, Pomodoro on the right.
@@ -1219,6 +1280,128 @@ impl Renderer {
         (0..count)
             .find(|&index| inside(layout.tile(index)))
             .map(ShelfHit::Tile)
+    }
+
+    /// Next prayer and how long until it, today's times, and the qibla.
+    unsafe fn draw_prayer_card(&self, prayer: &PrayerScene, x0: f32, x1: f32, alpha: f32) {
+        let left = x0 + 22.0;
+        if let Some(text) = self.text_layout("Sholat berikutnya", &self.subtitle_text, 200.0) {
+            self.draw_layout(&text.layout, left, 14.0, 0.55 * alpha);
+        }
+        if let Some(text) = self.text_layout(prayer.next_name, &self.big_clock, 200.0) {
+            self.draw_layout(&text.layout, left, 30.0, alpha);
+        }
+        let when = format!("{} · {} lagi", prayer.next_time, prayer.wait);
+        if let Some(text) = self.text_layout(&when, &self.subtitle_text, 220.0) {
+            self.draw_layout(&text.layout, left, 72.0, 0.75 * alpha);
+        }
+
+        // Today's five, the next one in the accent colour, past ones faded.
+        let column = 46.0;
+        for (index, name) in prayer::NAMES.iter().enumerate() {
+            let x = left + index as f32 * column;
+            let (opacity, next) = match prayer.next_today {
+                Some(next) if index == next => (1.0, true),
+                Some(next) if index < next => (0.4, false),
+                None => (0.4, false),
+                _ => (0.85, false),
+            };
+            let name_box = rect(x, 110.0, x + column, 126.0);
+            let time_box = rect(x, 126.0, x + column, 146.0);
+            if next {
+                self.accent.SetColor(&accent_color(Accent::Green));
+                self.accent.SetOpacity(alpha);
+                for (text, format, bounds) in [
+                    (*name, &self.tiny, name_box),
+                    (prayer.times[index].as_str(), &self.small_text, time_box),
+                ] {
+                    let wide: Vec<u16> = text.encode_utf16().collect();
+                    self.target.DrawText(
+                        &wide,
+                        format,
+                        &bounds,
+                        &self.accent,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
+            } else {
+                self.draw_text(name, &self.tiny, name_box, 0.6 * opacity * alpha);
+                self.draw_text(
+                    &prayer.times[index],
+                    &self.small_text,
+                    time_box,
+                    opacity * alpha,
+                );
+            }
+        }
+
+        // Qibla compass: north up, the needle on the bearing to the Kaaba.
+        let (cx, cy, radius) = (x1 - 74.0, 62.0, 40.0);
+        let circle = |r: f32| D2D1_ELLIPSE {
+            point: pt(cx, cy),
+            radiusX: r,
+            radiusY: r,
+        };
+        self.light.SetOpacity(0.06 * alpha);
+        self.target.FillEllipse(&circle(radius), &self.light);
+        self.light.SetOpacity(0.25 * alpha);
+        self.target
+            .DrawEllipse(&circle(radius), &self.light, 1.2, None);
+        for (letter, dx, dy) in [
+            ("U", 0.0, -1.0),
+            ("T", 1.0, 0.0),
+            ("S", 0.0, 1.0),
+            ("B", -1.0, 0.0),
+        ] {
+            let (lx, ly) = (cx + dx * (radius - 9.0), cy + dy * (radius - 9.0));
+            let opacity = if letter == "U" { 0.8 } else { 0.4 };
+            self.draw_text(
+                letter,
+                &self.tiny,
+                rect(lx - 8.0, ly - 8.0, lx + 8.0, ly + 8.0),
+                opacity * alpha,
+            );
+        }
+        let angle = (prayer.qibla as f32).to_radians();
+        let (sx, sy) = (angle.sin(), -angle.cos());
+        self.light.SetOpacity(0.35 * alpha);
+        self.target.DrawLine(
+            pt(cx, cy),
+            pt(cx - sx * 12.0, cy - sy * 12.0),
+            &self.light,
+            2.5,
+            &self.round_caps,
+        );
+        self.accent.SetColor(&accent_color(Accent::Green));
+        self.accent.SetOpacity(alpha);
+        let tip = pt(cx + sx * 30.0, cy + sy * 30.0);
+        self.target
+            .DrawLine(pt(cx, cy), tip, &self.accent, 3.0, &self.round_caps);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: tip,
+                radiusX: 4.0,
+                radiusY: 4.0,
+            },
+            &self.accent,
+        );
+        self.light.SetOpacity(alpha);
+        self.target.FillEllipse(&circle(3.0), &self.light);
+
+        let label = format!("Kiblat {:.0}°", prayer.qibla);
+        self.draw_text(
+            &label,
+            &self.small_text,
+            rect(cx - 60.0, 110.0, cx + 60.0, 126.0),
+            0.95 * alpha,
+        );
+        self.draw_text(
+            prayer.direction,
+            &self.tiny,
+            rect(cx - 60.0, 126.0, cx + 60.0, 144.0),
+            0.55 * alpha,
+        );
     }
 
     /// Which calendar or timer control sits at (`x`, `y`) on the open card.
@@ -1675,11 +1858,11 @@ impl Renderer {
     }
 
     unsafe fn draw_clock(&self, scene: &Scene) {
-        // The clock steps aside quickly so it never overlaps the eyes or level.
+        // The clock steps aside quickly for the eyes, a banner or a card; the
+        // live strip keeps it, with its own details on either side.
         let cover = scene
             .eyes_visible
             .max(scene.banner_visible)
-            .max(scene.music_visible)
             .max(scene.card_visible);
         let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
         if alpha <= 0.0 {

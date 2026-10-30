@@ -19,6 +19,8 @@ pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
 pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
 /// Notch size of the calendar and Pomodoro card.
 pub const CALENDAR_CARD: (f32, f32) = (400.0, 198.0);
+/// Notch size of the prayer card.
+pub const PRAYER_CARD: (f32, f32) = (400.0, 166.0);
 /// Notch size while files are dragged over it.
 pub const DROP_ZONE: (f32, f32) = (320.0, 84.0);
 /// The shelf card holds two rows at most.
@@ -30,7 +32,9 @@ pub fn shelf_card(count: usize) -> (f32, f32) {
     (SHELF_CARD_MAX.0, 62.0 + rows * 82.0)
 }
 /// Notch size while the Pomodoro timer runs.
-pub const TIMER_STRIP: (f32, f32) = (170.0, 30.0);
+pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
+/// Notch size while a prayer is close: the clock with the name and wait.
+pub const PRAYER_STRIP: (f32, f32) = (276.0, 30.0);
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.

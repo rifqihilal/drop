@@ -166,6 +166,53 @@ pub fn today_at(location: Location) -> Schedule {
     )
 }
 
+/// The day after (`year`, `month`, `day`).
+pub fn next_day(year: u16, month: u16, day: u16) -> (u16, u16, u16) {
+    if u32::from(day) < crate::calendar::days_in_month(year as i32, month as u32) {
+        (year, month, day + 1)
+    } else if month < 12 {
+        (year, month + 1, 1)
+    } else {
+        (year + 1, 1, 1)
+    }
+}
+
+/// Great-circle bearing to the Kaaba, in degrees clockwise from true north.
+pub fn qibla(location: Location) -> f64 {
+    const KAABA: (f64, f64) = (21.4225, 39.8262);
+    let delta = KAABA.1 - location.longitude;
+    let bearing = atan2(
+        sin(delta),
+        cos(location.latitude) * tan(KAABA.0) - sin(location.latitude) * cos(delta),
+    );
+    bearing.rem_euclid(360.0)
+}
+
+/// Compass point for a bearing, in Indonesian: "Barat Laut".
+pub fn compass_point(bearing: f64) -> &'static str {
+    const POINTS: [&str; 8] = [
+        "Utara",
+        "Timur Laut",
+        "Timur",
+        "Tenggara",
+        "Selatan",
+        "Barat Daya",
+        "Barat",
+        "Barat Laut",
+    ];
+    POINTS[((bearing.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8]
+}
+
+/// "1 jam 12 mnt", "12 mnt", "< 1 mnt".
+pub fn format_wait(minutes: u32) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "< 1 mnt".to_string(),
+        (0, m) => format!("{m} mnt"),
+        (h, 0) => format!("{h} jam"),
+        (h, m) => format!("{h} jam {m} mnt"),
+    }
+}
+
 /// "04:09"
 pub fn format_time(minutes: u32) -> String {
     format!("{:02}:{:02}", minutes / 60, minutes % 60)
@@ -270,6 +317,36 @@ mod tests {
             (2026, 10, 30),
             ["04:37", "12:02", "15:20", "18:06", "19:16"],
         );
+    }
+
+    #[test]
+    fn qibla_from_indonesia_points_west_north_west() {
+        // Kemenag gives about 295° for Jakarta.
+        let jakarta = qibla(JAKARTA);
+        assert!((jakarta - 295.15).abs() < 0.5, "Jakarta qibla {jakarta}");
+        assert_eq!(compass_point(jakarta), "Barat Laut");
+        let aimas = qibla(Location {
+            latitude: -0.95698,
+            longitude: 131.33534,
+            elevation: 9.0,
+        });
+        assert!((285.0..300.0).contains(&aimas), "Aimas qibla {aimas}");
+    }
+
+    #[test]
+    fn rolls_over_months_and_years() {
+        assert_eq!(next_day(2026, 10, 30), (2026, 10, 31));
+        assert_eq!(next_day(2026, 10, 31), (2026, 11, 1));
+        assert_eq!(next_day(2026, 12, 31), (2027, 1, 1));
+        assert_eq!(next_day(2028, 2, 28), (2028, 2, 29));
+    }
+
+    #[test]
+    fn formats_waits() {
+        assert_eq!(format_wait(0), "< 1 mnt");
+        assert_eq!(format_wait(12), "12 mnt");
+        assert_eq!(format_wait(60), "1 jam");
+        assert_eq!(format_wait(72), "1 jam 12 mnt");
     }
 
     #[test]

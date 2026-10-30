@@ -67,7 +67,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     shelf_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, MUSIC_CARD,
-    MUSIC_STRIP, STATUS_CARD, TIMER_STRIP,
+    MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -75,8 +75,8 @@ use config::{PrayerSettings, Settings};
 use frames::Pacer;
 use media::{Command, Media, Track};
 use render::{
-    glyph, CalendarControl, CalendarScene, MusicScene, Page, Renderer, Scene, ShelfHit, ShelfScene,
-    StatusScene, TimerScene, WeatherScene,
+    glyph, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer, Scene,
+    ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -117,6 +117,8 @@ const SHELF_SHOWN: Duration = Duration::from_secs(3);
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
 const PAGE_SWITCH: Duration = Duration::from_millis(260);
+/// A prayer this many minutes away or closer shows in the closed notch.
+const PRAYER_SOON_MINUTES: u32 = 30;
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
@@ -470,17 +472,39 @@ impl App {
             Page::Music => MUSIC_CARD,
             Page::Status => STATUS_CARD,
             Page::Calendar => CALENDAR_CARD,
+            Page::Prayer => PRAYER_CARD,
         });
-        // A running or paused timer takes the strip over from music.
-        let playing = self.track.as_ref().is_some_and(|track| track.playing);
-        let strip = if !self.pomodoro.idle() {
-            Some(TIMER_STRIP)
-        } else if playing {
-            Some(MUSIC_STRIP)
-        } else {
-            None
+        let strip = match self.strip() {
+            Strip::Timer => Some(TIMER_STRIP),
+            Strip::Music => Some(MUSIC_STRIP),
+            Strip::Prayer => Some(PRAYER_STRIP),
+            Strip::None => None,
         };
         self.notch.set_live(strip, card);
+    }
+
+    /// What the closed notch shows beside the clock: a running or paused
+    /// timer first, then music that is playing, then a prayer close at hand.
+    fn strip(&self) -> Strip {
+        if !self.pomodoro.idle() {
+            Strip::Timer
+        } else if self.track.as_ref().is_some_and(|track| track.playing) {
+            Strip::Music
+        } else if self.prayer_soon().is_some() {
+            Strip::Prayer
+        } else {
+            Strip::None
+        }
+    }
+
+    /// "Maghrib 12 mnt" while the next prayer is less than half an hour away.
+    fn prayer_soon(&self) -> Option<String> {
+        let day = self.prayer.as_ref()?;
+        let now = minutes_now();
+        let next = day.next(now)?;
+        let wait = day.times[next] - now;
+        (wait <= PRAYER_SOON_MINUTES)
+            .then(|| format!("{} {}", prayer::NAMES[next], prayer::format_wait(wait)))
     }
 
     /// The card's pages, in wheel order; music only while there is some.
@@ -491,7 +515,11 @@ impl App {
         if self.track.is_some() {
             pages.push(Page::Music);
         }
-        pages.extend([Page::Status, Page::Calendar]);
+        pages.push(Page::Status);
+        if self.prayer.is_some() {
+            pages.push(Page::Prayer);
+        }
+        pages.push(Page::Calendar);
         if !self.shelf.is_empty() {
             pages.push(Page::Shelf);
         }
@@ -566,7 +594,7 @@ impl App {
             Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
-            Page::Status => false,
+            Page::Status | Page::Prayer => false,
         }
     }
 
@@ -849,6 +877,38 @@ impl App {
         }
     }
 
+    /// The prayer page: the next prayer (tomorrow's Subuh after Isya), how
+    /// long until it, today's times, and the qibla.
+    fn prayer_scene(&self) -> Option<PrayerScene> {
+        let day = self.prayer.as_ref()?;
+        let now = minutes_now();
+        let next_today = day.next(now);
+        let (next, time) = match next_today {
+            Some(index) => (index, day.times[index]),
+            None => {
+                let (y, m, d) = prayer::next_day(day.date.0, day.date.1, day.date.2);
+                let tomorrow = prayer::schedule(
+                    y as i32,
+                    m as u32,
+                    d as u32,
+                    day.settings.location,
+                    prayer::utc_offset_hours(),
+                );
+                (0, tomorrow[0] + 24 * 60)
+            }
+        };
+        let qibla = prayer::qibla(day.settings.location);
+        Some(PrayerScene {
+            next_name: prayer::NAMES[next],
+            next_time: prayer::format_time(time % (24 * 60)),
+            wait: prayer::format_wait(time.saturating_sub(now)),
+            times: day.times.map(prayer::format_time),
+            next_today,
+            qibla,
+            direction: prayer::compass_point(qibla),
+        })
+    }
+
     /// Today's schedule for the tray menu: a heading and one line per prayer.
     fn prayer_menu(&self) -> (String, Vec<String>) {
         match &self.prayer {
@@ -964,6 +1024,7 @@ impl App {
     fn draw(&self) {
         let n = &self.notch;
         let date = date_text();
+        let soon = self.prayer_soon();
         let scene = Scene {
             width: n.width.value,
             height: n.height.value,
@@ -1007,7 +1068,9 @@ impl App {
                 on_break: self.pomodoro.phase == Phase::Break,
                 session: self.pomodoro.session,
             }),
-            timer_strip: !self.pomodoro.idle(),
+            strip: self.strip(),
+            prayer_soon: soon.as_deref().unwrap_or(""),
+            prayer: self.prayer_scene(),
             shelf: ShelfScene {
                 items: self.shelf.items(),
                 hover: self.shelf_hover,
@@ -1335,7 +1398,7 @@ fn date_text() -> String {
 
 fn current_clock() -> String {
     let time = unsafe { GetLocalTime() };
-    format!("{:02}.{:02}", time.wHour, time.wMinute)
+    format!("{:02}:{:02}", time.wHour, time.wMinute)
 }
 
 /// Local minutes after midnight.
