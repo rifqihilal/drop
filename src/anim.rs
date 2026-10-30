@@ -13,8 +13,8 @@ pub const NOTICE_WIDTH: (f32, f32) = (200.0, 380.0);
 pub const NOTICE_HEIGHT: f32 = 62.0;
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
-/// How long a notification stays up.
-const NOTICE_DURATION: Duration = Duration::from_millis(3500);
+/// How long a notification stays up by default.
+pub const NOTICE_DURATION: Duration = Duration::from_millis(3500);
 /// How long a notice stays up after its content is refreshed.
 const NOTICE_REFRESH_HOLD: Duration = Duration::from_millis(2500);
 
@@ -184,6 +184,7 @@ pub enum Content {
 /// Colour of a notice's ring and accent icon.
 #[derive(Clone, Copy)]
 pub enum Accent {
+    Green,
     Red,
     Blue,
     Teal,
@@ -192,8 +193,8 @@ pub enum Accent {
 /// What sits on the right of a notice, if anything.
 pub enum Trailing {
     None,
-    /// A large percentage, such as a battery level.
-    Percent(u32),
+    /// Large text, such as a battery level or a time.
+    Text(String),
     /// An icon in a glowing circle, such as headphones.
     Icon(&'static str),
 }
@@ -294,11 +295,11 @@ impl Notch {
     }
 
     /// Shows a notice in a notch `width` wide (measured by the renderer).
-    pub fn show_notice(&mut self, notice: Notice, width: f32, now: Instant) {
+    pub fn show_notice(&mut self, notice: Notice, width: f32, duration: Duration, now: Instant) {
         self.banner = Some(Banner {
             content: Content::Notice(notice),
             size: (width.clamp(NOTICE_WIDTH.0, NOTICE_WIDTH.1), NOTICE_HEIGHT),
-            until: now + NOTICE_DURATION,
+            until: now + duration,
         });
         self.activate();
     }

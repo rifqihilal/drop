@@ -82,6 +82,7 @@ pub mod glyph {
     pub const WIFI: &str = "\u{E701}";
     pub const BLUETOOTH: &str = "\u{E702}";
     pub const HEADPHONES: &str = "\u{E7F6}";
+    pub const PRAYER: &str = "\u{E823}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -102,6 +103,7 @@ const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
 
 fn accent_color(accent: Accent) -> D2D1_COLOR_F {
     match accent {
+        Accent::Green => color(0.19, 0.82, 0.35, 1.0),
         Accent::Red => color(1.0, 0.27, 0.23, 1.0),
         Accent::Blue => color(0.25, 0.62, 1.0, 1.0),
         Accent::Teal => color(0.39, 0.82, 1.0, 1.0),
@@ -135,7 +137,8 @@ struct CardLayout {
     text_width: f32,
     title: TextBlock,
     subtitle: TextBlock,
-    percent: Option<TextBlock>,
+    /// The trailing large text, if any.
+    big: Option<TextBlock>,
 }
 
 pub struct Renderer {
@@ -436,14 +439,12 @@ impl Renderer {
         let title = self.text_layout(&notice.title, &self.title_text, TEXT_MAX)?;
         let subtitle = self.text_layout(&notice.subtitle, &self.subtitle_text, TEXT_MAX)?;
         let text_width = title.width.max(subtitle.width).min(TEXT_MAX);
-        let percent = match notice.trailing {
-            Trailing::Percent(value) => {
-                Some(self.text_layout(&format!("{value}%"), &self.trailing_text, 120.0)?)
-            }
+        let big = match &notice.trailing {
+            Trailing::Text(text) => Some(self.text_layout(text, &self.trailing_text, 120.0)?),
             _ => None,
         };
-        let trailing_width = match (&notice.trailing, &percent) {
-            (Trailing::Percent(_), Some(percent)) => TRAILING_GAP + percent.width,
+        let trailing_width = match (&notice.trailing, &big) {
+            (Trailing::Text(_), Some(big)) => TRAILING_GAP + big.width,
             (Trailing::Icon(_), _) => TRAILING_GAP + TRAILING_ICON,
             _ => 0.0,
         };
@@ -453,7 +454,7 @@ impl Renderer {
             text_width,
             title,
             subtitle,
-            percent,
+            big,
         })
     }
 
@@ -526,10 +527,10 @@ impl Renderer {
         );
 
         let trailing_x = text_x + card.text_width + TRAILING_GAP;
-        match (&notice.trailing, &card.percent) {
-            (Trailing::Percent(_), Some(percent)) => {
-                let y = cy - percent.height / 2.0;
-                self.draw_layout(&percent.layout, trailing_x, y, 0.97 * alpha);
+        match (&notice.trailing, &card.big) {
+            (Trailing::Text(_), Some(big)) => {
+                let y = cy - big.height / 2.0;
+                self.draw_layout(&big.layout, trailing_x, y, 0.97 * alpha);
             }
             (Trailing::Icon(icon), _) => {
                 self.draw_badge(icon, trailing_x + TRAILING_ICON / 2.0, cy, accent, alpha);

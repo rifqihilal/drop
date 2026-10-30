@@ -11,17 +11,19 @@
 mod anim;
 mod autostart;
 mod bluetooth;
+mod config;
 mod keys;
 mod osd;
+mod prayer;
 mod render;
 mod system;
 mod tray;
 mod wifi;
 
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use windows::core::{w, Result};
+use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
@@ -29,7 +31,9 @@ use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAU
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
+use windows::Win32::System::SystemServices::TIME_ZONE_ID_DAYLIGHT;
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
@@ -38,14 +42,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
-    MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP,
-    WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONUP, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{LevelKind, Notch, Notice};
 use bluetooth::{Bluetooth, DeviceEvent};
+use config::PrayerSettings;
 use render::{Renderer, Scene};
 use system::{Audio, PowerEvent};
 use wifi::Wifi;
@@ -70,6 +75,9 @@ const LOW_BATTERY: [u32; 2] = [20, 10];
 const DEMO_STEP: Duration = Duration::from_secs(4);
 /// Wait before reading a newly connected device's battery level.
 const BATTERY_DELAY: Duration = Duration::from_millis(2500);
+/// Prayer reminders stay up longer than other notices.
+const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
+const MENU_PRAYER_SETTINGS: usize = 3;
 
 struct App {
     hwnd: HWND,
@@ -95,6 +103,41 @@ struct App {
     demo: Option<(usize, Instant)>,
     /// A connected Bluetooth device whose battery level is read at the deadline.
     battery_check: Option<(Instant, DeviceEvent)>,
+    /// Today's prayer times; None until a location is set in the settings file.
+    prayer: Option<PrayerDay>,
+    /// Last seen modification time of the settings file.
+    config_stamp: Option<SystemTime>,
+}
+
+/// One day's prayer schedule and which reminders already went off.
+struct PrayerDay {
+    settings: PrayerSettings,
+    date: (u16, u16, u16),
+    times: prayer::Schedule,
+    reminded: [bool; 5],
+}
+
+impl PrayerDay {
+    fn new(settings: PrayerSettings, date: (u16, u16, u16)) -> Self {
+        let times = prayer::schedule(
+            date.0 as i32,
+            date.1 as u32,
+            date.2 as u32,
+            settings.location,
+            utc_offset_hours(),
+        );
+        Self {
+            settings,
+            date,
+            times,
+            reminded: [false; 5],
+        }
+    }
+
+    /// The next prayer after `now` (minutes after midnight), if any is left today.
+    fn next(&self, now: u32) -> Option<usize> {
+        (0..prayer::NAMES.len()).find(|&i| self.times[i] > now)
+    }
 }
 
 thread_local! {
@@ -159,7 +202,13 @@ fn main() -> Result<()> {
             battery: None,
             demo: has_flag("--demo").then(|| (0, now + Duration::from_secs(1))),
             battery_check: None,
+            prayer: None,
+            config_stamp: None,
         };
+        config::ensure_exists();
+        // Load quietly: the "schedule ready" notice is for later edits only.
+        app.config_stamp = config::modified();
+        app.update_prayer();
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         tray::add(hwnd);
@@ -214,11 +263,14 @@ impl App {
                 self.notify(notices::demo(index));
             }
         }
-        let moving = self.notch.step(now, dt);
-
         let clock = current_clock();
         let clock_changed = clock != self.clock;
         self.clock = clock;
+        if clock_changed {
+            self.update_prayer();
+        }
+
+        let moving = self.notch.step(now, dt);
 
         if moving || clock_changed {
             self.draw();
@@ -246,11 +298,74 @@ impl App {
     /// Shows a notice with the notification sound. Every notice uses the same
     /// sound so they are recognizable by ear.
     fn notify(&mut self, notice: Notice) {
+        self.notify_for(notice, anim::NOTICE_DURATION);
+    }
+
+    fn notify_for(&mut self, notice: Notice, duration: Duration) {
         chime();
         let width = self.renderer.notice_width(&notice);
-        self.notch.show_notice(notice, width, Instant::now());
+        self.notch
+            .show_notice(notice, width, duration, Instant::now());
         // Called from `tick` too, which redraws right after.
         self.schedule(FRAME_MS);
+    }
+
+    /// Reloads the prayer schedule when the settings file changed or the day
+    /// rolled over, then raises any reminder that is due. Runs once a minute.
+    fn update_prayer(&mut self) {
+        let stamp = config::modified();
+        let edited = stamp != self.config_stamp;
+        self.config_stamp = stamp;
+        let today = today();
+        let stale = self.prayer.as_ref().is_none_or(|day| day.date != today);
+        if edited || stale {
+            self.prayer = config::load_prayer().map(|settings| PrayerDay::new(settings, today));
+            // Confirms a hand edit of the settings file took effect.
+            if edited {
+                if let Some(day) = &self.prayer {
+                    let notice = notices::prayer_ready(day);
+                    self.notify(notice);
+                }
+            }
+        }
+
+        let now = minutes_now();
+        let Some(day) = &mut self.prayer else {
+            return;
+        };
+        let lead = day.settings.remind_minutes;
+        // A reminder fires once, inside its window; a computer waking from
+        // sleep after the prayer time skips it.
+        let due = (0..prayer::NAMES.len())
+            .find(|&i| !day.reminded[i] && now + lead >= day.times[i] && now < day.times[i]);
+        if let Some(i) = due {
+            day.reminded[i] = true;
+            let notice = notices::prayer(i, day.times[i] - now, day);
+            self.notify_for(notice, PRAYER_NOTICE_DURATION);
+        }
+    }
+
+    /// Today's schedule for the tray menu: a heading and one line per prayer.
+    fn prayer_menu(&self) -> (String, Vec<String>) {
+        match &self.prayer {
+            Some(day) => {
+                let heading = if day.settings.city.is_empty() {
+                    "Jadwal sholat".to_string()
+                } else {
+                    format!("Jadwal sholat · {}", day.settings.city)
+                };
+                let lines = prayer::NAMES
+                    .iter()
+                    .zip(day.times)
+                    .map(|(name, time)| format!("{name}\t{}", prayer::format_time(time)))
+                    .collect();
+                (heading, lines)
+            }
+            None => (
+                "Jadwal sholat".to_string(),
+                vec!["Lokasi belum diatur".to_string()],
+            ),
+        }
     }
 
     fn on_volume(&mut self, wparam: WPARAM, lparam: LPARAM) {
@@ -452,6 +567,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 fn handle_menu(hwnd: HWND) {
     match show_menu(hwnd) {
         MENU_AUTOSTART => autostart::set_enabled(!autostart::is_enabled()),
+        MENU_PRAYER_SETTINGS => config::open_in_editor(),
         MENU_QUIT => unsafe {
             let _ = DestroyWindow(hwnd);
         },
@@ -476,6 +592,28 @@ fn show_menu(hwnd: HWND) -> usize {
         let Ok(menu) = CreatePopupMenu() else {
             return 0;
         };
+
+        // Today's schedule as a read-only submenu.
+        let (heading, lines) = APP.with(|cell| {
+            cell.try_borrow()
+                .ok()
+                .and_then(|app| app.as_ref().map(App::prayer_menu))
+                .unwrap_or_default()
+        });
+        if let Ok(schedule) = CreatePopupMenu() {
+            for line in &lines {
+                let _ = AppendMenuW(schedule, MF_STRING | MF_GRAYED, 0, &HSTRING::from(line));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, schedule.0 as usize, &HSTRING::from(heading));
+        }
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_PRAYER_SETTINGS,
+            w!("Atur lokasi sholat…"),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+
         let autostart_flags = if autostart::is_enabled() {
             MF_STRING | MF_CHECKED
         } else {
@@ -529,6 +667,30 @@ fn current_clock() -> String {
     format!("{:02}.{:02}", time.wHour, time.wMinute)
 }
 
+/// Local (year, month, day).
+fn today() -> (u16, u16, u16) {
+    let time = unsafe { GetLocalTime() };
+    (time.wYear, time.wMonth, time.wDay)
+}
+
+/// Local minutes after midnight.
+fn minutes_now() -> u32 {
+    let time = unsafe { GetLocalTime() };
+    time.wHour as u32 * 60 + time.wMinute as u32
+}
+
+/// Hours the local clock is ahead of UTC, including daylight saving.
+fn utc_offset_hours() -> f64 {
+    let mut zone = TIME_ZONE_INFORMATION::default();
+    let kind = unsafe { GetTimeZoneInformation(&mut zone) };
+    let bias = if kind == TIME_ZONE_ID_DAYLIGHT {
+        zone.Bias + zone.DaylightBias
+    } else {
+        zone.Bias + zone.StandardBias
+    };
+    -(bias as f64) / 60.0
+}
+
 fn window_scale(hwnd: HWND) -> f32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 {
@@ -567,7 +729,9 @@ fn chime() {
 /// The notice cards Drop shows.
 mod notices {
     use crate::anim::{Accent, Notice, Trailing};
+    use crate::prayer::{format_time, NAMES};
     use crate::render::glyph;
+    use crate::{minutes_now, PrayerDay};
 
     pub fn wifi(ssid: &str, connected: bool) -> Notice {
         Notice {
@@ -617,14 +781,62 @@ mod notices {
             progress: percent as f32 / 100.0,
             title: "Baterai lemah".to_string(),
             subtitle: "Colokkan charger".to_string(),
-            trailing: Trailing::Percent(percent),
+            trailing: Trailing::Text(format!("{percent}%")),
+            dim: false,
+        }
+    }
+
+    /// "Dzuhur 5 menit lagi", with the prayer time large on the right.
+    pub fn prayer(index: usize, minutes_left: u32, day: &PrayerDay) -> Notice {
+        prayer_reminder(
+            NAMES[index],
+            minutes_left,
+            &format_time(day.times[index]),
+            &day.settings.city,
+        )
+    }
+
+    fn prayer_reminder(name: &str, minutes_left: u32, time: &str, city: &str) -> Notice {
+        Notice {
+            icon: glyph::PRAYER,
+            accent: Accent::Green,
+            progress: 1.0,
+            title: format!("{name} {minutes_left} menit lagi"),
+            subtitle: if city.is_empty() {
+                "Waktu sholat".to_string()
+            } else {
+                format!("Waktu sholat · {city}")
+            },
+            trailing: Trailing::Text(time.to_string()),
+            dim: false,
+        }
+    }
+
+    /// Confirms a new location: names the place and the next prayer.
+    pub fn prayer_ready(day: &PrayerDay) -> Notice {
+        let city = if day.settings.city.is_empty() {
+            "Lokasi tersimpan".to_string()
+        } else {
+            day.settings.city.clone()
+        };
+        // After Isya the next prayer is tomorrow's Subuh, a minute or so off
+        // today's; today's time is close enough for a confirmation.
+        let next = day.next(minutes_now()).unwrap_or(0);
+        Notice {
+            icon: glyph::PRAYER,
+            accent: Accent::Green,
+            progress: 1.0,
+            title: "Jadwal sholat aktif".to_string(),
+            subtitle: format!("{city} · berikutnya {}", NAMES[next]),
+            trailing: Trailing::Text(format_time(day.times[next])),
             dim: false,
         }
     }
 
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 6 {
+        match index % 7 {
+            6 => prayer_reminder("Dzuhur", 5, "11:40", "Jakarta"),
             0 => wifi("Rumah 5G", true),
             1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(70)),
             2 => low_battery(20),
