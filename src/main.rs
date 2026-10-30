@@ -712,6 +712,16 @@ impl App {
         }
     }
 
+    /// The side arrow at (`x`, `y`), when the card has pages to switch to.
+    fn arrow_at(&self, x: f32, y: f32) -> Option<f32> {
+        if self.pages().len() < 2 {
+            return None;
+        }
+        let n = &self.notch;
+        self.renderer
+            .card_arrow_at(x, y, n.width.value, n.height.value)
+    }
+
     fn todo_hit(&self, x: f32, y: f32) -> Option<TodoHit> {
         if self.shown_page() != Page::Todo || self.notch.card_visible.value < 0.5 {
             return None;
@@ -822,6 +832,9 @@ impl App {
             return false;
         }
         let width = self.notch.width.value;
+        if self.arrow_at(x, y).is_some() {
+            return true;
+        }
         match self.shown_page() {
             Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
@@ -924,14 +937,20 @@ impl App {
         if self.notch.card_visible.target == 0.0 {
             return;
         }
+        let down = ((wparam.0 >> 16) as i16) < 0;
+        self.step_page(down);
+    }
+
+    /// Moves the open card to the next page (`forward`) or the one before,
+    /// wrapping around.
+    fn step_page(&mut self, forward: bool) {
         self.finish_editing(true, true);
         let pages = self.pages();
         let current = pages
             .iter()
             .position(|page| *page == self.shown_page())
             .unwrap_or(0);
-        let down = ((wparam.0 >> 16) as i16) < 0;
-        let next = if down {
+        let next = if forward {
             (current + 1) % pages.len()
         } else {
             (current + pages.len() - 1) % pages.len()
@@ -940,7 +959,7 @@ impl App {
             self.page_switch = Some(PageSwitch {
                 from: pages[current],
                 started: Instant::now(),
-                direction: if down { 1.0 } else { -1.0 },
+                direction: if forward { 1.0 } else { -1.0 },
             });
         }
         self.page = pages[next];
@@ -1124,6 +1143,12 @@ impl App {
 
     fn on_click(&mut self, lparam: LPARAM) {
         let (x, y) = self.logical_point(lparam);
+        if self.notch.card_visible.value >= 0.5 && !self.drag_over {
+            if let Some(direction) = self.arrow_at(x, y) {
+                self.step_page(direction > 0.0);
+                return;
+            }
+        }
         if self.shown_page() == Page::Shelf {
             self.on_shelf_click(x, y);
             return;
@@ -1496,7 +1521,6 @@ impl App {
                 .as_ref()
                 .map_or(1.0, |switch| switch.direction),
             status: StatusScene {
-                time: &self.clock,
                 date: &date,
                 weather: self.weather.as_ref().map(|weather| WeatherScene {
                     glyph: weather.glyph(),

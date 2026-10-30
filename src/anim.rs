@@ -15,45 +15,59 @@ pub const NOTICE_WIDTH: (f32, f32) = (200.0, 380.0);
 pub const NOTICE_HEIGHT: f32 = 62.0;
 /// Notch size while music plays: album art and level bars.
 pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
+/// Every open card is this wide: a page between two side arrows.
+pub const CARD_WIDTH: f32 = 400.0 + 2.0 * CARD_SIDE;
+/// Room for the side arrows on each side of a page.
+pub const CARD_SIDE: f32 = 30.0;
+/// Pages sit this far down, under the card's header row.
+pub const CARD_TOP: f32 = 22.0;
+
+/// A card whose page is `height` tall.
+const fn card(height: f32) -> (f32, f32) {
+    (CARD_WIDTH, CARD_TOP + height)
+}
+
 /// Notch size of the full music card.
-pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
+pub const MUSIC_CARD: (f32, f32) = card(112.0);
 /// The music card with two lines of lyrics under the controls.
-pub const MUSIC_LYRICS_CARD: (f32, f32) = (380.0, 166.0);
-/// Notch size of the status card: clock, weather and battery.
-pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
+pub const MUSIC_LYRICS_CARD: (f32, f32) = card(166.0);
+/// Notch size of the status card: weather, the next prayer and battery.
+pub const STATUS_CARD: (f32, f32) = card(104.0);
 /// Notch size of the calendar and Pomodoro card.
-pub const CALENDAR_CARD: (f32, f32) = (400.0, 198.0);
+pub const CALENDAR_CARD: (f32, f32) = card(198.0);
 /// Notch size of the weather card.
-pub const WEATHER_CARD: (f32, f32) = (400.0, 196.0);
+pub const WEATHER_CARD: (f32, f32) = card(196.0);
 /// Notch size of the prayer card.
-pub const PRAYER_CARD: (f32, f32) = (400.0, 166.0);
+pub const PRAYER_CARD: (f32, f32) = card(166.0);
 /// Notch size while files are dragged over it.
 pub const DROP_ZONE: (f32, f32) = (320.0, 84.0);
 /// The shelf card holds two rows at most.
-pub const SHELF_CARD_MAX: (f32, f32) = (400.0, 226.0);
+pub const SHELF_CARD_MAX: (f32, f32) = card(226.0);
 
 /// Shelf card size for `count` files: one row of five per 82 px.
 pub fn shelf_card(count: usize) -> (f32, f32) {
     let rows = count.div_ceil(5).clamp(1, 2) as f32;
-    (SHELF_CARD_MAX.0, 62.0 + rows * 82.0)
+    card(62.0 + rows * 82.0)
 }
 /// The task card at its fullest.
-pub const TODO_CARD_MAX: (f32, f32) = (400.0, 62.0 + todo::CAPACITY as f32 * TODO_ROW);
+pub const TODO_CARD_MAX: (f32, f32) = card(62.0 + todo::CAPACITY as f32 * TODO_ROW);
 /// Height of one task on the task card.
 pub const TODO_ROW: f32 = 28.0;
 
 /// Task card size for `count` tasks; an empty list keeps one row for its hint.
 pub fn todo_card(count: usize) -> (f32, f32) {
     let rows = count.clamp(1, todo::CAPACITY) as f32;
-    (TODO_CARD_MAX.0, 62.0 + rows * TODO_ROW)
+    card(62.0 + rows * TODO_ROW)
 }
 /// Events listed on the agenda card at most.
 pub const AGENDA_ROWS: usize = 5;
+/// Top of the first event on the agenda page.
+pub const AGENDA_TOP: f32 = 12.0;
 
 /// Agenda card size for `count` events; none keeps one row for its hint.
 pub fn agenda_card(count: usize) -> (f32, f32) {
     let rows = count.clamp(1, AGENDA_ROWS) as f32;
-    (TODO_CARD_MAX.0, 62.0 + rows * TODO_ROW)
+    card(AGENDA_TOP + rows * TODO_ROW + 22.0)
 }
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
