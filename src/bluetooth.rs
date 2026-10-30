@@ -18,6 +18,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// headsets open several links while connecting.
 const REPEAT_WINDOW: Duration = Duration::from_secs(5);
 
+pub struct DeviceEvent {
+    pub name: String,
+    pub connected: bool,
+    /// Headphones, speakers and the like.
+    pub audio: bool,
+}
+
 pub struct Bluetooth {
     radio: HANDLE,
     notify: HDEVNOTIFY,
@@ -60,9 +67,8 @@ impl Bluetooth {
         }
     }
 
-    /// Reads a WM_DEVICECHANGE. Returns the device name and whether it
-    /// connected, for paired devices only.
-    pub fn event(&mut self, wparam: WPARAM, lparam: LPARAM) -> Option<(String, bool)> {
+    /// Reads a WM_DEVICECHANGE. Reports paired devices only.
+    pub fn event(&mut self, wparam: WPARAM, lparam: LPARAM) -> Option<DeviceEvent> {
         if wparam.0 as u32 != DBT_CUSTOMEVENT || lparam.0 == 0 {
             return None;
         }
@@ -93,13 +99,18 @@ impl Bluetooth {
         }
         self.recent.push((info.bthAddress, connected, now));
 
-        let name = self.paired_name(info.bthAddress)?;
-        Some((name, connected))
+        let (name, audio) = self.paired_device(info.bthAddress)?;
+        Some(DeviceEvent {
+            name,
+            connected,
+            audio,
+        })
     }
 
-    /// Name of a paired device. Unpaired devices (nearby phones, beacons)
-    /// connect in the background all the time and are not worth a notice.
-    fn paired_name(&self, address: u64) -> Option<String> {
+    /// Name of a paired device and whether it is an audio device. Unpaired
+    /// devices (nearby phones, beacons) connect in the background all the
+    /// time and are not worth a notice.
+    fn paired_device(&self, address: u64) -> Option<(String, bool)> {
         let mut device = BLUETOOTH_DEVICE_INFO {
             dwSize: size_of::<BLUETOOTH_DEVICE_INFO>() as u32,
             Address: BLUETOOTH_ADDRESS {
@@ -121,11 +132,14 @@ impl Bluetooth {
             .position(|&c| c == 0)
             .unwrap_or(device.szName.len());
         let name = String::from_utf16_lossy(&device.szName[..length]);
-        Some(if name.trim().is_empty() {
+        let name = if name.trim().is_empty() {
             "Perangkat Bluetooth".to_string()
         } else {
             name
-        })
+        };
+        // Bits 8..12 of the class of device hold the major class; 4 is audio/video.
+        let audio = (device.ulClassofDevice >> 8) & 0x1F == 4;
+        Some((name, audio))
     }
 }
 

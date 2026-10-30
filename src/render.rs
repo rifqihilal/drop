@@ -9,22 +9,27 @@ use std::ffi::c_void;
 use windows::core::{w, Result};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
-    D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_F,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, D2D1_ARC_SEGMENT,
-    D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
-    D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+    DWRITE_FONT_WEIGHT_SEMI_LIGHT, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -36,15 +41,28 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use windows_numerics::Vector2;
 
-use crate::anim::{Content, LevelKind, IDLE, LEVEL, NOTICE};
+use crate::anim::{
+    Accent, Content, LevelKind, Notice, Trailing, IDLE, LEVEL, NOTICE_HEIGHT, NOTICE_WIDTH,
+};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
-    max(max(IDLE.0, LEVEL.0), NOTICE.0) + 2.0 * EAR,
-    max(max(IDLE.1, LEVEL.1), NOTICE.1),
+    max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1) + 2.0 * EAR,
+    max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT),
 );
+
+// Notice card layout, left to right.
+const CARD_PAD_LEFT: f32 = 14.0;
+const RING: f32 = 38.0;
+const RING_STROKE: f32 = 3.5;
+const RING_GAP: f32 = 12.0;
+/// Longest title or subtitle before it is cut with an ellipsis.
+const TEXT_MAX: f32 = 220.0;
+const TRAILING_GAP: f32 = 22.0;
+const TRAILING_ICON: f32 = 38.0;
+const CARD_PAD_RIGHT: f32 = 18.0;
 
 const fn max(a: f32, b: f32) -> f32 {
     if a > b {
@@ -63,6 +81,7 @@ pub mod glyph {
     pub const BRIGHTNESS: &str = "\u{E706}";
     pub const WIFI: &str = "\u{E701}";
     pub const BLUETOOTH: &str = "\u{E702}";
+    pub const HEADPHONES: &str = "\u{E7F6}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -81,6 +100,14 @@ const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
     a: 1.0,
 };
 
+fn accent_color(accent: Accent) -> D2D1_COLOR_F {
+    match accent {
+        Accent::Red => color(1.0, 0.27, 0.23, 1.0),
+        Accent::Blue => color(0.25, 0.62, 1.0, 1.0),
+        Accent::Teal => color(0.39, 0.82, 1.0, 1.0),
+    }
+}
+
 /// Everything the renderer needs for one frame, in logical pixels.
 pub struct Scene<'a> {
     pub width: f32,
@@ -93,16 +120,39 @@ pub struct Scene<'a> {
     pub banner: Option<&'a Content>,
 }
 
+/// A measured line of text, ready to draw.
+struct TextBlock {
+    layout: IDWriteTextLayout,
+    width: f32,
+    height: f32,
+}
+
+/// Measured parts of a notice card.
+struct CardLayout {
+    /// Notch width the card needs.
+    width: f32,
+    /// Width of the title/subtitle column.
+    text_width: f32,
+    title: TextBlock,
+    subtitle: TextBlock,
+    percent: Option<TextBlock>,
+}
+
 pub struct Renderer {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     target: ID2D1DCRenderTarget,
     text: IDWriteTextFormat,
     small_text: IDWriteTextFormat,
-    notice_text: IDWriteTextFormat,
+    title_text: IDWriteTextFormat,
+    subtitle_text: IDWriteTextFormat,
+    trailing_text: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
+    /// Recolored per notice.
+    accent: ID2D1SolidColorBrush,
+    round_caps: ID2D1StrokeStyle,
     dc: HDC,
     bitmap: HBITMAP,
     previous: HGDIOBJ,
@@ -161,13 +211,27 @@ impl Renderer {
 
             let black = target.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 1.0), None)?;
             let light = target.CreateSolidColorBrush(&EYE_COLOR, None)?;
+            let accent = target.CreateSolidColorBrush(&accent_color(Accent::Blue), None)?;
+            let round_caps = factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_FLAT,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_SOLID,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let format = |family, size| -> Result<IDWriteTextFormat> {
+            let font = w!("Segoe UI Variable Display");
+            let format = |family, weight: DWRITE_FONT_WEIGHT, size| -> Result<IDWriteTextFormat> {
                 let format = dwrite.CreateTextFormat(
                     family,
                     None,
-                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    weight,
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
                     size,
@@ -177,22 +241,29 @@ impl Renderer {
                 format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
                 Ok(format)
             };
-            let text = format(w!("Segoe UI Variable Display"), 13.0)?;
-            let small_text = format(w!("Segoe UI Variable Display"), 12.0)?;
-            let icons = format(w!("Segoe Fluent Icons"), 15.0)?;
-            // Left-aligned on one line; long names end in an ellipsis.
-            let notice_text = format(w!("Segoe UI Variable Display"), 13.0)?;
-            notice_text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-            notice_text.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-            let ellipsis = dwrite.CreateEllipsisTrimmingSign(&notice_text)?;
-            notice_text.SetTrimming(
-                &DWRITE_TRIMMING {
-                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                    delimiter: 0,
-                    delimiterCount: 0,
-                },
-                &ellipsis,
-            )?;
+            // Left-aligned single line from the top; too long ends in an ellipsis.
+            let line = |weight, size| -> Result<IDWriteTextFormat> {
+                let format = format(font, weight, size)?;
+                format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+                format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+                let ellipsis = dwrite.CreateEllipsisTrimmingSign(&format)?;
+                format.SetTrimming(
+                    &DWRITE_TRIMMING {
+                        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                        delimiter: 0,
+                        delimiterCount: 0,
+                    },
+                    &ellipsis,
+                )?;
+                Ok(format)
+            };
+            let text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
+            let small_text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0)?;
+            let icons = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 15.0)?;
+            let title_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5)?;
+            let subtitle_text = line(DWRITE_FONT_WEIGHT_NORMAL, 12.5)?;
+            let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
 
             Ok(Self {
                 factory,
@@ -200,10 +271,14 @@ impl Renderer {
                 target,
                 text,
                 small_text,
-                notice_text,
+                title_text,
+                subtitle_text,
+                trailing_text,
                 icons,
                 black,
                 light,
+                accent,
+                round_caps,
                 dc,
                 bitmap,
                 previous,
@@ -344,57 +419,213 @@ impl Renderer {
                 self.draw_text(glyph, &self.icons, icon_box, alpha);
                 self.draw_level(x0, x1, h, level, *muted, alpha);
             }
-            Content::Notice { glyph, text, dim } => {
-                self.draw_notice(glyph, text, *dim, x0, x1, h, alpha);
-            }
+            Content::Notice(notice) => self.draw_notice(notice, x0, x1, h, alpha),
         }
     }
 
-    /// Icon and text centered together as one group; text too long for the
-    /// notch ends in an ellipsis.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn draw_notice(
+    /// Width of the notch needed to show `notice` in full (up to the cap).
+    pub fn notice_width(&self, notice: &Notice) -> f32 {
+        unsafe {
+            self.notice_layout(notice)
+                .map_or(NOTICE_WIDTH.0, |card| card.width)
+        }
+    }
+
+    /// Lays out a notice card; the same numbers size the notch and draw it.
+    unsafe fn notice_layout(&self, notice: &Notice) -> Option<CardLayout> {
+        let title = self.text_layout(&notice.title, &self.title_text, TEXT_MAX)?;
+        let subtitle = self.text_layout(&notice.subtitle, &self.subtitle_text, TEXT_MAX)?;
+        let text_width = title.width.max(subtitle.width).min(TEXT_MAX);
+        let percent = match notice.trailing {
+            Trailing::Percent(value) => {
+                Some(self.text_layout(&format!("{value}%"), &self.trailing_text, 120.0)?)
+            }
+            _ => None,
+        };
+        let trailing_width = match (&notice.trailing, &percent) {
+            (Trailing::Percent(_), Some(percent)) => TRAILING_GAP + percent.width,
+            (Trailing::Icon(_), _) => TRAILING_GAP + TRAILING_ICON,
+            _ => 0.0,
+        };
+        let width = CARD_PAD_LEFT + RING + RING_GAP + text_width + trailing_width + CARD_PAD_RIGHT;
+        Some(CardLayout {
+            width,
+            text_width,
+            title,
+            subtitle,
+            percent,
+        })
+    }
+
+    unsafe fn text_layout(
         &self,
-        glyph: &str,
         text: &str,
-        dim: bool,
-        x0: f32,
-        x1: f32,
-        h: f32,
-        alpha: f32,
-    ) {
-        const PADDING: f32 = 16.0;
-        const ICON: f32 = 18.0;
-        const GAP: f32 = 8.0;
-        let available = (x1 - x0 - 2.0 * PADDING - ICON - GAP).max(1.0);
+        format: &IDWriteTextFormat,
+        max_width: f32,
+    ) -> Option<TextBlock> {
         let wide: Vec<u16> = text.encode_utf16().collect();
-        let Ok(layout) = self
+        let layout = self
             .dwrite
-            .CreateTextLayout(&wide, &self.notice_text, available, h)
-        else {
+            .CreateTextLayout(&wide, format, max_width, 100.0)
+            .ok()?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        layout.GetMetrics(&mut metrics).ok()?;
+        Some(TextBlock {
+            layout,
+            width: metrics.width.min(max_width),
+            height: metrics.height,
+        })
+    }
+
+    /// Ring with icon, title over subtitle, then the trailing element; centered
+    /// as one group and clipped to the notch while it grows.
+    unsafe fn draw_notice(&self, notice: &Notice, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let Some(card) = self.notice_layout(notice) else {
             return;
         };
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        let text_width = match layout.GetMetrics(&mut metrics) {
-            Ok(()) => metrics.width.min(available),
-            Err(_) => available,
-        };
+        self.target
+            .PushAxisAlignedClip(&rect(x0, 0.0, x1, h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
-        let start = (x0 + x1) / 2.0 - (ICON + GAP + text_width) / 2.0;
-        let icon_alpha = if dim { 0.45 } else { 1.0 };
+        let start = (x0 + x1) / 2.0 - card.width / 2.0;
+        let cy = h / 2.0;
+        let accent = accent_color(notice.accent);
+
+        // Ring: a faint track, then the filled part in the accent colour.
+        let ring_cx = start + CARD_PAD_LEFT + RING / 2.0;
+        let (ring_color, ring_alpha, icon_alpha) = if notice.dim {
+            (color(1.0, 1.0, 1.0, 1.0), 0.35, 0.55)
+        } else {
+            (accent, 1.0, 1.0)
+        };
+        let _ = self.draw_ring(
+            ring_cx,
+            cy,
+            (RING - RING_STROKE) / 2.0,
+            notice.progress,
+            ring_color,
+            ring_alpha * alpha,
+        );
+        let half = RING / 2.0;
         self.draw_text(
-            glyph,
+            notice.icon,
             &self.icons,
-            rect(start, 0.0, start + ICON, h),
+            rect(ring_cx - half, cy - half, ring_cx + half, cy + half),
             icon_alpha * alpha,
         );
-        self.light.SetOpacity(0.95 * alpha);
-        self.target.DrawTextLayout(
-            pt(start + ICON + GAP, 0.0),
-            &layout,
-            &self.light,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
+
+        // Title over subtitle, the pair centered vertically.
+        let text_x = start + CARD_PAD_LEFT + RING + RING_GAP;
+        let stack = card.title.height + 1.0 + card.subtitle.height;
+        let top = cy - stack / 2.0;
+        self.draw_layout(&card.title.layout, text_x, top, 0.97 * alpha);
+        self.draw_layout(
+            &card.subtitle.layout,
+            text_x,
+            top + card.title.height + 1.0,
+            0.55 * alpha,
         );
+
+        let trailing_x = text_x + card.text_width + TRAILING_GAP;
+        match (&notice.trailing, &card.percent) {
+            (Trailing::Percent(_), Some(percent)) => {
+                let y = cy - percent.height / 2.0;
+                self.draw_layout(&percent.layout, trailing_x, y, 0.97 * alpha);
+            }
+            (Trailing::Icon(icon), _) => {
+                self.draw_badge(icon, trailing_x + TRAILING_ICON / 2.0, cy, accent, alpha);
+            }
+            _ => {}
+        }
+
+        self.target.PopAxisAlignedClip();
+    }
+
+    /// Progress ring starting at twelve and running clockwise.
+    unsafe fn draw_ring(
+        &self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        progress: f32,
+        fill: D2D1_COLOR_F,
+        alpha: f32,
+    ) -> Result<()> {
+        let ellipse = D2D1_ELLIPSE {
+            point: pt(cx, cy),
+            radiusX: radius,
+            radiusY: radius,
+        };
+        self.light.SetOpacity(0.14 * alpha);
+        self.target
+            .DrawEllipse(&ellipse, &self.light, RING_STROKE, None);
+
+        self.accent.SetColor(&fill);
+        self.accent.SetOpacity(alpha);
+        let progress = progress.clamp(0.0, 1.0);
+        if progress >= 0.999 {
+            self.target
+                .DrawEllipse(&ellipse, &self.accent, RING_STROKE, None);
+        } else if progress > 0.005 {
+            let angle = progress * std::f32::consts::TAU;
+            let geometry = self.factory.CreatePathGeometry()?;
+            let sink = geometry.Open()?;
+            sink.BeginFigure(pt(cx, cy - radius), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink.AddArc(&D2D1_ARC_SEGMENT {
+                point: pt(cx + radius * angle.sin(), cy - radius * angle.cos()),
+                size: D2D_SIZE_F {
+                    width: radius,
+                    height: radius,
+                },
+                rotationAngle: 0.0,
+                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                arcSize: if progress > 0.5 {
+                    D2D1_ARC_SIZE_LARGE
+                } else {
+                    D2D1_ARC_SIZE_SMALL
+                },
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            self.target
+                .DrawGeometry(&geometry, &self.accent, RING_STROKE, &self.round_caps);
+        }
+        Ok(())
+    }
+
+    /// An accent-coloured icon in a softly glowing circle.
+    unsafe fn draw_badge(&self, icon: &str, cx: f32, cy: f32, accent: D2D1_COLOR_F, alpha: f32) {
+        let r = TRAILING_ICON / 2.0;
+        let circle = |radius: f32| D2D1_ELLIPSE {
+            point: pt(cx, cy),
+            radiusX: radius,
+            radiusY: radius,
+        };
+        self.accent.SetColor(&accent);
+        self.accent.SetOpacity(0.12 * alpha);
+        self.target.FillEllipse(&circle(r), &self.accent);
+        self.accent.SetOpacity(0.18 * alpha);
+        self.target
+            .DrawEllipse(&circle(r + 1.5), &self.accent, 4.0, None);
+        self.accent.SetOpacity(0.8 * alpha);
+        self.target
+            .DrawEllipse(&circle(r - 4.0), &self.accent, 1.8, None);
+
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.accent.SetOpacity(alpha);
+        self.target.DrawText(
+            &wide,
+            &self.icons,
+            &rect(cx - r, cy - r, cx + r, cy + r),
+            &self.accent,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
+
+    unsafe fn draw_layout(&self, layout: &IDWriteTextLayout, x: f32, y: f32, alpha: f32) {
+        self.light.SetOpacity(alpha);
+        self.target
+            .DrawTextLayout(pt(x, y), layout, &self.light, D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
 
     /// Level bar and percentage.

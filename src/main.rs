@@ -44,9 +44,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use anim::{LevelKind, Notch};
+use anim::{LevelKind, Notch, Notice};
 use bluetooth::Bluetooth;
-use render::{glyph, Renderer, Scene};
+use render::{Renderer, Scene};
 use system::{Audio, PowerEvent};
 use wifi::Wifi;
 
@@ -190,14 +190,14 @@ impl App {
             .as_ref()
             .is_some_and(|(deadline, _)| now >= *deadline)
         {
-            self.wifi_lost = None;
-            self.notify(glyph::WIFI, "Wi-Fi terputus".to_string(), true);
+            if let Some((_, ssid)) = self.wifi_lost.take() {
+                self.notify(notices::wifi(&ssid, false));
+            }
         }
         if let Some((index, at)) = self.demo {
             if now >= at {
-                let (icon, text, dim) = demo_notice(index);
                 self.demo = Some((index + 1, now + DEMO_STEP));
-                self.notify(icon, text, dim);
+                self.notify(notices::demo(index));
             }
         }
         let moving = self.notch.step(now, dt);
@@ -230,9 +230,10 @@ impl App {
 
     /// Shows a notice with the notification sound. Every notice uses the same
     /// sound so they are recognizable by ear.
-    fn notify(&mut self, glyph: &'static str, text: String, dim: bool) {
+    fn notify(&mut self, notice: Notice) {
         chime();
-        self.notch.show_notice(glyph, text, dim, Instant::now());
+        let width = self.renderer.notice_width(&notice);
+        self.notch.show_notice(notice, width, Instant::now());
         // Called from `tick` too, which redraws right after.
         self.schedule(FRAME_MS);
     }
@@ -271,8 +272,7 @@ impl App {
                         .iter()
                         .any(|&level| previous > level && percent <= level)
                 {
-                    let text = format!("Baterai lemah · {percent}% · colokkan charger");
-                    self.notify(glyph::battery(percent), text, false);
+                    self.notify(notices::low_battery(percent));
                 }
             }
         }
@@ -286,7 +286,7 @@ impl App {
                     return;
                 }
             }
-            self.notify(glyph::WIFI, format!("Terhubung ke {ssid}"), false);
+            self.notify(notices::wifi(&ssid, true));
         } else {
             self.wifi_lost = Some((Instant::now() + WIFI_GRACE, ssid));
             self.schedule(BUSY_MS);
@@ -298,13 +298,8 @@ impl App {
             .bluetooth
             .as_mut()
             .and_then(|bluetooth| bluetooth.event(wparam, lparam));
-        if let Some((name, connected)) = event {
-            let text = if connected {
-                format!("{name} terhubung")
-            } else {
-                format!("{name} terputus")
-            };
-            self.notify(glyph::BLUETOOTH, text, !connected);
+        if let Some(event) = event {
+            self.notify(notices::bluetooth(event.name, event.connected, event.audio));
         }
     }
 
@@ -534,26 +529,68 @@ fn chime() {
     }
 }
 
-/// `--demo` cycles through sample notices to preview their look.
-fn demo_notice(index: usize) -> (&'static str, String, bool) {
-    match index % 6 {
-        0 => (glyph::WIFI, "Terhubung ke Rumah 5G".to_string(), false),
-        1 => (
-            glyph::BLUETOOTH,
-            "Galaxy Buds2 terhubung".to_string(),
-            false,
-        ),
-        2 => (
-            glyph::WIFI,
-            "Terhubung ke Jaringan Kantor Lantai 3 dengan nama yang sangat panjang".to_string(),
-            false,
-        ),
-        3 => (
-            glyph::battery(20),
-            "Baterai lemah · 20% · colokkan charger".to_string(),
-            false,
-        ),
-        4 => (glyph::BLUETOOTH, "Galaxy Buds2 terputus".to_string(), true),
-        _ => (glyph::WIFI, "Wi-Fi terputus".to_string(), true),
+/// The notice cards Drop shows.
+mod notices {
+    use crate::anim::{Accent, Notice, Trailing};
+    use crate::render::glyph;
+
+    pub fn wifi(ssid: &str, connected: bool) -> Notice {
+        Notice {
+            icon: glyph::WIFI,
+            accent: Accent::Teal,
+            progress: 1.0,
+            title: if connected {
+                ssid.to_string()
+            } else {
+                "Wi-Fi terputus".to_string()
+            },
+            subtitle: if connected {
+                "Wi-Fi terhubung".to_string()
+            } else {
+                ssid.to_string()
+            },
+            trailing: Trailing::None,
+            dim: !connected,
+        }
+    }
+
+    pub fn bluetooth(name: String, connected: bool, audio: bool) -> Notice {
+        Notice {
+            icon: glyph::BLUETOOTH,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: name,
+            subtitle: if connected { "Terhubung" } else { "Terputus" }.to_string(),
+            trailing: if audio && connected {
+                Trailing::Icon(glyph::HEADPHONES)
+            } else {
+                Trailing::None
+            },
+            dim: !connected,
+        }
+    }
+
+    pub fn low_battery(percent: u32) -> Notice {
+        Notice {
+            icon: glyph::battery(percent),
+            accent: Accent::Red,
+            progress: percent as f32 / 100.0,
+            title: "Baterai lemah".to_string(),
+            subtitle: "Colokkan charger".to_string(),
+            trailing: Trailing::Percent(percent),
+            dim: false,
+        }
+    }
+
+    /// `--demo` cycles through sample notices to preview their look.
+    pub fn demo(index: usize) -> Notice {
+        match index % 6 {
+            0 => wifi("Rumah 5G", true),
+            1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true),
+            2 => low_battery(20),
+            3 => wifi("Jaringan Kantor Lantai 3 dengan nama sangat panjang", true),
+            4 => bluetooth("Galaxy Buds2 Pro".to_string(), false, true),
+            _ => wifi("Rumah 5G", false),
+        }
     }
 }

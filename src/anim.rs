@@ -8,8 +8,9 @@ pub const COMPACT: (f32, f32) = (132.0, 28.0);
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.
 pub const LEVEL: (f32, f32) = (220.0, 36.0);
-/// Notch size while showing a notification.
-pub const NOTICE: (f32, f32) = (300.0, 36.0);
+/// Notch width range and height while showing a notification.
+pub const NOTICE_WIDTH: (f32, f32) = (200.0, 380.0);
+pub const NOTICE_HEIGHT: f32 = 62.0;
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up.
@@ -175,18 +176,45 @@ pub enum Content {
         level: Spring,
         muted: bool,
     },
-    /// A short message with an icon, such as "Wi-Fi terhubung".
-    Notice {
-        glyph: &'static str,
-        text: String,
-        /// Draws the icon faded, for things that went away.
-        dim: bool,
-    },
+    Notice(Notice),
+}
+
+/// Colour of a notice's ring and accent icon.
+#[derive(Clone, Copy)]
+pub enum Accent {
+    Red,
+    Blue,
+    Teal,
+}
+
+/// What sits on the right of a notice, if anything.
+pub enum Trailing {
+    None,
+    /// A large percentage, such as a battery level.
+    Percent(u32),
+    /// An icon in a glowing circle, such as headphones.
+    Icon(&'static str),
+}
+
+/// A two-line notification card: a ring with an icon, a title over a
+/// subtitle, and an optional trailing element.
+pub struct Notice {
+    pub icon: &'static str,
+    pub accent: Accent,
+    /// How much of the ring is filled, 0..1.
+    pub progress: f32,
+    pub title: String,
+    pub subtitle: String,
+    pub trailing: Trailing,
+    /// Greys the ring out, for things that went away.
+    pub dim: bool,
 }
 
 /// Temporary content that takes over the notch.
 pub struct Banner {
     pub content: Content,
+    /// Notch size while this banner shows; notices fit their content.
+    size: (f32, f32),
     until: Instant,
 }
 
@@ -240,6 +268,7 @@ impl Notch {
                     muted,
                 },
             until: shown_until,
+            ..
         }) = &mut self.banner
         {
             if *shown == kind {
@@ -256,14 +285,17 @@ impl Notch {
                 level: Spring::new(value, 500.0, 40.0, 0.001),
                 muted: is_muted,
             },
+            size: LEVEL,
             until,
         });
         self.activate();
     }
 
-    pub fn show_notice(&mut self, glyph: &'static str, text: String, dim: bool, now: Instant) {
+    /// Shows a notice in a notch `width` wide (measured by the renderer).
+    pub fn show_notice(&mut self, notice: Notice, width: f32, now: Instant) {
         self.banner = Some(Banner {
-            content: Content::Notice { glyph, text, dim },
+            content: Content::Notice(notice),
+            size: (width.clamp(NOTICE_WIDTH.0, NOTICE_WIDTH.1), NOTICE_HEIGHT),
             until: now + NOTICE_DURATION,
         });
         self.activate();
@@ -310,10 +342,7 @@ impl Notch {
     /// the eyes so a key press or notification while idle is still seen.
     fn retarget(&mut self) {
         let (w, h) = match &self.banner {
-            Some(banner) if self.banner_active => match banner.content {
-                Content::Level { .. } => LEVEL,
-                Content::Notice { .. } => NOTICE,
-            },
+            Some(banner) if self.banner_active => banner.size,
             _ if self.idle => IDLE,
             _ => COMPACT,
         };
