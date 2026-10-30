@@ -16,6 +16,7 @@ mod config;
 mod dragdrop;
 mod frames;
 mod geo;
+mod health;
 mod keys;
 mod media;
 mod net;
@@ -73,6 +74,7 @@ use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
 use config::{PrayerSettings, Settings};
 use frames::Pacer;
+use health::Health;
 use media::{Command, Media, Track};
 use render::{
     glyph, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer, Scene,
@@ -190,6 +192,7 @@ struct App {
     page: Page,
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
+    health: Health,
 }
 
 /// The card moving from one page to the next.
@@ -320,6 +323,7 @@ fn main() -> Result<()> {
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
             weather: None,
+            health: Health::default(),
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
@@ -402,6 +406,7 @@ impl App {
         self.clock = clock;
         if clock_changed {
             self.update_prayer();
+            self.update_health();
         }
 
         if let Some(finished) = self.pomodoro.advance(now) {
@@ -916,6 +921,17 @@ impl App {
             }
         }
         self.update_prayer();
+    }
+
+    /// Counts a minute of use toward the health reminders, held back while
+    /// the notch steps aside for a full-screen app.
+    fn update_health(&mut self) {
+        let plan = self.settings.health();
+        let idle_minutes = idle_ms() / 60_000;
+        if let Some(kind) = self.health.minute(&plan, idle_minutes, !self.shown) {
+            let minutes = plan.interval(kind).unwrap_or_default();
+            self.notify(notices::health(kind, minutes));
+        }
     }
 
     /// Picks up edits to the settings file and the change of day, then
@@ -1522,6 +1538,7 @@ fn chime() {
 /// The notice cards Drop shows.
 mod notices {
     use crate::anim::{Accent, Notice, Trailing};
+    use crate::health::Kind;
     use crate::prayer::{format_time, NAMES};
     use crate::render::glyph;
     use crate::{minutes_now, PrayerDay};
@@ -1626,9 +1643,45 @@ mod notices {
         }
     }
 
+    /// A health reminder after `minutes` of use.
+    pub fn health(kind: Kind, minutes: u32) -> Notice {
+        let (icon, accent, title, subtitle) = match kind {
+            Kind::Water => (
+                glyph::WATER,
+                Accent::Blue,
+                "Waktunya minum air",
+                format!("Sudah {minutes} menit di depan layar"),
+            ),
+            Kind::Eyes => (
+                glyph::EYE,
+                Accent::Teal,
+                "Istirahatkan mata",
+                "Lihat sejauh 6 meter selama 20 detik".to_string(),
+            ),
+            Kind::Stretch => (
+                glyph::WALK,
+                Accent::Green,
+                "Waktunya peregangan",
+                "Berdiri dan gerakkan badan sejenak".to_string(),
+            ),
+        };
+        Notice {
+            icon,
+            accent,
+            progress: 1.0,
+            title: title.to_string(),
+            subtitle,
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
+
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 7 {
+        match index % 10 {
+            9 => health(Kind::Stretch, 50),
+            8 => health(Kind::Eyes, 20),
+            7 => health(Kind::Water, 60),
             6 => prayer_reminder("Dzuhur", 5, "11:40", "Jakarta"),
             0 => wifi("Rumah 5G", true),
             1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(70)),

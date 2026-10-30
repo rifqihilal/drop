@@ -243,6 +243,9 @@ pub mod glyph {
     pub const DOWNLOAD: &str = "\u{E896}";
     pub const CLOSE: &str = "\u{E711}";
     pub const FILE: &str = "\u{E8A5}";
+    pub const WATER: &str = "\u{EB42}";
+    pub const EYE: &str = "\u{E890}";
+    pub const WALK: &str = "\u{E805}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {

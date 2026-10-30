@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::health;
 use crate::prayer::Location;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -32,6 +33,13 @@ pub struct Settings {
     pub module_shelf: bool,
     pub module_prayer: bool,
     pub module_eyes: bool,
+    /// Health reminders, each after its minutes of use.
+    pub water: bool,
+    pub water_minutes: u32,
+    pub eyes: bool,
+    pub eyes_minutes: u32,
+    pub stretch: bool,
+    pub stretch_minutes: u32,
 }
 
 impl Default for Settings {
@@ -54,6 +62,12 @@ impl Default for Settings {
             module_shelf: true,
             module_prayer: true,
             module_eyes: true,
+            water: true,
+            water_minutes: 60,
+            eyes: false,
+            eyes_minutes: 20,
+            stretch: true,
+            stretch_minutes: 50,
         }
     }
 }
@@ -78,6 +92,14 @@ impl Settings {
             },
             remind_minutes: self.remind_minutes,
         })
+    }
+
+    pub fn health(&self) -> health::Plan {
+        health::Plan {
+            water: self.water.then_some(self.water_minutes),
+            eyes: self.eyes.then_some(self.eyes_minutes),
+            stretch: self.stretch.then_some(self.stretch_minutes),
+        }
     }
 
     pub fn load() -> Self {
@@ -130,7 +152,17 @@ impl Settings {
              kalender = {}\n\
              shelf = {}\n\
              halaman_sholat = {}\n\
-             mata = {}\n",
+             mata = {}\n\
+             \n\
+             [kesehatan]\n\
+             ; Pengingat setelah sekian menit memakai komputer; menjauh dari\n\
+             ; komputer {} menit atau lebih memulai hitungan dari awal.\n\
+             minum_air = {}\n\
+             minum_air_menit = {}\n\
+             istirahat_mata = {}\n\
+             istirahat_mata_menit = {}\n\
+             peregangan = {}\n\
+             peregangan_menit = {}\n",
             self.city,
             number(self.latitude),
             number(self.longitude),
@@ -148,6 +180,13 @@ impl Settings {
             flag(self.module_shelf),
             flag(self.module_prayer),
             flag(self.module_eyes),
+            health::BREAK_MINUTES,
+            flag(self.water),
+            self.water_minutes,
+            flag(self.eyes),
+            self.eyes_minutes,
+            flag(self.stretch),
+            self.stretch_minutes,
         )
     }
 }
@@ -199,6 +238,7 @@ fn parse(text: &str) -> Settings {
             "tidak" | "false" | "0" | "off" => false,
             _ => default,
         };
+        let minutes = |default: f64| number().unwrap_or(default).clamp(5.0, 240.0) as u32;
         let s = &mut settings;
         match key.trim().to_lowercase().as_str() {
             "kota" => s.city = value.to_string(),
@@ -220,6 +260,12 @@ fn parse(text: &str) -> Settings {
             "shelf" => s.module_shelf = flag(true),
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
+            "minum_air" => s.water = flag(true),
+            "minum_air_menit" => s.water_minutes = minutes(60.0),
+            "istirahat_mata" => s.eyes = flag(false),
+            "istirahat_mata_menit" => s.eyes_minutes = minutes(20.0),
+            "peregangan" => s.stretch = flag(true),
+            "peregangan_menit" => s.stretch_minutes = minutes(50.0),
             _ => {}
         }
     }
@@ -257,6 +303,12 @@ mod tests {
             module_shelf: false,
             module_prayer: true,
             module_eyes: false,
+            water: false,
+            water_minutes: 45,
+            eyes: true,
+            eyes_minutes: 25,
+            stretch: true,
+            stretch_minutes: 90,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
     }

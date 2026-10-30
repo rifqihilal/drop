@@ -99,8 +99,9 @@ const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
 const CANCEL_BUTTON: Rect = Rect::new(526.0, 640.0, 626.0, 674.0);
 const SAVE_BUTTON: Rect = Rect::new(636.0, 640.0, 736.0, 674.0);
 
-/// Switches: five notifications, start with Windows, then six modules.
-const TOGGLES: [&str; 12] = [
+/// Switches: five notifications, start with Windows, six modules, then
+/// three health reminders.
+const TOGGLES: [&str; 15] = [
     "Wi-Fi tersambung dan terputus",
     "Perangkat Bluetooth",
     "Baterai lemah",
@@ -113,11 +114,17 @@ const TOGGLES: [&str; 12] = [
     "Shelf",
     "Halaman sholat",
     "Mata saat idle",
+    "Minum air",
+    "Istirahatkan mata",
+    "Peregangan",
 ];
 /// First switch of the modules grid.
 const FIRST_MODULE: usize = 6;
 /// Top of the modules grid, two switches per row under the prayer preview.
 const MODULES_TOP: f32 = 494.0;
+/// First health reminder switch, in the right column under "Umum".
+const FIRST_HEALTH: usize = 12;
+const HEALTH_TOP: f32 = 448.0;
 
 // Windows 11 dark palette, as 0xRRGGBB.
 const BACKGROUND: u32 = 0x202020;
@@ -159,6 +166,10 @@ impl Rect {
 
 /// Row `index` of the switches column (notifications, then general).
 fn toggle_row(index: usize) -> Rect {
+    if index >= FIRST_HEALTH {
+        let top = HEALTH_TOP + (index - FIRST_HEALTH) as f32 * ROW;
+        return Rect::new(RIGHT.0, top, RIGHT.1, top + ROW);
+    }
     if index >= FIRST_MODULE {
         let (column, row) = ((index - FIRST_MODULE) % 2, (index - FIRST_MODULE) / 2);
         let left = 24.0 + column as f32 * 208.0;
@@ -200,7 +211,9 @@ struct Window {
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 12],
+    toggles: [bool; 15],
+    /// Minutes of use before each health reminder, kept as they were.
+    health_minutes: [u32; 3],
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -408,6 +421,14 @@ impl Window {
                 settings.module_shelf,
                 settings.module_prayer,
                 settings.module_eyes,
+                settings.water,
+                settings.eyes,
+                settings.stretch,
+            ],
+            health_minutes: [
+                settings.water_minutes,
+                settings.eyes_minutes,
+                settings.stretch_minutes,
             ],
             status: "Cari nama kota, kabupaten atau desa".to_string(),
             status_is_error: false,
@@ -625,6 +646,12 @@ impl Window {
             module_shelf: self.toggles[9],
             module_prayer: self.toggles[10],
             module_eyes: self.toggles[11],
+            water: self.toggles[12],
+            water_minutes: self.health_minutes[0],
+            eyes: self.toggles[13],
+            eyes_minutes: self.health_minutes[1],
+            stretch: self.toggles[14],
+            stretch_minutes: self.health_minutes[2],
         };
         if settings.save().is_err() {
             self.set_status("Pengaturan gagal disimpan", true);
@@ -747,10 +774,21 @@ impl Window {
             0xffffff,
             0.7,
         );
+        self.text_at(
+            "Kesehatan",
+            &f.section,
+            Rect::new(RIGHT.0, HEALTH_TOP - 30.0, RIGHT.1, HEALTH_TOP - 6.0),
+            0xffffff,
+            0.7,
+        );
         for (index, label) in TOGGLES.iter().enumerate() {
             let row = toggle_row(index);
+            let label = match index.checked_sub(FIRST_HEALTH) {
+                Some(i) => format!("{label} \u{b7} {} menit", self.health_minutes[i]),
+                None => label.to_string(),
+            };
             self.text_at(
-                label,
+                &label,
                 &f.body,
                 Rect::new(row.left, row.top, row.right - 56.0, row.bottom),
                 0xffffff,
