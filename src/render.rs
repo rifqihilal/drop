@@ -158,6 +158,9 @@ impl ShelfRects {
     }
 }
 
+/// How far, in logical pixels, pages slide while switching.
+const PAGE_SLIDE: f32 = 18.0;
+
 // Calendar card layout.
 const CELL: (f32, f32) = (28.0, 20.0);
 const GRID_TOP: f32 = 60.0;
@@ -291,6 +294,11 @@ pub struct Scene<'a> {
     pub shelf: ShelfScene<'a>,
     /// Files are being dragged over the notch.
     pub drop_zone: bool,
+    /// While switching pages: the page being left, how far the switch has
+    /// gone (0..1), and its direction (1 toward later pages, -1 back).
+    pub previous_page: Option<Page>,
+    pub page_mix: f32,
+    pub page_direction: f32,
     pub status: StatusScene<'a>,
 }
 
@@ -801,14 +809,21 @@ impl Renderer {
         let alpha = scene.card_visible.min(1.0);
         self.target
             .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        match (scene.page, &scene.music, &scene.timer) {
+        match scene.previous_page {
             _ if scene.drop_zone => self.draw_drop_zone(x0, x1, scene.height, alpha),
-            (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
-            (Page::Music, Some(music), _) => self.draw_music_card(music, scene.width, alpha),
-            (Page::Calendar, _, Some(timer)) => {
-                self.draw_calendar_card(&scene.calendar, timer, x0, x1, alpha)
+            // Switching pages: the old one fades out sliding away, the new one
+            // fades in from the side the wheel moved toward.
+            Some(previous) if scene.page_mix < 1.0 => {
+                let mix = scene.page_mix;
+                let slide = PAGE_SLIDE * scene.page_direction;
+                self.with_offset(-slide * mix, || {
+                    self.draw_page(scene, previous, x0, x1, alpha * (1.0 - mix))
+                });
+                self.with_offset(slide * (1.0 - mix), || {
+                    self.draw_page(scene, scene.page, x0, x1, alpha * mix)
+                });
             }
-            _ => self.draw_status_card(&scene.status, x0, x1, alpha),
+            _ => self.draw_page(scene, scene.page, x0, x1, alpha),
         }
         if scene.pages > 1 && !scene.drop_zone {
             // Page dots: which of the card's pages is showing, at its foot.
@@ -828,6 +843,39 @@ impl Renderer {
             }
         }
         self.target.PopAxisAlignedClip();
+    }
+
+    /// One page of the open card.
+    unsafe fn draw_page(&self, scene: &Scene, page: Page, x0: f32, x1: f32, alpha: f32) {
+        if alpha < 0.01 {
+            return;
+        }
+        match (page, &scene.music, &scene.timer) {
+            (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
+            (Page::Music, Some(music), _) => self.draw_music_card(music, scene.width, alpha),
+            (Page::Calendar, _, Some(timer)) => {
+                self.draw_calendar_card(&scene.calendar, timer, x0, x1, alpha)
+            }
+            _ => self.draw_status_card(&scene.status, x0, x1, alpha),
+        }
+    }
+
+    /// Draws with everything shifted `dx` to the right.
+    unsafe fn with_offset(&self, dx: f32, draw: impl FnOnce()) {
+        let shifted = Matrix3x2 {
+            M11: 1.0,
+            M12: 0.0,
+            M21: 0.0,
+            M22: 1.0,
+            M31: dx,
+            M32: 0.0,
+        };
+        self.target.SetTransform(&shifted);
+        draw();
+        self.target.SetTransform(&Matrix3x2 {
+            M31: 0.0,
+            ..shifted
+        });
     }
 
     /// A phase-coloured dot and the time left.

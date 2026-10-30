@@ -14,6 +14,7 @@ mod bluetooth;
 mod calendar;
 mod config;
 mod dragdrop;
+mod frames;
 mod geo;
 mod keys;
 mod media;
@@ -69,6 +70,7 @@ use anim::{
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
 use config::{PrayerSettings, Settings};
+use frames::Pacer;
 use media::{Command, Media, Track};
 use render::{
     glyph, CalendarControl, CalendarScene, MusicScene, Page, Renderer, Scene, ShelfHit, ShelfScene,
@@ -80,7 +82,7 @@ use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
 
 const TIMER_ID: usize = 1;
-/// Frame interval while something is animating (~60 fps).
+/// Marks a request for animation frames (paced to the display, see `frames`).
 const FRAME_MS: u32 = 16;
 /// Wake-up interval while the eyes or a level are showing: catches the next
 /// blink or glance, and the moment the level should hide.
@@ -104,13 +106,15 @@ const BAR_SPEEDS: [f32; 4] = [7.0, 9.5, 6.0, 11.0];
 /// How long the music card opens for a new song.
 const SONG_CARD: Duration = Duration::from_secs(4);
 /// The mouse rests this long on the notch before the music card opens.
-const HOVER_DELAY: Duration = Duration::from_millis(250);
+const HOVER_DELAY: Duration = Duration::from_millis(150);
 /// The card stays open this long after the mouse leaves.
 const LEAVE_GRACE: Duration = Duration::from_millis(400);
 /// How long the shelf card stays open after files are dropped.
 const SHELF_SHOWN: Duration = Duration::from_secs(3);
 /// Logical pixels a pressed shelf tile must move before it is dragged out.
 const DRAG_THRESHOLD: f32 = 6.0;
+/// Length of the cross-fade between card pages.
+const PAGE_SWITCH: Duration = Duration::from_millis(260);
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
@@ -161,6 +165,10 @@ struct App {
     pomodoro: Pomodoro,
     /// Months away from the current one on the calendar page.
     month_offset: i32,
+    /// A page switch in progress on the open card.
+    page_switch: Option<PageSwitch>,
+    /// Display-refresh frames while animating.
+    pacer: Pacer,
     /// Files parked in the notch.
     shelf: Shelf,
     /// Files are being dragged over the notch.
@@ -173,6 +181,14 @@ struct App {
     page: Page,
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
+}
+
+/// The card moving from one page to the next.
+struct PageSwitch {
+    from: Page,
+    started: Instant,
+    /// 1 toward later pages, -1 back.
+    direction: f32,
 }
 
 /// One day's prayer schedule and which reminders already went off.
@@ -282,6 +298,8 @@ fn main() -> Result<()> {
             bar_phase: 0.0,
             pomodoro: Pomodoro::default(),
             month_offset: 0,
+            page_switch: None,
+            pacer: Pacer::start(hwnd),
             shelf: Shelf::load(),
             drag_over: false,
             shelf_hover: None,
@@ -369,7 +387,14 @@ impl App {
             self.on_phase_end(finished);
         }
         self.update_music(now);
-        let moving = self.notch.step(now, dt);
+        let switching = self
+            .page_switch
+            .as_ref()
+            .is_some_and(|switch| now.duration_since(switch.started) < PAGE_SWITCH);
+        if !switching {
+            self.page_switch = None;
+        }
+        let moving = self.notch.step(now, dt) || switching;
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
         let card_open = self.notch.card_visible.value > 0.01;
@@ -432,6 +457,7 @@ impl App {
             // The next opening starts on the first page, this month.
             self.page = Page::Music;
             self.month_offset = 0;
+            self.page_switch = None;
         }
         let card = open.then(|| match self.shown_page() {
             _ if self.drag_over => DROP_ZONE,
@@ -589,6 +615,13 @@ impl App {
         } else {
             (current + pages.len() - 1) % pages.len()
         };
+        if pages[next] != pages[current] {
+            self.page_switch = Some(PageSwitch {
+                from: pages[current],
+                started: Instant::now(),
+                direction: if down { 1.0 } else { -1.0 },
+            });
+        }
         self.page = pages[next];
         self.tick();
     }
@@ -961,6 +994,17 @@ impl App {
                 hover: self.shelf_hover,
             },
             drop_zone: self.drag_over,
+            previous_page: self.page_switch.as_ref().map(|switch| switch.from),
+            page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
+                let t =
+                    (switch.started.elapsed().as_secs_f32() / PAGE_SWITCH.as_secs_f32()).min(1.0);
+                // Ease out: quick start, gentle landing.
+                1.0 - (1.0 - t).powi(3)
+            }),
+            page_direction: self
+                .page_switch
+                .as_ref()
+                .map_or(1.0, |switch| switch.direction),
             status: StatusScene {
                 time: &self.clock,
                 date: &date,
@@ -991,7 +1035,12 @@ impl App {
         }
     }
 
+    /// Sets how soon the next tick comes. Animation frames follow the display
+    /// refresh through the pacer; the timer then only backs it up.
     fn schedule(&mut self, ms: u32) {
+        let animating = ms == FRAME_MS;
+        self.pacer.set_active(animating);
+        let ms = if animating { BUSY_MS } else { ms };
         if ms != self.timer_ms {
             self.timer_ms = ms;
             unsafe { SetTimer(Some(self.hwnd), TIMER_ID, ms, None) };
@@ -1016,6 +1065,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_TIMER => {
             with_app(App::tick);
+            LRESULT(0)
+        }
+        frames::FRAME_MSG => {
+            with_app(|app| {
+                app.pacer.frame_taken();
+                app.tick();
+            });
             LRESULT(0)
         }
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
