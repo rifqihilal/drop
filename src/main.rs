@@ -45,7 +45,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{LevelKind, Notch, Notice};
-use bluetooth::Bluetooth;
+use bluetooth::{Bluetooth, DeviceEvent};
 use render::{Renderer, Scene};
 use system::{Audio, PowerEvent};
 use wifi::Wifi;
@@ -68,6 +68,8 @@ const WIFI_GRACE: Duration = Duration::from_secs(4);
 const LOW_BATTERY: [u32; 2] = [20, 10];
 /// Gap between sample notices in `--demo`.
 const DEMO_STEP: Duration = Duration::from_secs(4);
+/// Wait before reading a newly connected device's battery level.
+const BATTERY_DELAY: Duration = Duration::from_millis(2500);
 
 struct App {
     hwnd: HWND,
@@ -91,6 +93,8 @@ struct App {
     battery: Option<u32>,
     /// `--demo`: index of the next sample notice and when to show it.
     demo: Option<(usize, Instant)>,
+    /// A connected Bluetooth device whose battery level is read at the deadline.
+    battery_check: Option<(Instant, DeviceEvent)>,
 }
 
 thread_local! {
@@ -154,6 +158,7 @@ fn main() -> Result<()> {
             on_ac: None,
             battery: None,
             demo: has_flag("--demo").then(|| (0, now + Duration::from_secs(1))),
+            battery_check: None,
         };
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -194,6 +199,15 @@ impl App {
                 self.notify(notices::wifi(&ssid, false));
             }
         }
+        if self
+            .battery_check
+            .as_ref()
+            .is_some_and(|(deadline, _)| now >= *deadline)
+        {
+            if let Some((_, event)) = self.battery_check.take() {
+                self.check_device_battery(event);
+            }
+        }
         if let Some((index, at)) = self.demo {
             if now >= at {
                 self.demo = Some((index + 1, now + DEMO_STEP));
@@ -209,7 +223,8 @@ impl App {
         if moving || clock_changed {
             self.draw();
         }
-        let waiting = self.wifi_lost.is_some() || self.demo.is_some();
+        let waiting =
+            self.wifi_lost.is_some() || self.battery_check.is_some() || self.demo.is_some();
         self.schedule(if moving {
             FRAME_MS
         } else if self.notch.busy() || waiting {
@@ -299,8 +314,28 @@ impl App {
             .as_mut()
             .and_then(|bluetooth| bluetooth.event(wparam, lparam));
         if let Some(event) = event {
-            self.notify(notices::bluetooth(event.name, event.connected, event.audio));
+            self.notify(notices::bluetooth(
+                event.name.clone(),
+                event.connected,
+                event.audio,
+                None,
+            ));
+            // Devices report their charge a moment after connecting.
+            if event.connected {
+                self.battery_check = Some((Instant::now() + BATTERY_DELAY, event));
+                self.schedule(BUSY_MS);
+            }
         }
+    }
+
+    /// Adds the device's battery level to its card once it is known.
+    fn check_device_battery(&mut self, event: DeviceEvent) {
+        let Some(percent) = bluetooth::battery_level(event.address) else {
+            return;
+        };
+        let notice = notices::bluetooth(event.name, true, event.audio, Some(percent));
+        let width = self.renderer.notice_width(&notice);
+        self.notch.refresh_notice(notice, width, Instant::now());
     }
 
     fn draw(&self) {
@@ -554,13 +589,18 @@ mod notices {
         }
     }
 
-    pub fn bluetooth(name: String, connected: bool, audio: bool) -> Notice {
+    /// `battery` fills the ring and joins the subtitle when the device reports it.
+    pub fn bluetooth(name: String, connected: bool, audio: bool, battery: Option<u32>) -> Notice {
+        let state = if connected { "Terhubung" } else { "Terputus" };
         Notice {
             icon: glyph::BLUETOOTH,
             accent: Accent::Blue,
-            progress: 1.0,
+            progress: battery.map_or(1.0, |percent| percent as f32 / 100.0),
             title: name,
-            subtitle: if connected { "Terhubung" } else { "Terputus" }.to_string(),
+            subtitle: match battery {
+                Some(percent) => format!("{state} · {percent}%"),
+                None => state.to_string(),
+            },
             trailing: if audio && connected {
                 Trailing::Icon(glyph::HEADPHONES)
             } else {
@@ -586,10 +626,10 @@ mod notices {
     pub fn demo(index: usize) -> Notice {
         match index % 6 {
             0 => wifi("Rumah 5G", true),
-            1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true),
+            1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(70)),
             2 => low_battery(20),
             3 => wifi("Jaringan Kantor Lantai 3 dengan nama sangat panjang", true),
-            4 => bluetooth("Galaxy Buds2 Pro".to_string(), false, true),
+            4 => bluetooth("Galaxy Buds2 Pro".to_string(), false, true, None),
             _ => wifi("Rumah 5G", false),
         }
     }

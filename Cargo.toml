@@ -8,6 +8,8 @@ license = "GPL-3.0-only"
 [dependencies]
 windows = { version = "0.61", features = [
 	"Win32_Devices_Bluetooth",
+	"Win32_Devices_DeviceAndDriverInstallation",
+	"Win32_Devices_Properties",
 	"Win32_Foundation",
 	"Win32_Graphics_Gdi",
 	"Win32_Graphics_Direct2D",

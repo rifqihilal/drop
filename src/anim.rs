@@ -15,6 +15,8 @@ pub const NOTICE_HEIGHT: f32 = 62.0;
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up.
 const NOTICE_DURATION: Duration = Duration::from_millis(3500);
+/// How long a notice stays up after its content is refreshed.
+const NOTICE_REFRESH_HOLD: Duration = Duration::from_millis(2500);
 
 /// A damped spring that eases `value` toward `target`.
 pub struct Spring {
@@ -299,6 +301,26 @@ impl Notch {
             until: now + NOTICE_DURATION,
         });
         self.activate();
+    }
+
+    /// Swaps in new content for the notice still showing under the same title,
+    /// without restarting it, and keeps it up a little longer so the change
+    /// can be read. Returns false when that notice is no longer showing.
+    pub fn refresh_notice(&mut self, notice: Notice, width: f32, now: Instant) -> bool {
+        let Some(banner) = self.banner.as_mut().filter(|_| self.banner_active) else {
+            return false;
+        };
+        let Content::Notice(shown) = &banner.content else {
+            return false;
+        };
+        if shown.title != notice.title {
+            return false;
+        }
+        banner.content = Content::Notice(notice);
+        banner.size = (width.clamp(NOTICE_WIDTH.0, NOTICE_WIDTH.1), NOTICE_HEIGHT);
+        banner.until = banner.until.max(now + NOTICE_REFRESH_HOLD);
+        self.retarget();
+        true
     }
 
     fn activate(&mut self) {
