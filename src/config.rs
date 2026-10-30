@@ -33,6 +33,7 @@ pub struct Settings {
     pub module_shelf: bool,
     pub module_prayer: bool,
     pub module_eyes: bool,
+    pub module_todo: bool,
     /// Health reminders, each after its minutes of use.
     pub water: bool,
     pub water_minutes: u32,
@@ -62,6 +63,7 @@ impl Default for Settings {
             module_shelf: true,
             module_prayer: true,
             module_eyes: true,
+            module_todo: true,
             water: true,
             water_minutes: 60,
             eyes: false,
@@ -153,6 +155,7 @@ impl Settings {
              shelf = {}\n\
              halaman_sholat = {}\n\
              mata = {}\n\
+             tugas = {}\n\
              \n\
              [kesehatan]\n\
              ; Pengingat setelah sekian menit memakai komputer; menjauh dari\n\
@@ -180,6 +183,7 @@ impl Settings {
             flag(self.module_shelf),
             flag(self.module_prayer),
             flag(self.module_eyes),
+            flag(self.module_todo),
             health::BREAK_MINUTES,
             flag(self.water),
             self.water_minutes,
@@ -260,6 +264,7 @@ fn parse(text: &str) -> Settings {
             "shelf" => s.module_shelf = flag(true),
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
+            "tugas" => s.module_todo = flag(true),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
             "istirahat_mata" => s.eyes = flag(false),
@@ -303,6 +308,7 @@ mod tests {
             module_shelf: false,
             module_prayer: true,
             module_eyes: false,
+            module_todo: false,
             water: false,
             water_minutes: 45,
             eyes: true,

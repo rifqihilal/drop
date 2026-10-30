@@ -26,6 +26,7 @@ mod render;
 mod settings;
 mod shelf;
 mod system;
+mod todo;
 mod tray;
 mod weather;
 mod wifi;
@@ -50,25 +51,26 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetLastInputInfo, RegisterHotKey, ReleaseCapture, SetCapture, TrackMouseEvent, LASTINPUTINFO,
-    MOD_ALT, MOD_NOREPEAT, TME_LEAVE, TRACKMOUSEEVENT,
+    GetLastInputInfo, RegisterHotKey, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent,
+    LASTINPUTINFO, MOD_ALT, MOD_NOREPEAT, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
-    TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND, MF_CHECKED, MF_GRAYED,
-    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, IsWindow,
+    LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
+    SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_DESTROY,
+    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
-    shelf_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, MUSIC_CARD,
-    MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP, WEATHER_CARD,
+    shelf_card, todo_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE,
+    MUSIC_CARD, MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP, WEATHER_CARD,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -78,10 +80,11 @@ use health::Health;
 use media::{Command, Media, Track};
 use render::{
     glyph, CalendarControl, CalendarScene, MusicScene, Page, PrayerScene, Renderer, Scene,
-    ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, WeatherScene,
+    ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit, TodoScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
+use todo::Todo;
 use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
 
@@ -127,6 +130,8 @@ const HOTKEY_ID: i32 = 1;
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
+/// Half a blink of the text cursor, in milliseconds.
+const CARET_BLINK: u128 = 530;
 
 struct App {
     hwnd: HWND,
@@ -193,6 +198,23 @@ struct App {
     weather_watch: WeatherWatch,
     weather: Option<Weather>,
     health: Health,
+    todo: Todo,
+    /// Task under the mouse.
+    todo_hover: Option<usize>,
+    /// A new task being typed.
+    editing: Option<Editing>,
+}
+
+/// A new task being typed in the notch, which holds the keyboard meanwhile.
+struct Editing {
+    text: String,
+    /// The window that had the keyboard before; it gets it back afterwards.
+    previous: HWND,
+    /// First half of a character outside the Basic Multilingual Plane,
+    /// waiting for the second.
+    surrogate: Option<u16>,
+    /// The cursor blinks from here, starting over with each key.
+    since: Instant,
 }
 
 /// The card moving from one page to the next.
@@ -319,6 +341,9 @@ fn main() -> Result<()> {
             shelf: Shelf::load(),
             drag_over: false,
             shelf_hover: None,
+            todo: Todo::load(),
+            todo_hover: None,
+            editing: None,
             press: None,
             page: Page::Music,
             weather_watch: WeatherWatch::start(hwnd),
@@ -431,8 +456,11 @@ impl App {
         if moving || clock_changed || bars_moving || card_open || timer_running {
             self.draw();
         }
-        let waiting =
-            self.wifi_lost.is_some() || self.battery_check.is_some() || self.demo.is_some();
+        // Typing needs the cursor to blink on time.
+        let waiting = self.wifi_lost.is_some()
+            || self.battery_check.is_some()
+            || self.demo.is_some()
+            || self.editing.is_some();
         self.schedule(if moving {
             FRAME_MS
         } else if bars_moving {
@@ -483,7 +511,11 @@ impl App {
             .is_some_and(|since| now.duration_since(since) >= HOVER_DELAY);
         self.card_until = self.card_until.filter(|until| now < *until);
         // Files dragged over the notch always open the drop zone.
-        let open = hovering || self.card_until.is_some() || self.drag_over;
+        if self.editing.is_some() && self.shown_page() != Page::Todo {
+            self.finish_editing(true, true);
+        }
+        let open =
+            hovering || self.card_until.is_some() || self.drag_over || self.editing.is_some();
         if !open {
             // The next opening starts on the first page, this month.
             self.page = Page::Music;
@@ -498,6 +530,7 @@ impl App {
             Page::Calendar => CALENDAR_CARD,
             Page::Prayer => PRAYER_CARD,
             Page::Weather => WEATHER_CARD,
+            Page::Todo => todo_card(self.todo.tasks().len()),
         });
         let strip = match self.strip() {
             Strip::Timer => Some(TIMER_STRIP),
@@ -556,6 +589,9 @@ impl App {
         if modules.module_calendar {
             pages.push(Page::Calendar);
         }
+        if modules.module_todo {
+            pages.push(Page::Todo);
+        }
         if modules.module_shelf && !self.shelf.is_empty() {
             pages.push(Page::Shelf);
         }
@@ -613,11 +649,132 @@ impl App {
             Some(ShelfHit::Tile(index) | ShelfHit::Remove(index)) => Some(index),
             _ => None,
         };
-        if hover != self.shelf_hover {
+        let todo_hover = match self.todo_hit(x, y) {
+            Some(TodoHit::Toggle(index) | TodoHit::Remove(index)) => Some(index),
+            _ => None,
+        };
+        if hover != self.shelf_hover || todo_hover != self.todo_hover {
             self.shelf_hover = hover;
+            self.todo_hover = todo_hover;
             self.draw();
         }
         None
+    }
+
+    fn todo_scene(&self) -> TodoScene<'_> {
+        TodoScene {
+            tasks: self.todo.tasks(),
+            left: self.todo.left(),
+            hover: self.todo_hover,
+            editing: self.editing.as_ref().map(|editing| editing.text.as_str()),
+            caret: self.editing.as_ref().is_some_and(|editing| {
+                (editing.since.elapsed().as_millis() / CARET_BLINK).is_multiple_of(2)
+            }),
+        }
+    }
+
+    fn todo_hit(&self, x: f32, y: f32) -> Option<TodoHit> {
+        if self.shown_page() != Page::Todo || self.notch.card_visible.value < 0.5 {
+            return None;
+        }
+        self.renderer
+            .todo_hit(x, y, self.notch.width.value, &self.todo_scene())
+    }
+
+    /// Click on the task page: add (or save what is typed), tick a task off,
+    /// remove one, or clear the finished ones.
+    fn on_todo_click(&mut self, x: f32, y: f32) {
+        match self.todo_hit(x, y) {
+            Some(TodoHit::Add) if self.editing.is_some() => self.finish_editing(true, true),
+            Some(TodoHit::Add) if !self.todo.is_full() => self.start_editing(),
+            Some(TodoHit::Toggle(index)) => self.todo.toggle(index),
+            Some(TodoHit::Remove(index)) => {
+                self.todo.remove(index);
+                self.todo_hover = None;
+            }
+            Some(TodoHit::ClearDone) => self.todo.clear_done(),
+            _ => return,
+        }
+        self.tick();
+    }
+
+    /// Takes the keyboard so a new task can be typed in the notch.
+    fn start_editing(&mut self) {
+        let previous = unsafe { GetForegroundWindow() };
+        self.editing = Some(Editing {
+            text: String::new(),
+            previous,
+            surrogate: None,
+            since: Instant::now(),
+        });
+        unsafe {
+            let _ = SetForegroundWindow(self.hwnd);
+            let _ = SetFocus(Some(self.hwnd));
+        }
+    }
+
+    /// Ends typing, adding the task when `save`, and hands the keyboard back
+    /// when `give_back` (not when another window already took it).
+    fn finish_editing(&mut self, save: bool, give_back: bool) {
+        let Some(editing) = self.editing.take() else {
+            return;
+        };
+        if save {
+            self.todo.add(&editing.text);
+        }
+        unsafe {
+            if give_back
+                && GetForegroundWindow() == self.hwnd
+                && IsWindow(Some(editing.previous)).as_bool()
+            {
+                let _ = SetForegroundWindow(editing.previous);
+            }
+        }
+        // Stay open a moment, so the card does not snap shut under the mouse.
+        self.card_until = Some(Instant::now() + LEAVE_GRACE);
+    }
+
+    /// A typed character while a new task is being written. Enter adds the
+    /// task and starts the next one, Escape stops.
+    fn on_char(&mut self, unit: u16) {
+        let Some(editing) = self.editing.as_mut() else {
+            return;
+        };
+        editing.since = Instant::now();
+        match unit {
+            0x0D if !editing.text.trim().is_empty() && !self.todo.is_full() => {
+                let text = std::mem::take(&mut editing.text);
+                self.todo.add(&text);
+                if self.todo.is_full() {
+                    self.finish_editing(false, true);
+                }
+            }
+            0x0D | 0x1B => self.finish_editing(false, true),
+            0x08 => {
+                editing.text.pop();
+            }
+            // Ctrl+V
+            0x16 => {
+                if let Some(pasted) = system::clipboard_text() {
+                    let room = todo::MAX_CHARS - editing.text.chars().count();
+                    editing.text.extend(todo::clean(&pasted).chars().take(room));
+                }
+            }
+            0xD800..=0xDBFF => editing.surrogate = Some(unit),
+            _ if unit < 0x20 => {}
+            _ => {
+                let units = match editing.surrogate.take() {
+                    Some(high) if (0xDC00..=0xDFFF).contains(&unit) => vec![high, unit],
+                    _ => vec![unit],
+                };
+                if editing.text.chars().count() < todo::MAX_CHARS {
+                    editing
+                        .text
+                        .extend(char::decode_utf16(units).filter_map(|c| c.ok()));
+                }
+            }
+        }
+        self.tick();
     }
 
     /// Whether (`x`, `y`) is over something clickable on the open card.
@@ -630,6 +787,7 @@ impl App {
             Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
+            Page::Todo => self.todo_hit(x, y).is_some(),
             Page::Status | Page::Prayer | Page::Weather => false,
         }
     }
@@ -699,6 +857,7 @@ impl App {
 
     /// Alt+N: opens the card, then moves through its pages, then closes it.
     fn on_hotkey(&mut self) {
+        self.finish_editing(true, true);
         let now = Instant::now();
         let pages = self.pages();
         let current = pages
@@ -726,6 +885,7 @@ impl App {
         if self.notch.card_visible.target == 0.0 {
             return;
         }
+        self.finish_editing(true, true);
         let pages = self.pages();
         let current = pages
             .iter()
@@ -838,6 +998,10 @@ impl App {
             return;
         }
         if self.notch.card_visible.value < 0.5 {
+            return;
+        }
+        if self.shown_page() == Page::Todo {
+            self.on_todo_click(x, y);
             return;
         }
         let width = self.notch.width.value;
@@ -1164,6 +1328,7 @@ impl App {
                 items: self.shelf.items(),
                 hover: self.shelf_hover,
             },
+            todo: self.todo_scene(),
             drop_zone: self.drag_over,
             previous_page: self.page_switch.as_ref().map(|switch| switch.from),
             page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
@@ -1301,6 +1466,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_HOTKEY => {
             with_app(App::on_hotkey);
+            LRESULT(0)
+        }
+        WM_CHAR => {
+            with_app(|app| app.on_char(wparam.0 as u16));
+            LRESULT(0)
+        }
+        // Clicked elsewhere while typing: keep what was typed.
+        WM_KILLFOCUS => {
+            with_app(|app| {
+                app.finish_editing(true, false);
+                app.tick();
+            });
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

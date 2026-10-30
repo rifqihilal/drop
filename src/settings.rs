@@ -58,7 +58,7 @@ pub const SAVED_MSG: u32 = WM_APP + 6;
 /// Place search finished. LPARAM: `Box<Result<Vec<Place>, String>>`.
 const SEARCH_DONE_MSG: u32 = WM_APP + 7;
 
-const CLIENT: (f32, f32) = (760.0, 690.0);
+const CLIENT: (f32, f32) = (760.0, 730.0);
 
 // Child control IDs.
 const ID_SEARCH: usize = 101;
@@ -96,12 +96,12 @@ const TOGGLE_TOP: f32 = 90.0;
 const ROW: f32 = 40.0;
 const GENERAL_TOP: f32 = 324.0;
 const IDLE_FIELD: Rect = Rect::new(672.0, 367.0, 736.0, 401.0);
-const CANCEL_BUTTON: Rect = Rect::new(526.0, 640.0, 626.0, 674.0);
-const SAVE_BUTTON: Rect = Rect::new(636.0, 640.0, 736.0, 674.0);
+const CANCEL_BUTTON: Rect = Rect::new(526.0, 680.0, 626.0, 714.0);
+const SAVE_BUTTON: Rect = Rect::new(636.0, 680.0, 736.0, 714.0);
 
-/// Switches: five notifications, start with Windows, six modules, then
+/// Switches: five notifications, start with Windows, seven modules, then
 /// three health reminders.
-const TOGGLES: [&str; 15] = [
+const TOGGLES: [&str; 16] = [
     "Wi-Fi tersambung dan terputus",
     "Perangkat Bluetooth",
     "Baterai lemah",
@@ -114,6 +114,7 @@ const TOGGLES: [&str; 15] = [
     "Shelf",
     "Halaman sholat",
     "Mata saat idle",
+    "Tugas",
     "Minum air",
     "Istirahatkan mata",
     "Peregangan",
@@ -123,7 +124,7 @@ const FIRST_MODULE: usize = 6;
 /// Top of the modules grid, two switches per row under the prayer preview.
 const MODULES_TOP: f32 = 494.0;
 /// First health reminder switch, in the right column under "Umum".
-const FIRST_HEALTH: usize = 12;
+const FIRST_HEALTH: usize = 13;
 const HEALTH_TOP: f32 = 448.0;
 
 // Windows 11 dark palette, as 0xRRGGBB.
@@ -211,7 +212,7 @@ struct Window {
     places: Vec<Place>,
     /// Highlighted result, picked by Enter.
     hover: usize,
-    toggles: [bool; 15],
+    toggles: [bool; 16],
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     status: String,
@@ -421,6 +422,7 @@ impl Window {
                 settings.module_shelf,
                 settings.module_prayer,
                 settings.module_eyes,
+                settings.module_todo,
                 settings.water,
                 settings.eyes,
                 settings.stretch,
@@ -646,11 +648,12 @@ impl Window {
             module_shelf: self.toggles[9],
             module_prayer: self.toggles[10],
             module_eyes: self.toggles[11],
-            water: self.toggles[12],
+            module_todo: self.toggles[12],
+            water: self.toggles[13],
             water_minutes: self.health_minutes[0],
-            eyes: self.toggles[13],
+            eyes: self.toggles[14],
             eyes_minutes: self.health_minutes[1],
-            stretch: self.toggles[14],
+            stretch: self.toggles[15],
             stretch_minutes: self.health_minutes[2],
         };
         if settings.save().is_err() {
@@ -812,7 +815,7 @@ impl Window {
 
         // Footer.
         self.brush.SetColor(&rgb(BORDER, 1.0));
-        t.FillRectangle(&Rect::new(0.0, 624.0, CLIENT.0, 625.0).d2d(), &self.brush);
+        t.FillRectangle(&Rect::new(0.0, 664.0, CLIENT.0, 665.0).d2d(), &self.brush);
         self.button("Batal", CANCEL_BUTTON, false);
         self.button("Simpan", SAVE_BUTTON, true);
 

@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::todo;
+
 /// Notch size while the computer is in use (logical pixels).
 pub const COMPACT: (f32, f32) = (132.0, 28.0);
 /// Notch size while the computer is idle and the eyes are showing.
@@ -32,6 +34,16 @@ pub const SHELF_CARD_MAX: (f32, f32) = (400.0, 226.0);
 pub fn shelf_card(count: usize) -> (f32, f32) {
     let rows = count.div_ceil(5).clamp(1, 2) as f32;
     (SHELF_CARD_MAX.0, 62.0 + rows * 82.0)
+}
+/// The task card at its fullest.
+pub const TODO_CARD_MAX: (f32, f32) = (400.0, 62.0 + todo::CAPACITY as f32 * TODO_ROW);
+/// Height of one task on the task card.
+pub const TODO_ROW: f32 = 28.0;
+
+/// Task card size for `count` tasks; an empty list keeps one row for its hint.
+pub fn todo_card(count: usize) -> (f32, f32) {
+    let rows = count.clamp(1, todo::CAPACITY) as f32;
+    (TODO_CARD_MAX.0, 62.0 + rows * TODO_ROW)
 }
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);

@@ -31,7 +31,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_SEMI_LIGHT, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -54,11 +55,12 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
     Accent, Content, LevelKind, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, IDLE, LEVEL,
-    MUSIC_CARD, NOTICE_HEIGHT, NOTICE_WIDTH, SHELF_CARD_MAX, STATUS_CARD,
+    MUSIC_CARD, NOTICE_HEIGHT, NOTICE_WIDTH, SHELF_CARD_MAX, STATUS_CARD, TODO_CARD_MAX, TODO_ROW,
 };
 use crate::media::Command;
+use crate::todo::Task;
 use crate::weather::Weather;
-use crate::{calendar, prayer, shelf};
+use crate::{calendar, prayer, shelf, todo};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
@@ -83,6 +85,7 @@ pub const CANVAS: (f32, f32) = (
         CALENDAR_CARD.1,
         DROP_ZONE.1,
         SHELF_CARD_MAX.1,
+        TODO_CARD_MAX.1,
     ]),
 );
 
@@ -131,6 +134,43 @@ const THUMB_PIXELS: u32 = 96;
 // Shelf card layout: five 64 px tiles per row.
 const TILE: (f32, f32) = (64.0, 76.0);
 const TILE_GAP: f32 = 11.0;
+
+/// Task card layout between the card's edges.
+struct TodoRects {
+    x0: f32,
+    x1: f32,
+}
+
+impl TodoRects {
+    /// Center of the add button.
+    fn add(&self) -> (f32, f32) {
+        (self.x1 - 32.0, 25.0)
+    }
+
+    fn clear(&self) -> D2D_RECT_F {
+        rect(self.x1 - 160.0, 14.0, self.x1 - 52.0, 36.0)
+    }
+
+    /// The field for a new task, in place of the heading.
+    fn field(&self) -> D2D_RECT_F {
+        rect(self.x0 + 16.0, 10.0, self.x1 - 52.0, 40.0)
+    }
+
+    fn row(&self, index: usize) -> D2D_RECT_F {
+        let top = 46.0 + index as f32 * TODO_ROW;
+        rect(self.x0 + 12.0, top, self.x1 - 12.0, top + TODO_ROW)
+    }
+
+    fn check(&self, index: usize) -> (f32, f32) {
+        let row = self.row(index);
+        (row.left + 18.0, (row.top + row.bottom) / 2.0)
+    }
+
+    fn remove(&self, index: usize) -> (f32, f32) {
+        let row = self.row(index);
+        (row.right - 18.0, (row.top + row.bottom) / 2.0)
+    }
+}
 
 struct ShelfRects {
     left: f32,
@@ -243,6 +283,8 @@ pub mod glyph {
     pub const DOWNLOAD: &str = "\u{E896}";
     pub const CLOSE: &str = "\u{E711}";
     pub const FILE: &str = "\u{E8A5}";
+    pub const ADD: &str = "\u{E710}";
+    pub const CHECK: &str = "\u{E73E}";
     pub const WATER: &str = "\u{EB42}";
     pub const EYE: &str = "\u{E890}";
     pub const WALK: &str = "\u{E805}";
@@ -299,6 +341,7 @@ pub struct Scene<'a> {
     /// "Maghrib 12 mnt", while a prayer is close.
     pub prayer_soon: &'a str,
     pub shelf: ShelfScene<'a>,
+    pub todo: TodoScene<'a>,
     pub prayer: Option<PrayerScene>,
     /// Forecast for the weather page, and the place it is for.
     pub forecast: Option<&'a Weather>,
@@ -321,6 +364,7 @@ pub enum Page {
     Calendar,
     Shelf,
     Prayer,
+    Todo,
 }
 
 /// Live information shown on both sides of the clock in the closed notch.
@@ -358,6 +402,25 @@ pub enum ShelfHit {
     Tile(usize),
     Remove(usize),
     ClearAll,
+}
+
+pub struct TodoScene<'a> {
+    pub tasks: &'a [Task],
+    pub left: usize,
+    /// The task under the mouse.
+    pub hover: Option<usize>,
+    /// Text being typed for a new task, while typing.
+    pub editing: Option<&'a str>,
+    /// The text cursor is lit (it blinks).
+    pub caret: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TodoHit {
+    Add,
+    ClearDone,
+    Toggle(usize),
+    Remove(usize),
 }
 
 pub struct TimerScene {
@@ -902,6 +965,7 @@ impl Renderer {
         }
         match (page, &scene.music, &scene.timer) {
             (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
+            (Page::Todo, _, _) => self.draw_todo_card(&scene.todo, x0, x1, alpha),
             (Page::Weather, _, _) if scene.forecast.is_some() => {
                 if let Some(weather) = scene.forecast {
                     self.draw_weather_card(weather, scene.place, x0, x1, alpha)
@@ -1297,6 +1361,201 @@ impl Renderer {
         (0..count)
             .find(|&index| inside(layout.tile(index)))
             .map(ShelfHit::Tile)
+    }
+
+    /// The task list: a heading with the add button, or the field for a new
+    /// task while typing, then one row per task.
+    unsafe fn draw_todo_card(&self, todo: &TodoScene, x0: f32, x1: f32, alpha: f32) {
+        let layout = TodoRects { x0, x1 };
+        match todo.editing {
+            Some(text) => self.draw_todo_field(text, todo.caret, layout.field(), alpha),
+            None => {
+                let heading = match (todo.tasks.len(), todo.left) {
+                    (0, _) => "Tugas".to_string(),
+                    (_, 0) => "Tugas · semua selesai".to_string(),
+                    (_, left) => format!("Tugas · {left} belum selesai"),
+                };
+                if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
+                    self.draw_layout(&text.layout, x0 + 20.0, 14.0, alpha);
+                }
+                if todo.tasks.len() > todo.left {
+                    self.draw_text("Hapus selesai", &self.tiny, layout.clear(), 0.6 * alpha);
+                }
+            }
+        }
+
+        // Add, or save while typing.
+        let (cx, cy) = layout.add();
+        let full = todo.tasks.len() >= todo::CAPACITY;
+        let button = D2D1_ELLIPSE {
+            point: pt(cx, cy),
+            radiusX: 12.0,
+            radiusY: 12.0,
+        };
+        if todo.editing.is_some() {
+            self.accent.SetColor(&accent_color(Accent::Green));
+            self.accent.SetOpacity(alpha);
+            self.target.FillEllipse(&button, &self.accent);
+            self.black.SetOpacity(alpha);
+            self.draw_glyph(glyph::CHECK, cx, cy, &self.black);
+            self.black.SetOpacity(1.0);
+        } else {
+            self.light.SetOpacity(0.14 * alpha);
+            self.target.FillEllipse(&button, &self.light);
+            self.light.SetOpacity(if full { 0.3 } else { 0.95 } * alpha);
+            self.draw_glyph(glyph::ADD, cx, cy, &self.light);
+        }
+
+        if todo.tasks.is_empty() && todo.editing.is_none() {
+            self.draw_text(
+                "Belum ada tugas · klik + untuk menambah",
+                &self.tiny,
+                rect(x0, 46.0, x1, 46.0 + TODO_ROW),
+                0.5 * alpha,
+            );
+        }
+        for (index, task) in todo.tasks.iter().enumerate() {
+            let row = layout.row(index);
+            let hovered = todo.hover == Some(index);
+            if hovered {
+                self.light.SetOpacity(0.06 * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: row,
+                        radiusX: 8.0,
+                        radiusY: 8.0,
+                    },
+                    &self.light,
+                );
+            }
+            let (cx, cy) = layout.check(index);
+            if task.done {
+                self.accent.SetColor(&accent_color(Accent::Green));
+                self.accent.SetOpacity(alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(cx, cy),
+                        radiusX: 8.0,
+                        radiusY: 8.0,
+                    },
+                    &self.accent,
+                );
+                self.black.SetOpacity(alpha);
+                self.draw_small_glyph(glyph::CHECK, cx, cy, &self.black);
+                self.black.SetOpacity(1.0);
+            } else {
+                self.light.SetOpacity(0.55 * alpha);
+                self.target.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(cx, cy),
+                        radiusX: 7.5,
+                        radiusY: 7.5,
+                    },
+                    &self.light,
+                    1.4,
+                    None,
+                );
+            }
+            let text_left = row.left + 34.0;
+            let room = row.right - 34.0 - text_left;
+            if let Some(text) = self.text_layout(&task.text, &self.subtitle_text, room) {
+                if task.done {
+                    let _ = text.layout.SetStrikethrough(
+                        true,
+                        DWRITE_TEXT_RANGE {
+                            startPosition: 0,
+                            length: u32::MAX,
+                        },
+                    );
+                }
+                let opacity = if task.done { 0.4 } else { 0.92 };
+                self.draw_layout(
+                    &text.layout,
+                    text_left,
+                    cy - text.height / 2.0,
+                    opacity * alpha,
+                );
+            }
+            if hovered {
+                let (rx, ry) = layout.remove(index);
+                self.light.SetOpacity(0.6 * alpha);
+                self.draw_small_glyph(glyph::CLOSE, rx, ry, &self.light);
+            }
+        }
+    }
+
+    /// The field for a new task: what was typed so far, scrolled to keep the
+    /// end in view, and the blinking cursor.
+    unsafe fn draw_todo_field(&self, text: &str, caret: bool, field: D2D_RECT_F, alpha: f32) {
+        self.light.SetOpacity(0.1 * alpha);
+        let height = field.bottom - field.top;
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: field,
+                radiusX: height / 2.0,
+                radiusY: height / 2.0,
+            },
+            &self.light,
+        );
+        let left = field.left + 14.0;
+        let room = field.right - 14.0 - left;
+        let cy = (field.top + field.bottom) / 2.0;
+        let mut end = left;
+        if text.is_empty() {
+            if let Some(hint) =
+                self.text_layout("Tugas baru, Enter untuk simpan", &self.subtitle_text, room)
+            {
+                self.draw_layout(&hint.layout, left, cy - hint.height / 2.0, 0.4 * alpha);
+            }
+        } else {
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let Ok(layout) =
+                self.dwrite
+                    .CreateTextLayout(&wide, &self.subtitle_text, 4000.0, 100.0)
+            else {
+                return;
+            };
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            let _ = layout.GetMetrics(&mut metrics);
+            let width = metrics.widthIncludingTrailingWhitespace;
+            let shift = (width - room).max(0.0);
+            self.target.PushAxisAlignedClip(
+                &rect(left - 2.0, field.top, field.right - 10.0, field.bottom),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            );
+            self.draw_layout(&layout, left - shift, cy - metrics.height / 2.0, alpha);
+            self.target.PopAxisAlignedClip();
+            end = left + width - shift;
+        }
+        if caret {
+            self.light.SetOpacity(0.9 * alpha);
+            self.target
+                .FillRectangle(&rect(end + 1.0, cy - 8.0, end + 2.5, cy + 8.0), &self.light);
+        }
+    }
+
+    /// What sits at (`x`, `y`) on the task card.
+    pub fn todo_hit(&self, x: f32, y: f32, width: f32, todo: &TodoScene) -> Option<TodoHit> {
+        let cx = CANVAS.0 / 2.0;
+        let layout = TodoRects {
+            x0: cx - width / 2.0,
+            x1: cx + width / 2.0,
+        };
+        let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        let (ax, ay) = layout.add();
+        if (x - ax).powi(2) + (y - ay).powi(2) <= 14.0_f32.powi(2) {
+            return Some(TodoHit::Add);
+        }
+        if todo.editing.is_none() && todo.tasks.len() > todo.left && inside(layout.clear()) {
+            return Some(TodoHit::ClearDone);
+        }
+        let index = (0..todo.tasks.len()).find(|&index| inside(layout.row(index)))?;
+        let (rx, ry) = layout.remove(index);
+        if (x - rx).powi(2) + (y - ry).powi(2) <= 12.0_f32.powi(2) {
+            Some(TodoHit::Remove(index))
+        } else {
+            Some(TodoHit::Toggle(index))
+        }
     }
 
     /// Next prayer and how long until it, today's times, and the qibla.
@@ -1721,6 +1980,19 @@ impl Renderer {
     }
 
     /// One icon glyph centered on (`cx`, `cy`).
+    /// A small icon, as on the shelf's remove buttons.
+    unsafe fn draw_small_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.close_glyph,
+            &rect(cx - 8.0, cy - 8.0, cx + 8.0, cy + 8.0),
+            brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
+
     unsafe fn draw_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
         let wide: Vec<u16> = icon.encode_utf16().collect();
         self.target.DrawText(

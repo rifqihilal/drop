@@ -7,6 +7,7 @@
 use std::ffi::c_void;
 
 use windows::core::{implement, Result, GUID, PCWSTR};
+use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -21,6 +22,9 @@ use windows::Win32::Media::Audio::{
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Power::{
     GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
     SYSTEM_POWER_STATUS,
@@ -308,5 +312,30 @@ pub fn fullscreen_app(own: HWND) -> bool {
             && bounds.top <= screen.top
             && bounds.right >= screen.right
             && bounds.bottom >= screen.bottom
+    }
+}
+
+/// Text on the clipboard, if there is any.
+pub fn clipboard_text() -> Option<String> {
+    unsafe {
+        OpenClipboard(None).ok()?;
+        let text = GetClipboardData(CF_UNICODETEXT.0 as u32)
+            .ok()
+            .and_then(|handle| {
+                let memory = HGLOBAL(handle.0);
+                let units = GlobalLock(memory) as *const u16;
+                if units.is_null() {
+                    return None;
+                }
+                let mut len = 0;
+                while *units.add(len) != 0 {
+                    len += 1;
+                }
+                let text = String::from_utf16_lossy(std::slice::from_raw_parts(units, len));
+                let _ = GlobalUnlock(memory);
+                Some(text)
+            });
+        let _ = CloseClipboard();
+        text
     }
 }
