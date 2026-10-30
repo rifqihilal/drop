@@ -11,6 +11,10 @@ pub const LEVEL: (f32, f32) = (220.0, 36.0);
 /// Notch width range and height while showing a notification.
 pub const NOTICE_WIDTH: (f32, f32) = (200.0, 380.0);
 pub const NOTICE_HEIGHT: f32 = 62.0;
+/// Notch size while music plays: album art and level bars.
+pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
+/// Notch size of the full music card.
+pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -232,8 +236,14 @@ pub struct Notch {
     pub banner_visible: Spring,
     /// Kept while fading out so the last content stays drawn.
     pub banner: Option<Banner>,
+    /// How visible the playing-music strip (art and bars) is, 0..1.
+    pub music_visible: Spring,
+    /// How visible the full music card is, 0..1.
+    pub card_visible: Spring,
     idle: bool,
     banner_active: bool,
+    music_playing: bool,
+    card_open: bool,
 }
 
 impl Notch {
@@ -245,8 +255,12 @@ impl Notch {
             eyes: Eyes::new(now, seed),
             banner_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
             banner: None,
+            music_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
+            card_visible: Spring::new(0.0, 300.0, 34.0, 0.002),
             idle: false,
             banner_active: false,
+            music_playing: false,
+            card_open: false,
         }
     }
 
@@ -331,7 +345,10 @@ impl Notch {
 
     /// True while anything other than the clock needs periodic wake-ups.
     pub fn busy(&self) -> bool {
-        self.eyes_visible.value > 0.01 || self.idle || self.banner.is_some()
+        self.eyes_visible.value > 0.01
+            || self.idle
+            || self.banner.is_some()
+            || self.card_visible.value > 0.01
     }
 
     /// Advances every animation. Returns true while anything is still moving.
@@ -345,6 +362,8 @@ impl Notch {
         moving |= self.height.step(dt);
         moving |= self.eyes_visible.step(dt);
         moving |= self.banner_visible.step(dt);
+        moving |= self.music_visible.step(dt);
+        moving |= self.card_visible.step(dt);
         if let Some(Banner {
             content: Content::Level { level, .. },
             ..
@@ -363,19 +382,34 @@ impl Notch {
 
     /// Picks the shape and content for the current state. A banner wins over
     /// the eyes so a key press or notification while idle is still seen.
+    /// Order of precedence: banner, music card, playing strip, eyes, clock.
     fn retarget(&mut self) {
+        let banner = self.banner_active;
+        let card = self.card_open && !banner;
+        let strip = self.music_playing && !banner && !card;
+        let eyes = self.idle && !banner && !card && !strip;
         let (w, h) = match &self.banner {
-            Some(banner) if self.banner_active => banner.size,
-            _ if self.idle => IDLE,
+            Some(shown) if banner => shown.size,
+            _ if card => MUSIC_CARD,
+            _ if strip => MUSIC_STRIP,
+            _ if eyes => IDLE,
             _ => COMPACT,
         };
         self.width.target = w;
         self.height.target = h;
-        self.banner_visible.target = if self.banner_active { 1.0 } else { 0.0 };
-        self.eyes_visible.target = if self.idle && !self.banner_active {
-            1.0
-        } else {
-            0.0
-        };
+        let on = |visible: bool| if visible { 1.0 } else { 0.0 };
+        self.banner_visible.target = on(banner);
+        self.card_visible.target = on(card);
+        self.music_visible.target = on(strip);
+        self.eyes_visible.target = on(eyes);
+    }
+
+    /// `playing` shows the music strip; `card` opens the full music card.
+    pub fn set_music(&mut self, playing: bool, card: bool) {
+        if (playing, card) != (self.music_playing, self.card_open) {
+            self.music_playing = playing;
+            self.card_open = card;
+            self.retarget();
+        }
     }
 }

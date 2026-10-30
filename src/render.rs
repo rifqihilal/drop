@@ -14,13 +14,13 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, ID2D1StrokeStyle,
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
-    D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
-    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE,
+    D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_SOLID,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
@@ -37,21 +37,69 @@ use windows::Win32::Graphics::Gdi::{
     AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
     HGDIOBJ,
 };
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
+    WICDecodeMetadataCacheOnLoad, WICRect,
+};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
-    Accent, Content, LevelKind, Notice, Trailing, IDLE, LEVEL, NOTICE_HEIGHT, NOTICE_WIDTH,
+    Accent, Content, LevelKind, Notice, Trailing, IDLE, LEVEL, MUSIC_CARD, NOTICE_HEIGHT,
+    NOTICE_WIDTH,
 };
+use crate::media::Command;
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
-    max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1) + 2.0 * EAR,
-    max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT),
+    max(max(max(IDLE.0, LEVEL.0), NOTICE_WIDTH.1), MUSIC_CARD.0) + 2.0 * EAR,
+    max(max(max(IDLE.1, LEVEL.1), NOTICE_HEIGHT), MUSIC_CARD.1),
 );
+
+/// Album art is decoded at most this many pixels square.
+const ART_PIXELS: u32 = 160;
+/// Click radius around each music control.
+const HIT_RADIUS: f32 = 20.0;
+
+/// Positions on the music card, measured from the top of the notch.
+struct CardRects {
+    art: D2D_RECT_F,
+    text_left: f32,
+    text_right: f32,
+    progress_right: f32,
+    previous: (f32, f32),
+    play: (f32, f32),
+    next: (f32, f32),
+}
+
+impl CardRects {
+    fn new(width: f32) -> Self {
+        let cx = CANVAS.0 / 2.0;
+        let (x0, x1) = (cx - width / 2.0, cx + width / 2.0);
+        let controls_y = 37.0;
+        Self {
+            art: rect(x0 + 18.0, 20.0, x0 + 90.0, 92.0),
+            text_left: x0 + 104.0,
+            text_right: x1 - 150.0,
+            progress_right: x1 - 20.0,
+            previous: (x1 - 122.0, controls_y),
+            play: (x1 - 78.0, controls_y),
+            next: (x1 - 34.0, controls_y),
+        }
+    }
+}
+
+/// "3:07"
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", total / 60, total % 60)
+}
 
 // Notice card layout, left to right.
 const CARD_PAD_LEFT: f32 = 14.0;
@@ -83,6 +131,11 @@ pub mod glyph {
     pub const BLUETOOTH: &str = "\u{E702}";
     pub const HEADPHONES: &str = "\u{E7F6}";
     pub const PRAYER: &str = "\u{E823}";
+    pub const MUSIC: &str = "\u{E8D6}";
+    pub const PLAY: &str = "\u{E768}";
+    pub const PAUSE: &str = "\u{E769}";
+    pub const PREVIOUS: &str = "\u{E892}";
+    pub const NEXT: &str = "\u{E893}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -120,6 +173,21 @@ pub struct Scene<'a> {
     pub clock: &'a str,
     pub banner_visible: f32,
     pub banner: Option<&'a Content>,
+    pub music: Option<MusicScene<'a>>,
+    /// How visible the playing strip and the music card are, 0..1.
+    pub music_visible: f32,
+    pub card_visible: f32,
+}
+
+pub struct MusicScene<'a> {
+    pub title: &'a str,
+    pub artist: &'a str,
+    pub playing: bool,
+    /// Seconds.
+    pub position: f64,
+    pub duration: f64,
+    /// Level bar heights, 0..1.
+    pub bars: [f32; 4],
 }
 
 /// A measured line of text, ready to draw.
@@ -150,12 +218,16 @@ pub struct Renderer {
     title_text: IDWriteTextFormat,
     subtitle_text: IDWriteTextFormat,
     trailing_text: IDWriteTextFormat,
+    /// Small left-aligned text: track times.
+    small_left: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
     /// Recolored per notice.
     accent: ID2D1SolidColorBrush,
     round_caps: ID2D1StrokeStyle,
+    /// Album art of the current track, decoded once per song.
+    art: Option<ID2D1Bitmap>,
     dc: HDC,
     bitmap: HBITMAP,
     previous: HGDIOBJ,
@@ -267,6 +339,7 @@ impl Renderer {
             let title_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5)?;
             let subtitle_text = line(DWRITE_FONT_WEIGHT_NORMAL, 12.5)?;
             let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
+            let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
 
             Ok(Self {
                 factory,
@@ -277,11 +350,13 @@ impl Renderer {
                 title_text,
                 subtitle_text,
                 trailing_text,
+                small_left,
                 icons,
                 black,
                 light,
                 accent,
                 round_caps,
+                art: None,
                 dc,
                 bitmap,
                 previous,
@@ -303,6 +378,7 @@ impl Renderer {
             self.draw_shape(scene)?;
             self.draw_eyes(scene);
             self.draw_banner(scene);
+            self.draw_music(scene);
             self.draw_clock(scene);
             t.EndDraw(None, None)?;
 
@@ -424,6 +500,221 @@ impl Renderer {
             }
             Content::Notice(notice) => self.draw_notice(notice, x0, x1, h, alpha),
         }
+    }
+
+    /// Decodes album art for the current track; None clears it.
+    pub fn set_album_art(&mut self, bytes: Option<&[u8]>) {
+        self.art = bytes.and_then(|bytes| unsafe { self.decode_art(bytes).ok() });
+    }
+
+    /// Center-crops to a square and scales to a small bitmap: the art is never
+    /// drawn larger than the card shows it.
+    unsafe fn decode_art(&self, bytes: &[u8]) -> Result<ID2D1Bitmap> {
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let stream = SHCreateMemStream(Some(bytes)).ok_or(windows::core::Error::empty())?;
+        let decoder =
+            wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
+        let frame = decoder.GetFrame(0)?;
+        let (mut width, mut height) = (0, 0);
+        frame.GetSize(&mut width, &mut height)?;
+        let side = width.min(height);
+        let clipper = wic.CreateBitmapClipper()?;
+        clipper.Initialize(
+            &frame,
+            &WICRect {
+                X: ((width - side) / 2) as i32,
+                Y: ((height - side) / 2) as i32,
+                Width: side as i32,
+                Height: side as i32,
+            },
+        )?;
+        let pixels = ART_PIXELS.min(side);
+        let scaler = wic.CreateBitmapScaler()?;
+        scaler.Initialize(&clipper, pixels, pixels, WICBitmapInterpolationModeFant)?;
+        let converter = wic.CreateFormatConverter()?;
+        converter.Initialize(
+            &scaler,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeMedianCut,
+        )?;
+        self.target.CreateBitmapFromWicBitmap(&converter, None)
+    }
+
+    /// Which music control sits at (`x`, `y`) on the open card.
+    pub fn music_control_at(&self, x: f32, y: f32, width: f32) -> Option<Command> {
+        let card = CardRects::new(width);
+        [
+            (card.previous, Command::Previous),
+            (card.play, Command::TogglePlay),
+            (card.next, Command::Next),
+        ]
+        .into_iter()
+        .find(|((cx, cy), _)| (x - cx).powi(2) + (y - cy).powi(2) <= HIT_RADIUS.powi(2))
+        .map(|(_, command)| command)
+    }
+
+    unsafe fn draw_music(&self, scene: &Scene) {
+        let Some(music) = &scene.music else {
+            return;
+        };
+        let cx = CANVAS.0 / 2.0;
+        let (x0, x1) = (cx - scene.width / 2.0, cx + scene.width / 2.0);
+        let notch = rect(x0, 0.0, x1, scene.height);
+        if scene.music_visible > 0.01 {
+            self.target
+                .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_music_strip(music, x0, x1, scene.height, scene.music_visible.min(1.0));
+            self.target.PopAxisAlignedClip();
+        }
+        if scene.card_visible > 0.01 {
+            self.target
+                .PushAxisAlignedClip(&notch, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_music_card(music, scene.width, scene.card_visible.min(1.0));
+            self.target.PopAxisAlignedClip();
+        }
+    }
+
+    /// Small art on the left, level bars on the right.
+    unsafe fn draw_music_strip(&self, music: &MusicScene, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let cy = h / 2.0;
+        self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+        let (bar, gap, tallest) = (3.0, 3.0, 14.0);
+        let right = x1 - 14.0;
+        for (i, level) in music.bars.iter().enumerate() {
+            let left = right - (4 - i) as f32 * (bar + gap) + gap;
+            let half = (3.0 + (tallest - 3.0) * level.clamp(0.0, 1.0)) / 2.0;
+            self.light.SetOpacity(0.92 * alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(left, cy - half, left + bar, cy + half),
+                    radiusX: 1.5,
+                    radiusY: 1.5,
+                },
+                &self.light,
+            );
+        }
+    }
+
+    /// Art, title over artist, the three controls, and progress.
+    unsafe fn draw_music_card(&self, music: &MusicScene, width: f32, alpha: f32) {
+        let card = CardRects::new(width);
+        self.draw_art(card.art, 12.0, alpha);
+
+        let column = card.text_right - card.text_left;
+        if let Some(title) = self.text_layout(music.title, &self.title_text, column) {
+            self.draw_layout(&title.layout, card.text_left, 20.0, 0.97 * alpha);
+        }
+        if let Some(artist) = self.text_layout(music.artist, &self.subtitle_text, column) {
+            self.draw_layout(&artist.layout, card.text_left, 41.0, 0.55 * alpha);
+        }
+
+        // Play/pause in a white disc, previous and next beside it.
+        let (px, py) = card.play;
+        self.light.SetOpacity(alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(px, py),
+                radiusX: 17.0,
+                radiusY: 17.0,
+            },
+            &self.light,
+        );
+        let play_glyph = if music.playing {
+            glyph::PAUSE
+        } else {
+            glyph::PLAY
+        };
+        self.black.SetOpacity(alpha);
+        self.draw_glyph(play_glyph, px, py, &self.black);
+        self.black.SetOpacity(1.0);
+        self.light.SetOpacity(0.9 * alpha);
+        for (cx, cy, icon) in [
+            (card.previous.0, card.previous.1, glyph::PREVIOUS),
+            (card.next.0, card.next.1, glyph::NEXT),
+        ] {
+            self.draw_glyph(icon, cx, cy, &self.light);
+        }
+
+        // Progress, when the player reports a length.
+        if music.duration > 0.0 {
+            let fraction = (music.position / music.duration).clamp(0.0, 1.0) as f32;
+            let (left, right, y) = (card.text_left, card.progress_right, 76.0);
+            let bar = |end: f32, opacity: f32| {
+                self.light.SetOpacity(opacity * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: rect(left, y - 2.0, end, y + 2.0),
+                        radiusX: 2.0,
+                        radiusY: 2.0,
+                    },
+                    &self.light,
+                );
+            };
+            bar(right, 0.2);
+            bar(left + (right - left) * fraction, 0.9);
+            let elapsed = format_duration(music.position);
+            let remaining = format!("-{}", format_duration(music.duration - music.position));
+            if let Some(text) = self.text_layout(&elapsed, &self.small_left, 80.0) {
+                self.draw_layout(&text.layout, left, 84.0, 0.55 * alpha);
+            }
+            if let Some(text) = self.text_layout(&remaining, &self.small_left, 80.0) {
+                self.draw_layout(&text.layout, right - text.width, 84.0, 0.55 * alpha);
+            }
+        }
+    }
+
+    /// Album art clipped to a rounded square; a note icon when there is none.
+    unsafe fn draw_art(&self, bounds: D2D_RECT_F, radius: f32, alpha: f32) {
+        let rounded = D2D1_ROUNDED_RECT {
+            rect: bounds,
+            radiusX: radius,
+            radiusY: radius,
+        };
+        let size = bounds.right - bounds.left;
+        let brush = self.art.as_ref().and_then(|art| {
+            let brush = self.target.CreateBitmapBrush(art, None, None).ok()?;
+            let source = art.GetSize();
+            brush.SetTransform(&Matrix3x2 {
+                M11: size / source.width,
+                M12: 0.0,
+                M21: 0.0,
+                M22: size / source.height,
+                M31: bounds.left,
+                M32: bounds.top,
+            });
+            brush.SetOpacity(alpha);
+            Some(brush)
+        });
+        match brush {
+            Some(brush) => self.target.FillRoundedRectangle(&rounded, &brush),
+            None => {
+                self.light.SetOpacity(0.12 * alpha);
+                self.target.FillRoundedRectangle(&rounded, &self.light);
+                self.light.SetOpacity(0.7 * alpha);
+                let (cx, cy) = (
+                    (bounds.left + bounds.right) / 2.0,
+                    (bounds.top + bounds.bottom) / 2.0,
+                );
+                self.draw_glyph(glyph::MUSIC, cx, cy, &self.light);
+            }
+        }
+    }
+
+    /// One icon glyph centered on (`cx`, `cy`).
+    unsafe fn draw_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.icons,
+            &rect(cx - 16.0, cy - 16.0, cx + 16.0, cy + 16.0),
+            brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
     }
 
     /// Width of the notch needed to show `notice` in full (up to the cap).
@@ -664,7 +955,11 @@ impl Renderer {
 
     unsafe fn draw_clock(&self, scene: &Scene) {
         // The clock steps aside quickly so it never overlaps the eyes or level.
-        let cover = scene.eyes_visible.max(scene.banner_visible);
+        let cover = scene
+            .eyes_visible
+            .max(scene.banner_visible)
+            .max(scene.music_visible)
+            .max(scene.card_visible);
         let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
         if alpha <= 0.0 {
             return;
@@ -737,5 +1032,34 @@ fn arc(end: Vector2, radius: f32) -> D2D1_ARC_SEGMENT {
         rotationAngle: 0.0,
         sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
         arcSize: D2D1_ARC_SIZE_SMALL,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+    #[test]
+    fn decodes_jpeg_album_art() {
+        let Ok(bytes) = std::fs::read(r"C:\Windows\Web\Wallpaper\Windows\img0.jpg") else {
+            return; // No sample image on this machine.
+        };
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let mut renderer = Renderer::new(1.25).expect("renderer");
+        renderer.set_album_art(Some(&bytes));
+        let art = renderer.art.as_ref().expect("art decoded");
+        let size = unsafe { art.GetSize() };
+        assert_eq!(size.width, size.height, "cropped to a square");
+        assert!(size.width <= ART_PIXELS as f32);
+    }
+
+    #[test]
+    fn formats_durations() {
+        assert_eq!(format_duration(0.0), "0:00");
+        assert_eq!(format_duration(68.4), "1:08");
+        assert_eq!(format_duration(3725.0), "62:05");
     }
 }

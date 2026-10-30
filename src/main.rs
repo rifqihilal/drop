@@ -14,6 +14,7 @@ mod bluetooth;
 mod config;
 mod geo;
 mod keys;
+mod media;
 mod osd;
 mod prayer;
 mod render;
@@ -23,6 +24,7 @@ mod tray;
 mod wifi;
 
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use windows::core::{w, Result, HSTRING};
@@ -34,24 +36,29 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetLastInputInfo, TrackMouseEvent, LASTINPUTINFO, TME_LEAVE, TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONUP, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE,
+    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 
 use anim::{LevelKind, Notch, Notice};
 use bluetooth::{Bluetooth, DeviceEvent};
 use config::{PrayerSettings, Settings};
-use render::{Renderer, Scene};
+use media::{Command, Media, Track};
+use render::{MusicScene, Renderer, Scene};
 use system::{Audio, PowerEvent};
 use wifi::Wifi;
 
@@ -74,6 +81,15 @@ const LOW_BATTERY: [u32; 2] = [20, 10];
 const DEMO_STEP: Duration = Duration::from_secs(4);
 /// Wait before reading a newly connected device's battery level.
 const BATTERY_DELAY: Duration = Duration::from_millis(2500);
+/// Frame interval for the music level bars (~15 fps keeps them light).
+const BARS_MS: u32 = 66;
+const BAR_SPEEDS: [f32; 4] = [7.0, 9.5, 6.0, 11.0];
+/// How long the music card opens for a new song.
+const SONG_CARD: Duration = Duration::from_secs(4);
+/// The mouse rests this long on the notch before the music card opens.
+const HOVER_DELAY: Duration = Duration::from_millis(250);
+/// The card stays open this long after the mouse leaves.
+const LEAVE_GRACE: Duration = Duration::from_millis(400);
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
@@ -109,6 +125,18 @@ struct App {
     prayer: Option<PrayerDay>,
     /// Last seen modification time of the settings file.
     config_stamp: Option<SystemTime>,
+    /// Media session watcher; None if Windows refused it.
+    media: Option<Media>,
+    /// What is playing, if anything.
+    track: Option<Track>,
+    /// A track was received at least once.
+    tracks_seen: bool,
+    /// When the mouse entered the notch, while it is inside.
+    hover_since: Option<Instant>,
+    /// The music card stays open until then (new song, mouse just left).
+    card_until: Option<Instant>,
+    bars: [f32; 4],
+    bar_phase: f32,
 }
 
 /// One day's prayer schedule and which reminders already went off.
@@ -208,6 +236,13 @@ fn main() -> Result<()> {
             idle_from_args: idle_secs.is_some(),
             prayer: None,
             config_stamp: None,
+            media: Some(Media::start(hwnd)),
+            track: None,
+            tracks_seen: false,
+            hover_since: None,
+            card_until: None,
+            bars: [0.0; 4],
+            bar_phase: 0.0,
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
@@ -282,20 +317,128 @@ impl App {
             self.update_prayer();
         }
 
+        self.update_music(now);
         let moving = self.notch.step(now, dt);
+        let bars_moving = self.step_bars(dt);
+        // The open card shows a running progress bar.
+        let card_open = self.notch.card_visible.value > 0.01;
 
-        if moving || clock_changed {
+        if moving || clock_changed || bars_moving || card_open {
             self.draw();
         }
         let waiting =
             self.wifi_lost.is_some() || self.battery_check.is_some() || self.demo.is_some();
         self.schedule(if moving {
             FRAME_MS
-        } else if self.notch.busy() || waiting {
+        } else if bars_moving {
+            BARS_MS
+        } else if self.notch.busy() || waiting || self.hover_since.is_some() {
             BUSY_MS
         } else {
             COMPACT_MS
         });
+    }
+
+    fn on_track(&mut self, track: Option<Track>) {
+        let now = Instant::now();
+        let art = |track: &Option<Track>| track.as_ref().and_then(|t| t.art.clone());
+        let art_changed = match (art(&self.track), art(&track)) {
+            (Some(old), Some(new)) => !Arc::ptr_eq(&old, &new),
+            (old, new) => old.is_some() != new.is_some(),
+        };
+        if art_changed {
+            let bytes = art(&track);
+            self.renderer
+                .set_album_art(bytes.as_deref().map(Vec::as_slice));
+        }
+        let new_song = match (&self.track, &track) {
+            (Some(old), Some(new)) => !old.same_song(new),
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        // A new song opens the card for a moment; the song already playing
+        // when Drop starts does not.
+        if new_song && self.tracks_seen && track.as_ref().is_some_and(|t| t.playing) {
+            self.card_until = Some(now + SONG_CARD);
+        }
+        self.tracks_seen = true;
+        self.track = track;
+        self.tick();
+    }
+
+    /// Decides between the playing strip and the open card.
+    fn update_music(&mut self, now: Instant) {
+        let hovering = self
+            .hover_since
+            .is_some_and(|since| now.duration_since(since) >= HOVER_DELAY);
+        self.card_until = self.card_until.filter(|until| now < *until);
+        let card = self.track.is_some() && (hovering || self.card_until.is_some());
+        let playing = self.track.as_ref().is_some_and(|track| track.playing);
+        self.notch.set_music(playing, card);
+    }
+
+    /// Moves the level bars toward the current output peak. Returns true
+    /// while they are on screen and moving.
+    fn step_bars(&mut self, dt: f32) -> bool {
+        let playing = self.track.as_ref().is_some_and(|track| track.playing);
+        let shown = self.notch.music_visible.value > 0.01;
+        if !(shown && playing) {
+            self.bars = [0.0; 4];
+            return false;
+        }
+        self.bar_phase += dt;
+        let peak = self.audio.as_ref().map_or(0.0, Audio::peak);
+        let level = (peak * 1.8).min(1.0);
+        for (i, bar) in self.bars.iter_mut().enumerate() {
+            // Each bar sways at its own pace so they do not move in lockstep.
+            let sway = 0.55 + 0.45 * (self.bar_phase * BAR_SPEEDS[i] + i as f32).sin();
+            *bar += (level * sway - *bar) * 0.45;
+        }
+        true
+    }
+
+    fn on_hover(&mut self, inside: bool) {
+        let now = Instant::now();
+        if inside {
+            if self.hover_since.is_none() {
+                self.hover_since = Some(now);
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: self.hwnd,
+                    dwHoverTime: 0,
+                };
+                unsafe {
+                    let _ = TrackMouseEvent(&mut track);
+                }
+                self.schedule(BUSY_MS);
+            }
+        } else if self.hover_since.take().is_some() && self.notch.card_visible.target > 0.0 {
+            // A short grace period, so brushing past the edge does not snap it shut.
+            self.card_until = Some(now + LEAVE_GRACE);
+        }
+    }
+
+    fn on_click(&mut self, lparam: LPARAM) {
+        if self.notch.card_visible.value < 0.5 {
+            return;
+        }
+        let scale = window_scale(self.hwnd);
+        let x = (lparam.0 & 0xffff) as i16 as f32 / scale;
+        let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale;
+        let Some(command) = self.renderer.music_control_at(x, y, self.notch.width.value) else {
+            return;
+        };
+        if let Some(media) = &self.media {
+            media.send(command);
+        }
+        // Show the new state right away; the session confirms it shortly.
+        if let (Command::TogglePlay, Some(track)) = (command, self.track.as_mut()) {
+            track.position = track.position_now();
+            track.read_at = Instant::now();
+            track.playing = !track.playing;
+        }
+        self.tick();
     }
 
     fn show_level(&mut self, kind: LevelKind, level: f32, muted: bool) {
@@ -497,6 +640,16 @@ impl App {
             clock: &self.clock,
             banner_visible: n.banner_visible.value,
             banner: n.banner.as_ref().map(|banner| &banner.content),
+            music: self.track.as_ref().map(|track| MusicScene {
+                title: &track.title,
+                artist: &track.artist,
+                playing: track.playing,
+                position: track.position_now(),
+                duration: track.duration,
+                bars: self.bars,
+            }),
+            music_visible: n.music_visible.value,
+            card_visible: n.card_visible.value,
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);
     }
@@ -521,6 +674,10 @@ impl App {
     fn relayout(&mut self) {
         if let Ok(renderer) = Renderer::new(window_scale(self.hwnd)) {
             self.renderer = renderer;
+            // Bitmaps belong to the old surface; decode the art again.
+            let art = self.track.as_ref().and_then(|track| track.art.clone());
+            self.renderer
+                .set_album_art(art.as_deref().map(Vec::as_slice));
         }
         self.draw();
     }
@@ -538,6 +695,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_RBUTTONUP => {
             handle_menu(hwnd);
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            with_app(|app| app.on_click(lparam));
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            with_app(|app| app.on_hover(true));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.on_hover(false));
+            LRESULT(0)
+        }
+        media::MEDIA_MSG => {
+            let track = media::take_track(lparam);
+            with_app(|app| app.on_track(track));
             LRESULT(0)
         }
         system::VOLUME_MSG => {

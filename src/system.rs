@@ -10,6 +10,7 @@ use windows::core::{implement, Result, GUID, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
+    IAudioMeterInformation,
 };
 use windows::Win32::Media::Audio::{
     eConsole, eRender, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
@@ -94,6 +95,8 @@ pub struct Audio {
     enumerator: IMMDeviceEnumerator,
     watcher: IMMNotificationClient,
     endpoint: Option<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
+    /// Output level of the same device, for the music bars.
+    meter: Option<IAudioMeterInformation>,
 }
 
 impl Audio {
@@ -110,6 +113,7 @@ impl Audio {
                 enumerator,
                 watcher,
                 endpoint: None,
+                meter: None,
             };
             audio.rebind();
             Ok(audio)
@@ -123,6 +127,9 @@ impl Audio {
             let Ok(device) = self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole) else {
                 return;
             };
+            self.meter = device
+                .Activate::<IAudioMeterInformation>(CLSCTX_ALL, None)
+                .ok();
             let Ok(volume) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) else {
                 return;
             };
@@ -131,6 +138,15 @@ impl Audio {
                 self.endpoint = Some((volume, callback));
             }
         }
+    }
+
+    /// Current output peak of the default device, 0..1. Cheap: it reads the
+    /// level the audio engine already tracks, without capturing audio.
+    pub fn peak(&self) -> f32 {
+        self.meter
+            .as_ref()
+            .and_then(|meter| unsafe { meter.GetPeakValue() }.ok())
+            .unwrap_or(0.0)
     }
 
     /// Applies a volume key and returns the resulting level and mute state.
