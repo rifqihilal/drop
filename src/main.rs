@@ -12,10 +12,12 @@ mod anim;
 mod autostart;
 mod bluetooth;
 mod config;
+mod geo;
 mod keys;
 mod osd;
 mod prayer;
 mod render;
+mod settings;
 mod system;
 mod tray;
 mod wifi;
@@ -31,9 +33,7 @@ use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAU
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
-use windows::Win32::System::SystemServices::TIME_ZONE_ID_DAYLIGHT;
 use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
@@ -50,7 +50,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{LevelKind, Notch, Notice};
 use bluetooth::{Bluetooth, DeviceEvent};
-use config::PrayerSettings;
+use config::{PrayerSettings, Settings};
 use render::{Renderer, Scene};
 use system::{Audio, PowerEvent};
 use wifi::Wifi;
@@ -63,7 +63,6 @@ const FRAME_MS: u32 = 16;
 const BUSY_MS: u32 = 100;
 /// Wake-up interval while compact: only the idle check and the clock need it.
 const COMPACT_MS: u32 = 500;
-const DEFAULT_IDLE_SECS: u32 = 120;
 const MENU_QUIT: usize = 1;
 const MENU_AUTOSTART: usize = 2;
 /// A Wi-Fi drop is only announced if it does not come back within this time,
@@ -77,7 +76,7 @@ const DEMO_STEP: Duration = Duration::from_secs(4);
 const BATTERY_DELAY: Duration = Duration::from_millis(2500);
 /// Prayer reminders stay up longer than other notices.
 const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
-const MENU_PRAYER_SETTINGS: usize = 3;
+const MENU_SETTINGS: usize = 3;
 
 struct App {
     hwnd: HWND,
@@ -103,7 +102,10 @@ struct App {
     demo: Option<(usize, Instant)>,
     /// A connected Bluetooth device whose battery level is read at the deadline.
     battery_check: Option<(Instant, DeviceEvent)>,
-    /// Today's prayer times; None until a location is set in the settings file.
+    settings: Settings,
+    /// `--idle-secs` was given, overriding the idle delay from the settings.
+    idle_from_args: bool,
+    /// Today's prayer times; None until a location is set.
     prayer: Option<PrayerDay>,
     /// Last seen modification time of the settings file.
     config_stamp: Option<SystemTime>,
@@ -124,7 +126,7 @@ impl PrayerDay {
             date.1 as u32,
             date.2 as u32,
             settings.location,
-            utc_offset_hours(),
+            prayer::utc_offset_hours(),
         );
         Self {
             settings,
@@ -145,7 +147,7 @@ thread_local! {
 }
 
 fn main() -> Result<()> {
-    let idle_secs = parse_idle_secs().unwrap_or(DEFAULT_IDLE_SECS);
+    let idle_secs = parse_idle_secs();
     unsafe {
         // One notch per session: a second launch (say, from auto-start) just exits.
         // The handle stays open for the life of the process.
@@ -189,7 +191,7 @@ fn main() -> Result<()> {
             hwnd,
             renderer: Renderer::new(window_scale(hwnd))?,
             notch: Notch::new(now, GetTickCount64()),
-            idle_after_ms: idle_secs * 1000,
+            idle_after_ms: idle_secs.unwrap_or(0) * 1000,
             last_tick: now,
             timer_ms: 0,
             clock: current_clock(),
@@ -202,13 +204,15 @@ fn main() -> Result<()> {
             battery: None,
             demo: has_flag("--demo").then(|| (0, now + Duration::from_secs(1))),
             battery_check: None,
+            settings: Settings::default(),
+            idle_from_args: idle_secs.is_some(),
             prayer: None,
             config_stamp: None,
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
         app.config_stamp = config::modified();
-        app.update_prayer();
+        app.apply_settings(false);
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         tray::add(hwnd);
@@ -218,9 +222,15 @@ fn main() -> Result<()> {
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // After the app exists: Windows answers right away with the current values.
         system::watch_power(hwnd);
+        if has_flag("--settings") {
+            settings::open(hwnd);
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if settings::handle_dialog_message(&msg) {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -245,7 +255,9 @@ impl App {
             .is_some_and(|(deadline, _)| now >= *deadline)
         {
             if let Some((_, ssid)) = self.wifi_lost.take() {
-                self.notify(notices::wifi(&ssid, false));
+                if self.settings.notify_wifi {
+                    self.notify(notices::wifi(&ssid, false));
+                }
             }
         }
         if self
@@ -302,7 +314,9 @@ impl App {
     }
 
     fn notify_for(&mut self, notice: Notice, duration: Duration) {
-        chime();
+        if self.settings.sound {
+            chime();
+        }
         let width = self.renderer.notice_width(&notice);
         self.notch
             .show_notice(notice, width, duration, Instant::now());
@@ -310,27 +324,42 @@ impl App {
         self.schedule(FRAME_MS);
     }
 
-    /// Reloads the prayer schedule when the settings file changed or the day
-    /// rolled over, then raises any reminder that is due. Runs once a minute.
+    /// Reads the settings file and puts it into effect. `announce` confirms
+    /// a new prayer location with a notice.
+    fn apply_settings(&mut self, announce: bool) {
+        self.settings = Settings::load();
+        if !self.idle_from_args {
+            self.idle_after_ms = self.settings.idle_minutes * 60_000;
+        }
+        self.prayer = self
+            .settings
+            .prayer()
+            .map(|settings| PrayerDay::new(settings, prayer::today()));
+        if announce && self.settings.notify_prayer {
+            if let Some(day) = &self.prayer {
+                let notice = notices::prayer_ready(day);
+                self.notify(notice);
+            }
+        }
+        self.update_prayer();
+    }
+
+    /// Picks up edits to the settings file and the change of day, then
+    /// raises any prayer reminder that is due. Runs once a minute.
     fn update_prayer(&mut self) {
         let stamp = config::modified();
-        let edited = stamp != self.config_stamp;
-        self.config_stamp = stamp;
-        let today = today();
-        let stale = self.prayer.as_ref().is_none_or(|day| day.date != today);
-        if edited || stale {
-            self.prayer = config::load_prayer().map(|settings| PrayerDay::new(settings, today));
-            // Confirms a hand edit of the settings file took effect.
-            if edited {
-                if let Some(day) = &self.prayer {
-                    let notice = notices::prayer_ready(day);
-                    self.notify(notice);
-                }
-            }
+        if stamp != self.config_stamp {
+            self.config_stamp = stamp;
+            self.apply_settings(true);
+            return;
+        }
+        let today = prayer::today();
+        if let Some(day) = self.prayer.as_mut().filter(|day| day.date != today) {
+            *day = PrayerDay::new(day.settings.clone(), today);
         }
 
         let now = minutes_now();
-        let Some(day) = &mut self.prayer else {
+        let Some(day) = self.prayer.as_mut().filter(|_| self.settings.notify_prayer) else {
             return;
         };
         let lead = day.settings.remind_minutes;
@@ -398,6 +427,7 @@ impl App {
                 };
                 let on_battery = self.on_ac == Some(false);
                 if on_battery
+                    && self.settings.notify_battery
                     && LOW_BATTERY
                         .iter()
                         .any(|&level| previous > level && percent <= level)
@@ -416,7 +446,9 @@ impl App {
                     return;
                 }
             }
-            self.notify(notices::wifi(&ssid, true));
+            if self.settings.notify_wifi {
+                self.notify(notices::wifi(&ssid, true));
+            }
         } else {
             self.wifi_lost = Some((Instant::now() + WIFI_GRACE, ssid));
             self.schedule(BUSY_MS);
@@ -427,7 +459,8 @@ impl App {
         let event = self
             .bluetooth
             .as_mut()
-            .and_then(|bluetooth| bluetooth.event(wparam, lparam));
+            .and_then(|bluetooth| bluetooth.event(wparam, lparam))
+            .filter(|_| self.settings.notify_bluetooth);
         if let Some(event) = event {
             self.notify(notices::bluetooth(
                 event.name.clone(),
@@ -515,6 +548,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(|app| app.on_volume_key(wparam.0 as u16));
             LRESULT(0)
         }
+        settings::SAVED_MSG => {
+            with_app(App::update_prayer);
+            LRESULT(0)
+        }
         system::DEVICE_MSG => {
             with_app(|app| {
                 if let Some(audio) = app.audio.as_mut() {
@@ -567,7 +604,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 fn handle_menu(hwnd: HWND) {
     match show_menu(hwnd) {
         MENU_AUTOSTART => autostart::set_enabled(!autostart::is_enabled()),
-        MENU_PRAYER_SETTINGS => config::open_in_editor(),
+        MENU_SETTINGS => settings::open(hwnd),
         MENU_QUIT => unsafe {
             let _ = DestroyWindow(hwnd);
         },
@@ -606,12 +643,7 @@ fn show_menu(hwnd: HWND) -> usize {
             }
             let _ = AppendMenuW(menu, MF_POPUP, schedule.0 as usize, &HSTRING::from(heading));
         }
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            MENU_PRAYER_SETTINGS,
-            w!("Atur lokasi sholat…"),
-        );
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Pengaturan…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
 
         let autostart_flags = if autostart::is_enabled() {
@@ -667,28 +699,10 @@ fn current_clock() -> String {
     format!("{:02}.{:02}", time.wHour, time.wMinute)
 }
 
-/// Local (year, month, day).
-fn today() -> (u16, u16, u16) {
-    let time = unsafe { GetLocalTime() };
-    (time.wYear, time.wMonth, time.wDay)
-}
-
 /// Local minutes after midnight.
 fn minutes_now() -> u32 {
     let time = unsafe { GetLocalTime() };
     time.wHour as u32 * 60 + time.wMinute as u32
-}
-
-/// Hours the local clock is ahead of UTC, including daylight saving.
-fn utc_offset_hours() -> f64 {
-    let mut zone = TIME_ZONE_INFORMATION::default();
-    let kind = unsafe { GetTimeZoneInformation(&mut zone) };
-    let bias = if kind == TIME_ZONE_ID_DAYLIGHT {
-        zone.Bias + zone.DaylightBias
-    } else {
-        zone.Bias + zone.StandardBias
-    };
-    -(bias as f64) / 60.0
 }
 
 fn window_scale(hwnd: HWND) -> f32 {

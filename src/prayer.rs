@@ -3,6 +3,10 @@
 //! reach their length plus the object's (Syafi'i), and a few minutes of
 //! ihtiyat added to each time.
 
+use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::System::SystemServices::TIME_ZONE_ID_DAYLIGHT;
+use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+
 /// The five prayers Drop reminds about, in order.
 pub const NAMES: [&str; 5] = ["Subuh", "Dzuhur", "Ashar", "Maghrib", "Isya"];
 
@@ -132,6 +136,36 @@ fn fix_hour(h: f64) -> f64 {
     h.rem_euclid(24.0)
 }
 
+/// Local (year, month, day).
+pub fn today() -> (u16, u16, u16) {
+    let time = unsafe { GetLocalTime() };
+    (time.wYear, time.wMonth, time.wDay)
+}
+
+/// Hours the local clock is ahead of UTC, including daylight saving.
+pub fn utc_offset_hours() -> f64 {
+    let mut zone = TIME_ZONE_INFORMATION::default();
+    let kind = unsafe { GetTimeZoneInformation(&mut zone) };
+    let bias = if kind == TIME_ZONE_ID_DAYLIGHT {
+        zone.Bias + zone.DaylightBias
+    } else {
+        zone.Bias + zone.StandardBias
+    };
+    -(bias as f64) / 60.0
+}
+
+/// The schedule for today at `location`, in the computer's time zone.
+pub fn today_at(location: Location) -> Schedule {
+    let (year, month, day) = today();
+    schedule(
+        year as i32,
+        month as u32,
+        day as u32,
+        location,
+        utc_offset_hours(),
+    )
+}
+
 /// "04:09"
 pub fn format_time(minutes: u32) -> String {
     format!("{:02}:{:02}", minutes / 60, minutes % 60)
@@ -223,6 +257,18 @@ mod tests {
             9.0,
             (2026, 10, 30),
             ["03:58", "11:24", "14:41", "17:30", "18:40"],
+        );
+        // Aimas, against Kemenag's schedule for Kabupaten Sorong.
+        let aimas = Location {
+            latitude: -0.95698,
+            longitude: 131.33534,
+            elevation: 9.0,
+        };
+        check(
+            aimas,
+            9.0,
+            (2026, 10, 30),
+            ["04:37", "12:02", "15:20", "18:06", "19:16"],
         );
     }
 
