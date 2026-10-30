@@ -3,25 +3,29 @@
 //! Drop: a lightweight native notch for Windows.
 //!
 //! Prototype scope: a compact notch with a clock while the computer is in use,
-//! growing into a pair of animated eyes once it has been idle for a while, and
-//! showing volume and brightness changes in place of Windows' own flyout.
+//! growing into a pair of animated eyes once it has been idle for a while,
+//! showing volume and brightness changes in place of Windows' own flyout, and
+//! announcing Wi-Fi, Bluetooth and charger changes.
 //! Right-click the notch or the tray icon for the menu.
 
 mod anim;
 mod autostart;
+mod bluetooth;
 mod keys;
 mod osd;
 mod render;
 mod system;
 mod tray;
+mod wifi;
 
 use std::cell::RefCell;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use windows::core::{w, Result};
 use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
@@ -35,14 +39,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage,
     MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_NULL,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TPM_RIGHTBUTTON, WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP,
+    WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use anim::{HudKind, Notch};
-use render::{HudScene, Renderer, Scene};
-use system::Audio;
+use anim::{LevelKind, Notch};
+use bluetooth::Bluetooth;
+use render::{glyph, Renderer, Scene};
+use system::{Audio, PowerEvent};
+use wifi::Wifi;
 
 const TIMER_ID: usize = 1;
 /// Frame interval while something is animating (~60 fps).
@@ -55,6 +61,13 @@ const COMPACT_MS: u32 = 500;
 const DEFAULT_IDLE_SECS: u32 = 120;
 const MENU_QUIT: usize = 1;
 const MENU_AUTOSTART: usize = 2;
+/// A Wi-Fi drop is only announced if it does not come back within this time,
+/// so roaming between access points stays quiet.
+const WIFI_GRACE: Duration = Duration::from_secs(4);
+/// Battery levels that trigger a low-battery notice on the way down.
+const LOW_BATTERY: [u32; 2] = [20, 10];
+/// Gap between sample notices in `--demo`.
+const DEMO_STEP: Duration = Duration::from_secs(4);
 
 struct App {
     hwnd: HWND,
@@ -68,6 +81,17 @@ struct App {
     audio: Option<Audio>,
     /// Last known brightness; None until Windows reports the starting value.
     brightness: Option<u32>,
+    /// Kept alive so the WLAN service keeps calling back.
+    _wifi: Option<Wifi>,
+    /// A Wi-Fi disconnect waiting out the grace period: (deadline, network).
+    wifi_lost: Option<(Instant, String)>,
+    bluetooth: Option<Bluetooth>,
+    has_battery: bool,
+    /// Last known power source and charge; None until Windows reports them.
+    on_ac: Option<bool>,
+    battery: Option<u32>,
+    /// `--demo`: index of the next sample notice and when to show it.
+    demo: Option<(usize, Instant)>,
 }
 
 thread_local! {
@@ -125,6 +149,13 @@ fn main() -> Result<()> {
             clock: current_clock(),
             audio: Audio::new(hwnd).ok(),
             brightness: None,
+            _wifi: Wifi::watch(hwnd),
+            wifi_lost: None,
+            bluetooth: Bluetooth::watch(hwnd),
+            has_battery: system::has_battery(),
+            on_ac: None,
+            battery: None,
+            demo: has_flag("--demo").then(|| (0, now + Duration::from_secs(1))),
         };
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -133,8 +164,8 @@ fn main() -> Result<()> {
         keys::install(hwnd);
         app.schedule(COMPACT_MS);
         APP.with(|cell| *cell.borrow_mut() = Some(app));
-        // After the app exists: Windows answers right away with the current value.
-        system::watch_brightness(hwnd);
+        // After the app exists: Windows answers right away with the current values.
+        system::watch_power(hwnd);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -156,6 +187,21 @@ impl App {
         self.last_tick = now;
 
         self.notch.set_idle(idle_ms() >= self.idle_after_ms, now);
+        if self
+            .wifi_lost
+            .as_ref()
+            .is_some_and(|(deadline, _)| now >= *deadline)
+        {
+            self.wifi_lost = None;
+            self.notify(glyph::WIFI, "Wi-Fi terputus".to_string(), true);
+        }
+        if let Some((index, at)) = self.demo {
+            if now >= at {
+                let (icon, text, dim) = demo_notice(index);
+                self.demo = Some((index + 1, now + DEMO_STEP));
+                self.notify(icon, text, dim);
+            }
+        }
         let moving = self.notch.step(now, dt);
 
         let clock = current_clock();
@@ -165,40 +211,118 @@ impl App {
         if moving || clock_changed {
             self.draw();
         }
+        let waiting = self.wifi_lost.is_some() || self.demo.is_some();
         self.schedule(if moving {
             FRAME_MS
-        } else if self.notch.busy() {
+        } else if self.notch.busy() || waiting {
             BUSY_MS
         } else {
             COMPACT_MS
         });
     }
 
-    fn show_level(&mut self, kind: HudKind, level: f32, muted: bool) {
+    fn show_level(&mut self, kind: LevelKind, level: f32, muted: bool) {
         // Older shells host the flyout in a window that gets recreated; keep
         // it hidden. Newer Windows 11 draws it inside Explorer, where only
         // taking over the keys helps (see `keys`).
         osd::set_suppressed(true);
-        self.notch.show_hud(kind, level, muted, Instant::now());
+        self.notch.show_level(kind, level, muted, Instant::now());
         self.tick();
     }
 
+    /// Shows a notice with the notification sound. Every notice uses the same
+    /// sound so they are recognizable by ear.
+    fn notify(&mut self, glyph: &'static str, text: String, dim: bool) {
+        chime();
+        self.notch.show_notice(glyph, text, dim, Instant::now());
+        // Called from `tick` too, which redraws right after.
+        self.schedule(FRAME_MS);
+    }
+
     fn on_volume(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        self.show_level(HudKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
+        self.show_level(LevelKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
     }
 
     fn on_volume_key(&mut self, vk: u16) {
         let result = self.audio.as_ref().and_then(|audio| audio.press(vk));
         if let Some((level, muted)) = result {
-            self.show_level(HudKind::Volume, level, muted);
+            self.show_level(LevelKind::Volume, level, muted);
         }
     }
 
-    fn on_brightness(&mut self, brightness: u32) {
-        let previous = self.brightness.replace(brightness);
-        // The first report is the starting value, not a change.
-        if previous.is_some_and(|previous| previous != brightness) {
-            self.show_level(HudKind::Brightness, brightness as f32 / 100.0, false);
+    // Windows reports each power value once right after registering; those
+    // first reports are starting values, not changes.
+    fn on_power(&mut self, event: PowerEvent) {
+        match event {
+            PowerEvent::Brightness(brightness) => {
+                let previous = self.brightness.replace(brightness);
+                if previous.is_some_and(|previous| previous != brightness) {
+                    self.show_level(LevelKind::Brightness, brightness as f32 / 100.0, false);
+                }
+            }
+            PowerEvent::OnAc(on_ac) => {
+                let previous = self.on_ac.replace(on_ac);
+                if !self.has_battery || previous.is_none_or(|previous| previous == on_ac) {
+                    return;
+                }
+                let percent = self.battery.unwrap_or(0);
+                let text = if on_ac {
+                    format!("Mengisi daya · {percent}%")
+                } else {
+                    format!("Memakai baterai · {percent}%")
+                };
+                self.notify(glyph::battery(percent, on_ac), text, false);
+            }
+            PowerEvent::Battery(percent) => {
+                let Some(previous) = self.battery.replace(percent) else {
+                    return;
+                };
+                let on_ac = self.on_ac.unwrap_or(false);
+                if on_ac && previous < 100 && percent == 100 {
+                    self.notify(
+                        glyph::battery(100, true),
+                        "Baterai penuh".to_string(),
+                        false,
+                    );
+                } else if !on_ac
+                    && LOW_BATTERY
+                        .iter()
+                        .any(|&level| previous > level && percent <= level)
+                {
+                    let text = format!("Baterai lemah · {percent}% · colokkan charger");
+                    self.notify(glyph::battery(percent, false), text, false);
+                }
+            }
+        }
+    }
+
+    fn on_wifi(&mut self, connected: bool, ssid: String) {
+        if connected {
+            // Back on the same network within the grace period: nothing to say.
+            if let Some((_, lost)) = self.wifi_lost.take() {
+                if lost == ssid {
+                    return;
+                }
+            }
+            self.notify(glyph::WIFI, format!("Terhubung ke {ssid}"), false);
+        } else {
+            self.wifi_lost = Some((Instant::now() + WIFI_GRACE, ssid));
+            self.schedule(BUSY_MS);
+        }
+    }
+
+    fn on_device_change(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        let event = self
+            .bluetooth
+            .as_mut()
+            .and_then(|bluetooth| bluetooth.event(wparam, lparam));
+        if let Some((name, connected)) = event {
+            let text = if connected {
+                format!("{name} terhubung")
+            } else {
+                format!("{name} terputus")
+            };
+            self.notify(glyph::BLUETOOTH, text, !connected);
         }
     }
 
@@ -211,12 +335,8 @@ impl App {
             blink: n.eyes.blink,
             look: n.eyes.look.value,
             clock: &self.clock,
-            hud_visible: n.hud_visible.value,
-            hud: n.hud.as_ref().map(|hud| HudScene {
-                kind: hud.kind,
-                level: hud.level.value,
-                muted: hud.muted,
-            }),
+            banner_visible: n.banner_visible.value,
+            banner: n.banner.as_ref().map(|banner| &banner.content),
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);
     }
@@ -277,9 +397,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
-            if let Some(brightness) = system::brightness_from(wparam, lparam) {
-                with_app(|app| app.on_brightness(brightness));
+            if let Some(event) = system::power_event(wparam, lparam) {
+                with_app(|app| app.on_power(event));
             }
+            LRESULT(1)
+        }
+        wifi::WIFI_MSG => {
+            let ssid = wifi::take_ssid(lparam);
+            with_app(|app| app.on_wifi(wparam.0 != 0, ssid));
+            LRESULT(0)
+        }
+        WM_DEVICECHANGE => {
+            with_app(|app| app.on_device_change(wparam, lparam));
             LRESULT(1)
         }
         tray::CALLBACK_MSG => {
@@ -406,4 +535,43 @@ fn parse_idle_secs() -> Option<u32> {
         }
     }
     None
+}
+
+fn has_flag(flag: &str) -> bool {
+    std::env::args().skip(1).any(|arg| arg == flag)
+}
+
+/// The system notification sound, played asynchronously.
+fn chime() {
+    unsafe {
+        let _ = PlaySoundW(
+            w!("Notification.Default"),
+            None,
+            SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
+        );
+    }
+}
+
+/// `--demo` cycles through sample notices to preview their look.
+fn demo_notice(index: usize) -> (&'static str, String, bool) {
+    match index % 6 {
+        0 => (glyph::WIFI, "Terhubung ke Rumah 5G".to_string(), false),
+        1 => (
+            glyph::BLUETOOTH,
+            "Galaxy Buds2 terhubung".to_string(),
+            false,
+        ),
+        2 => (
+            glyph::battery(54, true),
+            "Mengisi daya · 54%".to_string(),
+            false,
+        ),
+        3 => (
+            glyph::battery(20, false),
+            "Baterai lemah · 20% · colokkan charger".to_string(),
+            false,
+        ),
+        4 => (glyph::BLUETOOTH, "Galaxy Buds2 terputus".to_string(), true),
+        _ => (glyph::WIFI, "Wi-Fi terputus".to_string(), true),
+    }
 }

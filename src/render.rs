@@ -23,6 +23,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -34,12 +36,15 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use windows_numerics::Vector2;
 
-use crate::anim::{HudKind, HUD, IDLE};
+use crate::anim::{Content, LevelKind, IDLE, LEVEL, NOTICE};
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
-pub const CANVAS: (f32, f32) = (max(IDLE.0, HUD.0) + 2.0 * EAR, max(IDLE.1, HUD.1));
+pub const CANVAS: (f32, f32) = (
+    max(max(IDLE.0, LEVEL.0), NOTICE.0) + 2.0 * EAR,
+    max(max(IDLE.1, LEVEL.1), NOTICE.1),
+);
 
 const fn max(a: f32, b: f32) -> f32 {
     if a > b {
@@ -49,12 +54,34 @@ const fn max(a: f32, b: f32) -> f32 {
     }
 }
 
-// Segoe Fluent Icons glyphs.
-const GLYPH_MUTE: &str = "\u{E74F}";
-const GLYPH_VOLUME_LOW: &str = "\u{E993}";
-const GLYPH_VOLUME_MID: &str = "\u{E994}";
-const GLYPH_VOLUME_HIGH: &str = "\u{E995}";
-const GLYPH_BRIGHTNESS: &str = "\u{E706}";
+/// Segoe Fluent Icons glyphs.
+pub mod glyph {
+    pub const MUTE: &str = "\u{E74F}";
+    pub const VOLUME_LOW: &str = "\u{E993}";
+    pub const VOLUME_MID: &str = "\u{E994}";
+    pub const VOLUME_HIGH: &str = "\u{E995}";
+    pub const BRIGHTNESS: &str = "\u{E706}";
+    pub const WIFI: &str = "\u{E701}";
+    pub const BLUETOOTH: &str = "\u{E702}";
+
+    /// Battery outline filled to `percent`, with a bolt while charging.
+    pub fn battery(percent: u32, charging: bool) -> &'static str {
+        const LEVELS: [&str; 11] = [
+            "\u{EBA0}", "\u{EBA1}", "\u{EBA2}", "\u{EBA3}", "\u{EBA4}", "\u{EBA5}", "\u{EBA6}",
+            "\u{EBA7}", "\u{EBA8}", "\u{EBA9}", "\u{EBAA}",
+        ];
+        const CHARGING: [&str; 11] = [
+            "\u{EBAB}", "\u{EBAC}", "\u{EBAD}", "\u{EBAE}", "\u{EBAF}", "\u{EBB0}", "\u{EBB1}",
+            "\u{EBB2}", "\u{EBB3}", "\u{EBB4}", "\u{EBB5}",
+        ];
+        let step = ((percent.min(100) + 5) / 10) as usize;
+        if charging {
+            CHARGING[step]
+        } else {
+            LEVELS[step]
+        }
+    }
+}
 
 const EYE_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 0.93,
@@ -71,14 +98,8 @@ pub struct Scene<'a> {
     pub blink: f32,
     pub look: f32,
     pub clock: &'a str,
-    pub hud_visible: f32,
-    pub hud: Option<HudScene>,
-}
-
-pub struct HudScene {
-    pub kind: HudKind,
-    pub level: f32,
-    pub muted: bool,
+    pub banner_visible: f32,
+    pub banner: Option<&'a Content>,
 }
 
 pub struct Renderer {
@@ -86,6 +107,7 @@ pub struct Renderer {
     target: ID2D1DCRenderTarget,
     text: IDWriteTextFormat,
     small_text: IDWriteTextFormat,
+    notice_text: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
@@ -166,12 +188,26 @@ impl Renderer {
             let text = format(w!("Segoe UI Variable Display"), 13.0)?;
             let small_text = format(w!("Segoe UI Variable Display"), 12.0)?;
             let icons = format(w!("Segoe Fluent Icons"), 15.0)?;
+            // Left-aligned on one line; long names end in an ellipsis.
+            let notice_text = format(w!("Segoe UI Variable Display"), 13.0)?;
+            notice_text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+            notice_text.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            let ellipsis = dwrite.CreateEllipsisTrimmingSign(&notice_text)?;
+            notice_text.SetTrimming(
+                &DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                },
+                &ellipsis,
+            )?;
 
             Ok(Self {
                 factory,
                 target,
                 text,
                 small_text,
+                notice_text,
                 icons,
                 black,
                 light,
@@ -195,7 +231,7 @@ impl Renderer {
             t.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
             self.draw_shape(scene)?;
             self.draw_eyes(scene);
-            self.draw_hud(scene);
+            self.draw_banner(scene);
             self.draw_clock(scene);
             t.EndDraw(None, None)?;
 
@@ -287,30 +323,50 @@ impl Renderer {
         }
     }
 
-    /// Icon, level bar and percentage, laid out against the notch's current
-    /// edges so they ride along while it grows.
-    unsafe fn draw_hud(&self, scene: &Scene) {
-        let Some(hud) = &scene.hud else {
+    /// Banner content, laid out against the notch's current edges so it rides
+    /// along while the notch grows.
+    unsafe fn draw_banner(&self, scene: &Scene) {
+        let Some(content) = scene.banner else {
             return;
         };
-        let alpha = scene.hud_visible.clamp(0.0, 1.0);
+        let alpha = scene.banner_visible.clamp(0.0, 1.0);
         if alpha < 0.01 {
             return;
         }
         let cx = CANVAS.0 / 2.0;
         let (x0, x1) = (cx - scene.width / 2.0, cx + scene.width / 2.0);
-        let (h, cy) = (scene.height, scene.height / 2.0);
-        let level = hud.level.clamp(0.0, 1.0);
+        let h = scene.height;
+        let icon_box = rect(x0 + 8.0, 0.0, x0 + 38.0, h);
 
-        let glyph = match hud.kind {
-            HudKind::Brightness => GLYPH_BRIGHTNESS,
-            HudKind::Volume if hud.muted || level < 0.005 => GLYPH_MUTE,
-            HudKind::Volume if level < 0.34 => GLYPH_VOLUME_LOW,
-            HudKind::Volume if level < 0.67 => GLYPH_VOLUME_MID,
-            HudKind::Volume => GLYPH_VOLUME_HIGH,
-        };
-        self.draw_text(glyph, &self.icons, rect(x0 + 8.0, 0.0, x0 + 38.0, h), alpha);
+        match content {
+            Content::Level { kind, level, muted } => {
+                let level = level.value.clamp(0.0, 1.0);
+                let glyph = match kind {
+                    LevelKind::Brightness => glyph::BRIGHTNESS,
+                    LevelKind::Volume if *muted || level < 0.005 => glyph::MUTE,
+                    LevelKind::Volume if level < 0.34 => glyph::VOLUME_LOW,
+                    LevelKind::Volume if level < 0.67 => glyph::VOLUME_MID,
+                    LevelKind::Volume => glyph::VOLUME_HIGH,
+                };
+                self.draw_text(glyph, &self.icons, icon_box, alpha);
+                self.draw_level(x0, x1, h, level, *muted, alpha);
+            }
+            Content::Notice { glyph, text, dim } => {
+                let icon_alpha = if *dim { 0.45 } else { 1.0 };
+                self.draw_text(glyph, &self.icons, icon_box, icon_alpha * alpha);
+                self.draw_text(
+                    text,
+                    &self.notice_text,
+                    rect(x0 + 42.0, 0.0, x1 - 16.0, h),
+                    0.95 * alpha,
+                );
+            }
+        }
+    }
 
+    /// Level bar and percentage.
+    unsafe fn draw_level(&self, x0: f32, x1: f32, h: f32, level: f32, muted: bool, alpha: f32) {
+        let cy = h / 2.0;
         let (left, right) = (x0 + 42.0, x1 - 46.0);
         let bar = |end: f32, opacity: f32| {
             self.light.SetOpacity(opacity * alpha);
@@ -328,7 +384,7 @@ impl Renderer {
             // Never thinner than its own rounded ends.
             bar(
                 (left + (right - left) * level).max(left + 5.0),
-                if hud.muted { 0.4 } else { 1.0 },
+                if muted { 0.4 } else { 1.0 },
             );
         }
 
@@ -343,7 +399,7 @@ impl Renderer {
 
     unsafe fn draw_clock(&self, scene: &Scene) {
         // The clock steps aside quickly so it never overlaps the eyes or level.
-        let cover = scene.eyes_visible.max(scene.hud_visible);
+        let cover = scene.eyes_visible.max(scene.banner_visible);
         let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
         if alpha <= 0.0 {
             return;

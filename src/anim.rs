@@ -7,9 +7,13 @@ pub const COMPACT: (f32, f32) = (132.0, 28.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.
-pub const HUD: (f32, f32) = (220.0, 36.0);
+pub const LEVEL: (f32, f32) = (220.0, 36.0);
+/// Notch size while showing a notification.
+pub const NOTICE: (f32, f32) = (300.0, 36.0);
 /// How long the level stays up after the last change.
-const HUD_DURATION: Duration = Duration::from_millis(1600);
+const LEVEL_DURATION: Duration = Duration::from_millis(1600);
+/// How long a notification stays up.
+const NOTICE_DURATION: Duration = Duration::from_millis(3500);
 
 /// A damped spring that eases `value` toward `target`.
 pub struct Spring {
@@ -157,17 +161,32 @@ impl Eyes {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum HudKind {
+pub enum LevelKind {
     Volume,
     Brightness,
 }
 
-/// A volume or brightness level shown in the notch.
-pub struct Hud {
-    pub kind: HudKind,
-    /// Level 0..1, eased so the bar slides between key presses.
-    pub level: Spring,
-    pub muted: bool,
+/// What a banner shows.
+pub enum Content {
+    /// A volume or brightness level. `level` (0..1) is eased so the bar
+    /// slides between key presses.
+    Level {
+        kind: LevelKind,
+        level: Spring,
+        muted: bool,
+    },
+    /// A short message with an icon, such as "Wi-Fi terhubung".
+    Notice {
+        glyph: &'static str,
+        text: String,
+        /// Draws the icon faded, for things that went away.
+        dim: bool,
+    },
+}
+
+/// Temporary content that takes over the notch.
+pub struct Banner {
+    pub content: Content,
     until: Instant,
 }
 
@@ -178,12 +197,12 @@ pub struct Notch {
     /// How visible the eyes are, 0..1.
     pub eyes_visible: Spring,
     pub eyes: Eyes,
-    /// How visible the level is, 0..1.
-    pub hud_visible: Spring,
-    /// Kept while fading out so the last level stays drawn.
-    pub hud: Option<Hud>,
+    /// How visible the banner is, 0..1.
+    pub banner_visible: Spring,
+    /// Kept while fading out so the last content stays drawn.
+    pub banner: Option<Banner>,
     idle: bool,
-    hud_active: bool,
+    banner_active: bool,
 }
 
 impl Notch {
@@ -193,10 +212,10 @@ impl Notch {
             height: Spring::new(COMPACT.1, 380.0, 30.0, 0.05),
             eyes_visible: Spring::new(0.0, 260.0, 32.0, 0.002),
             eyes: Eyes::new(now, seed),
-            hud_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
-            hud: None,
+            banner_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
+            banner: None,
             idle: false,
-            hud_active: false,
+            banner_active: false,
         }
     }
 
@@ -211,47 +230,75 @@ impl Notch {
         self.retarget();
     }
 
-    pub fn show_hud(&mut self, kind: HudKind, level: f32, muted: bool, now: Instant) {
-        match &mut self.hud {
-            Some(hud) if hud.kind == kind => {
-                hud.level.target = level;
-                hud.muted = muted;
-                hud.until = now + HUD_DURATION;
-            }
-            _ => {
-                self.hud = Some(Hud {
-                    kind,
-                    level: Spring::new(level, 500.0, 40.0, 0.001),
+    pub fn show_level(&mut self, kind: LevelKind, value: f32, is_muted: bool, now: Instant) {
+        let until = now + LEVEL_DURATION;
+        if let Some(Banner {
+            content:
+                Content::Level {
+                    kind: shown,
+                    level,
                     muted,
-                    until: now + HUD_DURATION,
-                });
+                },
+            until: shown_until,
+        }) = &mut self.banner
+        {
+            if *shown == kind {
+                level.target = value;
+                *muted = is_muted;
+                *shown_until = until;
+                self.activate();
+                return;
             }
         }
-        self.hud_active = true;
+        self.banner = Some(Banner {
+            content: Content::Level {
+                kind,
+                level: Spring::new(value, 500.0, 40.0, 0.001),
+                muted: is_muted,
+            },
+            until,
+        });
+        self.activate();
+    }
+
+    pub fn show_notice(&mut self, glyph: &'static str, text: String, dim: bool, now: Instant) {
+        self.banner = Some(Banner {
+            content: Content::Notice { glyph, text, dim },
+            until: now + NOTICE_DURATION,
+        });
+        self.activate();
+    }
+
+    fn activate(&mut self) {
+        self.banner_active = true;
         self.retarget();
     }
 
     /// True while anything other than the clock needs periodic wake-ups.
     pub fn busy(&self) -> bool {
-        self.eyes_visible.value > 0.01 || self.idle || self.hud.is_some()
+        self.eyes_visible.value > 0.01 || self.idle || self.banner.is_some()
     }
 
     /// Advances every animation. Returns true while anything is still moving.
     pub fn step(&mut self, now: Instant, dt: f32) -> bool {
-        if self.hud_active && self.hud.as_ref().is_some_and(|hud| now >= hud.until) {
-            self.hud_active = false;
+        if self.banner_active && self.banner.as_ref().is_some_and(|b| now >= b.until) {
+            self.banner_active = false;
             self.retarget();
         }
 
         let mut moving = self.width.step(dt);
         moving |= self.height.step(dt);
         moving |= self.eyes_visible.step(dt);
-        moving |= self.hud_visible.step(dt);
-        if let Some(hud) = &mut self.hud {
-            moving |= hud.level.step(dt);
+        moving |= self.banner_visible.step(dt);
+        if let Some(Banner {
+            content: Content::Level { level, .. },
+            ..
+        }) = &mut self.banner
+        {
+            moving |= level.step(dt);
         }
-        if !self.hud_active && self.hud_visible.value == 0.0 {
-            self.hud = None;
+        if !self.banner_active && self.banner_visible.value == 0.0 {
+            self.banner = None;
         }
         if self.eyes_visible.value > 0.01 || self.idle {
             moving |= self.eyes.step(now, dt);
@@ -259,20 +306,21 @@ impl Notch {
         moving
     }
 
-    /// Picks the shape and content for the current state. The level wins over
-    /// the eyes so a key press while idle still shows what changed.
+    /// Picks the shape and content for the current state. A banner wins over
+    /// the eyes so a key press or notification while idle is still seen.
     fn retarget(&mut self) {
-        let (w, h) = if self.hud_active {
-            HUD
-        } else if self.idle {
-            IDLE
-        } else {
-            COMPACT
+        let (w, h) = match &self.banner {
+            Some(banner) if self.banner_active => match banner.content {
+                Content::Level { .. } => LEVEL,
+                Content::Notice { .. } => NOTICE,
+            },
+            _ if self.idle => IDLE,
+            _ => COMPACT,
         };
         self.width.target = w;
         self.height.target = h;
-        self.hud_visible.target = if self.hud_active { 1.0 } else { 0.0 };
-        self.eyes_visible.target = if self.idle && !self.hud_active {
+        self.banner_visible.target = if self.banner_active { 1.0 } else { 0.0 };
+        self.eyes_visible.target = if self.idle && !self.banner_active {
             1.0
         } else {
             0.0

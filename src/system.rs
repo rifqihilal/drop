@@ -1,11 +1,12 @@
-//! Volume and brightness changes, delivered to the notch window as messages.
+//! Volume, brightness and power changes, delivered to the notch window as
+//! messages.
 //!
-//! Both are event-driven: Core Audio calls back on volume changes and the power
-//! manager broadcasts brightness changes, so nothing polls in the background.
+//! All event-driven: Core Audio calls back on volume changes and the power
+//! manager broadcasts brightness and battery changes, so nothing polls.
 
 use std::ffi::c_void;
 
-use windows::core::{implement, Result, PCWSTR};
+use windows::core::{implement, Result, GUID, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
@@ -15,8 +16,14 @@ use windows::Win32::Media::Audio::{
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
-use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
-use windows::Win32::System::SystemServices::GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS;
+use windows::Win32::System::Power::{
+    GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
+    SYSTEM_POWER_STATUS,
+};
+use windows::Win32::System::SystemServices::{
+    GUID_ACDC_POWER_SOURCE, GUID_BATTERY_PERCENTAGE_REMAINING,
+    GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_APP,
@@ -171,30 +178,64 @@ impl Drop for Audio {
     }
 }
 
-/// Asks for WM_POWERBROADCAST whenever the built-in display's brightness
-/// changes. Windows also sends the current value right after registering.
-pub fn watch_brightness(hwnd: HWND) {
-    unsafe {
-        let _ = RegisterPowerSettingNotification(
-            HANDLE(hwnd.0),
-            &GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
-            DEVICE_NOTIFY_WINDOW_HANDLE,
-        );
+pub enum PowerEvent {
+    /// Built-in display brightness, 0..100.
+    Brightness(u32),
+    /// True on mains power, false on battery.
+    OnAc(bool),
+    /// Battery charge, 0..100.
+    Battery(u32),
+}
+
+const POWER_SETTINGS: [GUID; 3] = [
+    GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
+    GUID_ACDC_POWER_SOURCE,
+    GUID_BATTERY_PERCENTAGE_REMAINING,
+];
+
+/// Asks for WM_POWERBROADCAST when brightness, the power source or the
+/// battery charge changes. Windows also sends each current value right after
+/// registering.
+pub fn watch_power(hwnd: HWND) {
+    for setting in &POWER_SETTINGS {
+        unsafe {
+            let _ = RegisterPowerSettingNotification(
+                HANDLE(hwnd.0),
+                setting,
+                DEVICE_NOTIFY_WINDOW_HANDLE,
+            );
+        }
     }
 }
 
-/// Brightness percentage carried by a WM_POWERBROADCAST message, if it is one.
-pub fn brightness_from(wparam: WPARAM, lparam: LPARAM) -> Option<u32> {
+/// Reads a WM_POWERBROADCAST message.
+pub fn power_event(wparam: WPARAM, lparam: LPARAM) -> Option<PowerEvent> {
     if wparam.0 as u32 != PBT_POWERSETTINGCHANGE || lparam.0 == 0 {
         return None;
     }
-    unsafe {
+    let (setting, value) = unsafe {
         let setting = &*(lparam.0 as *const POWERBROADCAST_SETTING);
-        if setting.PowerSetting != GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS
-            || (setting.DataLength as usize) < size_of::<u32>()
-        {
+        if (setting.DataLength as usize) < size_of::<u32>() {
             return None;
         }
-        Some(std::ptr::read_unaligned(setting.Data.as_ptr() as *const u32).min(100))
+        let value = std::ptr::read_unaligned(setting.Data.as_ptr() as *const u32);
+        (setting.PowerSetting, value)
+    };
+    if setting == GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS {
+        Some(PowerEvent::Brightness(value.min(100)))
+    } else if setting == GUID_ACDC_POWER_SOURCE {
+        // 0 = AC, 1 = battery, 2 = short-term source such as a UPS.
+        Some(PowerEvent::OnAc(value == 0))
+    } else if setting == GUID_BATTERY_PERCENTAGE_REMAINING {
+        Some(PowerEvent::Battery(value.min(100)))
+    } else {
+        None
     }
+}
+
+/// True when the computer has a battery at all.
+pub fn has_battery() -> bool {
+    let mut status = SYSTEM_POWER_STATUS::default();
+    // Flag 128 means "no system battery".
+    unsafe { GetSystemPowerStatus(&mut status).is_ok() && status.BatteryFlag & 128 == 0 }
 }
