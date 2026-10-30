@@ -57,6 +57,7 @@ use crate::anim::{
     MUSIC_CARD, NOTICE_HEIGHT, NOTICE_WIDTH, SHELF_CARD_MAX, STATUS_CARD,
 };
 use crate::media::Command;
+use crate::weather::Weather;
 use crate::{calendar, prayer, shelf};
 
 /// Width of the concave curves joining the notch to the top screen edge.
@@ -296,6 +297,9 @@ pub struct Scene<'a> {
     pub prayer_soon: &'a str,
     pub shelf: ShelfScene<'a>,
     pub prayer: Option<PrayerScene>,
+    /// Forecast for the weather page, and the place it is for.
+    pub forecast: Option<&'a Weather>,
+    pub place: &'a str,
     /// Files are being dragged over the notch.
     pub drop_zone: bool,
     /// While switching pages: the page being left, how far the switch has
@@ -310,6 +314,7 @@ pub struct Scene<'a> {
 pub enum Page {
     Music,
     Status,
+    Weather,
     Calendar,
     Shelf,
     Prayer,
@@ -447,6 +452,8 @@ pub struct Renderer {
     close_glyph: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
     symbols: IDWriteTextFormat,
+    /// Smaller weather symbols, centered.
+    symbols_small: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     black: ID2D1SolidColorBrush,
     light: ID2D1SolidColorBrush,
@@ -593,6 +600,7 @@ impl Renderer {
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
             symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            let symbols_small = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 17.0)?;
 
             Ok(Self {
                 factory,
@@ -610,6 +618,7 @@ impl Renderer {
                 tile_text,
                 close_glyph,
                 symbols,
+                symbols_small,
                 icons,
                 black,
                 light,
@@ -890,6 +899,11 @@ impl Renderer {
         }
         match (page, &scene.music, &scene.timer) {
             (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
+            (Page::Weather, _, _) if scene.forecast.is_some() => {
+                if let Some(weather) = scene.forecast {
+                    self.draw_weather_card(weather, scene.place, x0, x1, alpha)
+                }
+            }
             (Page::Prayer, _, _) if scene.prayer.is_some() => {
                 if let Some(prayer) = &scene.prayer {
                     self.draw_prayer_card(prayer, x0, x1, alpha)
@@ -1402,6 +1416,101 @@ impl Renderer {
             rect(cx - 60.0, 126.0, cx + 60.0, 144.0),
             0.55 * alpha,
         );
+    }
+
+    /// Now on the left, the next hours on the right, the week below.
+    unsafe fn draw_weather_card(
+        &self,
+        weather: &Weather,
+        place: &str,
+        x0: f32,
+        x1: f32,
+        alpha: f32,
+    ) {
+        let left = x0 + 22.0;
+        if let Some(sky) = self.text_layout(weather.glyph(), &self.symbols, 40.0) {
+            self.draw_layout(&sky.layout, left, 18.0, alpha);
+        }
+        let temperature = format!("{}°", weather.temperature.round());
+        if let Some(text) = self.text_layout(&temperature, &self.big_clock, 90.0) {
+            self.draw_layout(&text.layout, left + 38.0, 12.0, alpha);
+        }
+        if let Some(text) = self.text_layout(weather.description(), &self.subtitle_text, 140.0) {
+            self.draw_layout(&text.layout, left, 56.0, 0.8 * alpha);
+        }
+        if let Some(text) = self.text_layout(place, &self.small_left, 140.0) {
+            self.draw_layout(&text.layout, left, 74.0, 0.5 * alpha);
+        }
+
+        // The next hours.
+        let (hours_left, hours_right) = (x0 + 172.0, x1 - 16.0);
+        let column = (hours_right - hours_left) / weather.hours.len().max(1) as f32;
+        for (i, hour) in weather.hours.iter().enumerate() {
+            let x = hours_left + i as f32 * column;
+            let label = format!("{:02}", hour.hour);
+            self.draw_text(
+                &label,
+                &self.tiny,
+                rect(x, 14.0, x + column, 30.0),
+                0.5 * alpha,
+            );
+            self.draw_text(
+                hour.sky.glyph(),
+                &self.symbols_small,
+                rect(x, 32.0, x + column, 56.0),
+                alpha,
+            );
+            let temperature = format!("{}°", hour.temperature.round());
+            self.draw_text(
+                &temperature,
+                &self.small_text,
+                rect(x, 58.0, x + column, 74.0),
+                0.9 * alpha,
+            );
+        }
+
+        self.light.SetOpacity(0.08 * alpha);
+        self.target
+            .FillRectangle(&rect(x0 + 18.0, 96.0, x1 - 18.0, 97.0), &self.light);
+
+        // The week.
+        let (days_left, days_right) = (x0 + 14.0, x1 - 14.0);
+        let column = (days_right - days_left) / weather.days.len().max(1) as f32;
+        for (i, day) in weather.days.iter().enumerate() {
+            let x = days_left + i as f32 * column;
+            let name = if i == 0 {
+                "Hari ini"
+            } else {
+                const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+                DAYS[calendar::weekday(day.date.0, day.date.1, day.date.2) as usize]
+            };
+            self.draw_text(
+                name,
+                &self.tiny,
+                rect(x, 104.0, x + column, 120.0),
+                0.55 * alpha,
+            );
+            self.draw_text(
+                day.sky.glyph(),
+                &self.symbols_small,
+                rect(x, 122.0, x + column, 146.0),
+                alpha,
+            );
+            let high = format!("{}°", day.max.round());
+            let low = format!("{}°", day.min.round());
+            self.draw_text(
+                &high,
+                &self.small_text,
+                rect(x, 148.0, x + column, 164.0),
+                0.95 * alpha,
+            );
+            self.draw_text(
+                &low,
+                &self.tiny,
+                rect(x, 164.0, x + column, 180.0),
+                0.5 * alpha,
+            );
+        }
     }
 
     /// Which calendar or timer control sits at (`x`, `y`) on the open card.

@@ -19,6 +19,8 @@ pub const MUSIC_CARD: (f32, f32) = (380.0, 112.0);
 pub const STATUS_CARD: (f32, f32) = (340.0, 112.0);
 /// Notch size of the calendar and Pomodoro card.
 pub const CALENDAR_CARD: (f32, f32) = (400.0, 198.0);
+/// Notch size of the weather card.
+pub const WEATHER_CARD: (f32, f32) = (400.0, 196.0);
 /// Notch size of the prayer card.
 pub const PRAYER_CARD: (f32, f32) = (400.0, 166.0);
 /// Notch size while files are dragged over it.

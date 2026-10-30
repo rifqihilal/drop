@@ -67,7 +67,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     shelf_card, Accent, LevelKind, Notch, Notice, Trailing, CALENDAR_CARD, DROP_ZONE, MUSIC_CARD,
-    MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP,
+    MUSIC_STRIP, PRAYER_CARD, PRAYER_STRIP, STATUS_CARD, TIMER_STRIP, WEATHER_CARD,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -473,6 +473,7 @@ impl App {
             Page::Status => STATUS_CARD,
             Page::Calendar => CALENDAR_CARD,
             Page::Prayer => PRAYER_CARD,
+            Page::Weather => WEATHER_CARD,
         });
         let strip = match self.strip() {
             Strip::Timer => Some(TIMER_STRIP),
@@ -516,6 +517,9 @@ impl App {
             pages.push(Page::Music);
         }
         pages.push(Page::Status);
+        if self.weather.is_some() {
+            pages.push(Page::Weather);
+        }
         if self.prayer.is_some() {
             pages.push(Page::Prayer);
         }
@@ -594,7 +598,7 @@ impl App {
             Page::Music => self.renderer.music_control_at(x, y, width).is_some(),
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
-            Page::Status | Page::Prayer => false,
+            Page::Status | Page::Prayer | Page::Weather => false,
         }
     }
 
@@ -1071,6 +1075,8 @@ impl App {
             strip: self.strip(),
             prayer_soon: soon.as_deref().unwrap_or(""),
             prayer: self.prayer_scene(),
+            forecast: self.weather.as_ref(),
+            place: &self.settings.city,
             shelf: ShelfScene {
                 items: self.shelf.items(),
                 hover: self.shelf_hover,
