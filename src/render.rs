@@ -4058,7 +4058,7 @@ impl Renderer {
         }
         let cy = height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            self.draw_battery(bounds.left + 18.0, cy, 5.5, percent, charging, alpha);
+            self.draw_battery(bounds.left + 19.0, cy, 7.5, percent, charging, alpha);
         }
         let weather = scene.status.weather.as_ref();
         if let Some(weather) = weather.filter(|_| !(scene.inbox.unread && unread_bell(scene))) {
