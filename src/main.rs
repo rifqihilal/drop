@@ -12,6 +12,7 @@ mod anim;
 mod autostart;
 mod bluetooth;
 mod calendar;
+mod clipboard;
 mod config;
 mod dragdrop;
 mod frames;
@@ -66,11 +67,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
     SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_DESTROY,
-    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_CLIPBOARDUPDATE,
+    WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
@@ -138,6 +139,8 @@ const HOVER_DELAY: Duration = Duration::from_millis(150);
 const LEAVE_GRACE: Duration = Duration::from_millis(400);
 /// How long the shelf card stays open after files are dropped.
 const SHELF_SHOWN: Duration = Duration::from_secs(3);
+/// A picture copied this close to a screenshot is the same capture.
+const SHOT_WINDOW: Duration = Duration::from_secs(5);
 /// How long a shelf tile says its file was copied.
 const COPIED_SHOWN: Duration = Duration::from_millis(1500);
 /// How long a notification from another app stays up.
@@ -226,6 +229,10 @@ struct App {
     shelf_hover: Option<usize>,
     /// Shelf tile just copied, and when.
     shelf_copied: Option<(usize, Instant)>,
+    /// When a picture was last copied, and a screenshot last saved: one
+    /// capture brings both.
+    clip_at: Option<Instant>,
+    shot_at: Option<Instant>,
     /// What the Windows notification center holds.
     inbox: Inbox,
     /// A notification came in and its page has not been seen since.
@@ -418,6 +425,8 @@ fn main() -> Result<()> {
             drag_over: false,
             shelf_hover: None,
             shelf_copied: None,
+            clip_at: None,
+            shot_at: None,
             inbox: Inbox::default(),
             unread: false,
             bell: Bell::new(Instant::now()),
@@ -459,6 +468,7 @@ fn main() -> Result<()> {
         osd::set_suppressed(true);
         keys::install(hwnd);
         dragdrop::accept_drops(hwnd);
+        clipboard::listen(hwnd);
         // Alt+N opens the card and steps through its pages without the mouse.
         let _ = RegisterHotKey(
             Some(hwnd),
@@ -714,7 +724,7 @@ impl App {
     }
 
     /// The card's pages, in wheel order: those whose module is on, and of
-    /// those, music and shelf only when they have something to show.
+    /// those, music only when something plays.
     fn pages(&self) -> Vec<Page> {
         let modules = &self.settings;
         let mut pages = Vec::with_capacity(8);
@@ -737,7 +747,7 @@ impl App {
         if modules.module_todo {
             pages.push(Page::Todo);
         }
-        if modules.module_shelf && !self.shelf.is_empty() {
+        if modules.module_shelf {
             pages.push(Page::Shelf);
         }
         pages
@@ -745,6 +755,7 @@ impl App {
 
     fn on_drag(&mut self, over: bool) {
         self.drag_over = over;
+        self.notch.set_liquid(over);
         self.tick();
     }
 
@@ -757,6 +768,7 @@ impl App {
             return;
         }
         self.renderer.sync_thumbnails(self.shelf.items());
+        self.notch.settle_liquid();
         self.page = Page::Shelf;
         self.card_until = Some(Instant::now() + SHELF_SHOWN);
         self.tick();
@@ -768,12 +780,59 @@ impl App {
         if !self.settings.module_shelf || !self.settings.shelf_screenshots {
             return;
         }
+        // The capture reached the clipboard too; keep only the saved file.
+        let copied = self.clip_at.is_some_and(|at| at.elapsed() < SHOT_WINDOW);
+        let last = self.shelf.items().len().checked_sub(1);
+        if let Some(last) = last.filter(|_| copied) {
+            if shelf::is_clip(&self.shelf.items()[last]) {
+                self.shelf.remove(last);
+            }
+        }
+        self.shot_at = Some(Instant::now());
         if self.shelf.add([path]) == 0 {
             return;
         }
         self.renderer.sync_thumbnails(self.shelf.items());
         self.notify(notices::screenshot(system::clipboard_has_image()));
         self.tick();
+    }
+
+    /// The clipboard changed: what was copied is saved off this thread.
+    fn on_clipboard(&self) {
+        if self.settings.module_shelf && self.settings.shelf_clipboard {
+            clipboard::capture(self.hwnd);
+        }
+    }
+
+    /// Something copied was saved: it joins the shelf quietly. A picture
+    /// right after a screenshot is that screenshot again.
+    fn on_clip(&mut self, path: PathBuf) {
+        let repeat = !shelf::is_text_clip(&path)
+            && self.shot_at.is_some_and(|at| at.elapsed() < SHOT_WINDOW);
+        if repeat {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        self.clip_at = (!shelf::is_text_clip(&path)).then(Instant::now);
+        self.shelf.add([path]);
+        self.renderer.sync_thumbnails(self.shelf.items());
+        self.tick();
+    }
+
+    /// Copies a shelf item: a text clip as its text, the rest as files.
+    fn copy_shelf_item(&mut self, index: usize) {
+        let Some(path) = self.shelf.items().get(index) else {
+            return;
+        };
+        let copied = if shelf::is_text_clip(path) {
+            std::fs::read_to_string(path).is_ok_and(|text| system::copy_text(self.hwnd, &text))
+        } else {
+            system::copy_file(self.hwnd, path)
+        };
+        if copied {
+            self.shelf_copied = Some((index, Instant::now()));
+            self.draw();
+        }
     }
 
     /// The notification center changed. What just arrived shows as a notice,
@@ -1165,17 +1224,18 @@ impl App {
         }
         match self.shelf_hit(x, y) {
             Some(ShelfHit::Tile(index)) if pressed.is_some_and(|(i, ..)| i == index) => {
+                // A clip is there to be pasted back.
+                let clip = self.shelf.items().get(index).filter(|p| shelf::is_clip(p));
+                if clip.is_some() {
+                    self.copy_shelf_item(index);
+                    return;
+                }
                 if let Some(path) = self.shelf.items().get(index) {
                     open_file(path);
                 }
             }
             Some(ShelfHit::Copy(index)) => {
-                if let Some(path) = self.shelf.items().get(index) {
-                    if system::copy_file(self.hwnd, path) {
-                        self.shelf_copied = Some((index, Instant::now()));
-                        self.draw();
-                    }
-                }
+                self.copy_shelf_item(index);
                 return;
             }
             Some(ShelfHit::Remove(index)) => self.shelf.remove(index),
@@ -2189,6 +2249,9 @@ impl App {
                 self.agenda_scene(self.month_events(shown))
             },
             drop_zone: self.drag_over,
+            liquid_level: n.liquid_level.value,
+            liquid_glow: n.liquid_glow.value,
+            liquid_time: n.liquid_time,
             previous_page: self.page_switch.as_ref().map(|switch| switch.from),
             page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
                 let t =
@@ -2278,6 +2341,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONDOWN => {
             with_app(|app| app.on_press(lparam));
+            LRESULT(0)
+        }
+        WM_CLIPBOARDUPDATE => {
+            with_app(|app| app.on_clipboard());
+            LRESULT(0)
+        }
+        clipboard::CLIP_MSG => {
+            let path = clipboard::take_path(lparam);
+            with_app(|app| app.on_clip(path));
             LRESULT(0)
         }
         dragdrop::DRAG_MSG => {

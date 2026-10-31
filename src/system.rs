@@ -35,7 +35,9 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::System::Power::{
     GetSystemPowerStatus, RegisterPowerSettingNotification, POWERBROADCAST_SETTING,
@@ -420,6 +422,23 @@ pub fn copy_file(owner: HWND, path: &Path) -> bool {
     }
 }
 
+/// Puts text on the clipboard.
+pub fn copy_text(owner: HWND, text: &str) -> bool {
+    let bytes: Vec<u8> = text
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    unsafe {
+        if OpenClipboard(Some(owner)).is_err() {
+            return false;
+        }
+        let copied = EmptyClipboard().is_ok() && set_bytes(CF_UNICODETEXT.0, &bytes);
+        let _ = CloseClipboard();
+        copied
+    }
+}
+
 /// `path` in the layout of a file drop: a header, then a double-null-ended
 /// list of wide strings.
 fn file_list(path: &Path) -> Vec<u8> {
@@ -503,6 +522,25 @@ unsafe fn set_bytes(format: u16, bytes: &[u8]) -> bool {
         return false;
     }
     true
+}
+
+/// The picture on the clipboard as a device-independent bitmap, if any.
+pub fn clipboard_picture() -> Option<Vec<u8>> {
+    unsafe {
+        OpenClipboard(None).ok()?;
+        let bytes = GetClipboardData(CF_DIB.0 as u32).ok().and_then(|handle| {
+            let memory = HGLOBAL(handle.0);
+            let source = GlobalLock(memory) as *const u8;
+            if source.is_null() {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(source, GlobalSize(memory)).to_vec();
+            let _ = GlobalUnlock(memory);
+            Some(bytes)
+        });
+        let _ = CloseClipboard();
+        bytes
+    }
 }
 
 /// Text on the clipboard, if there is any.

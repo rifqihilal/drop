@@ -118,9 +118,9 @@ const PRAYER_TOP: f32 = 318.0;
 const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
 
 /// Switch states, in this order: five notifications, start with Windows,
-/// eight modules, three health reminders, the minimal notch, then opening
-/// the card by click.
-const TOGGLE_COUNT: usize = 22;
+/// eight modules, three health reminders, the minimal notch, opening the card
+/// by click, and what comes after those as added.
+const TOGGLE_COUNT: usize = 23;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -415,6 +415,11 @@ static PAGES: [Page; 9] = [
                     toggle: 20,
                     title: "Screenshot otomatis",
                     note: "Screenshot baru langsung masuk shelf",
+                },
+                Row::Switch {
+                    toggle: 22,
+                    title: "Riwayat copy",
+                    note: "Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup",
                 },
             ],
         }],
@@ -809,6 +814,7 @@ impl Window {
                 settings.notify_apps,
                 settings.shelf_screenshots,
                 settings.card_bounce,
+                settings.shelf_clipboard,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1048,6 +1054,7 @@ impl Window {
             notify_prayer: self.toggles[3],
             notify_apps: self.toggles[19],
             shelf_screenshots: self.toggles[20],
+            shelf_clipboard: self.toggles[22],
             card_bounce: self.toggles[21],
             sound: self.toggles[4],
             idle_minutes: idle,

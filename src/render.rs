@@ -16,9 +16,10 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1LinearGradientBrush,
-    ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT,
-    D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
+    ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND,
+    D2D1_COMBINE_MODE_INTERSECT, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2,
     D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
@@ -675,6 +676,11 @@ pub struct Scene<'a> {
     pub minimal: bool,
     /// Files are being dragged over the notch.
     pub drop_zone: bool,
+    /// The liquid in the notch: how far it has risen and how bright it is,
+    /// both 0..1, and the seconds its waves have run.
+    pub liquid_level: f32,
+    pub liquid_glow: f32,
+    pub liquid_time: f32,
     /// While switching pages: the page being left, how far the switch has
     /// gone (0..1), and its direction (1 toward later pages, -1 back).
     pub previous_page: Option<Page>,
@@ -1203,6 +1209,9 @@ impl Renderer {
         sink.Close()?;
 
         self.target.FillGeometry(&geometry, &self.black, None);
+        if scene.liquid_glow > 0.005 {
+            self.fill_liquid(&geometry, scene, x0, x1)?;
+        }
 
         // The music card glows with the colour of the cover.
         let shown = match (scene.page, scene.previous_page) {
@@ -2382,6 +2391,52 @@ impl Renderer {
         self.target.CreateBitmapFromWicBitmap(&converter, None)
     }
 
+    /// Two waves of coloured liquid inside the notch's shape, the far one
+    /// fainter and a little higher.
+    unsafe fn fill_liquid(
+        &self,
+        shape: &ID2D1PathGeometry,
+        scene: &Scene,
+        x0: f32,
+        x1: f32,
+    ) -> Result<()> {
+        const STEPS: u32 = 40;
+        const WAVE: f32 = 5.0;
+        let h = scene.height;
+        let time = scene.liquid_time;
+        // Filled, the wave's troughs clear the top of the notch.
+        let surface = (h + 2.0 * WAVE) * (1.0 - scene.liquid_level.clamp(0.0, 1.0)) - 2.0 * WAVE;
+        let (left, right) = (x0 - EAR - 2.0, x1 + EAR + 2.0);
+        let drift = 50.0 * (time * 0.7).sin();
+        let stops = [
+            (0.0, color(0.18, 0.83, 0.75, 1.0)),
+            (0.5, color(0.23, 0.51, 0.96, 1.0)),
+            (1.0, color(0.66, 0.33, 0.97, 1.0)),
+        ];
+        let fill = self.gradient(pt(x0 + drift, 0.0), pt(x1 + drift, h), &stops)?;
+        for (rise, speed, length, opacity) in [(5.0, -2.1, 62.0, 0.5), (0.0, 2.8, 84.0, 1.0)] {
+            let wave = self.factory.CreatePathGeometry()?;
+            let sink = wave.Open()?;
+            sink.BeginFigure(pt(left, h + 2.0), D2D1_FIGURE_BEGIN_FILLED);
+            for step in 0..=STEPS {
+                let x = left + (right - left) * step as f32 / STEPS as f32;
+                let y = surface - rise + WAVE * (x / length * 6.0 + time * speed).sin();
+                sink.AddLine(pt(x, y));
+            }
+            sink.AddLine(pt(right, h + 2.0));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close()?;
+
+            let inside = self.factory.CreatePathGeometry()?;
+            let sink = inside.Open()?;
+            shape.CombineWithGeometry(&wave, D2D1_COMBINE_MODE_INTERSECT, None, 0.25, &sink)?;
+            sink.Close()?;
+            fill.SetOpacity(opacity * scene.liquid_glow.clamp(0.0, 1.0));
+            self.target.FillGeometry(&inside, &fill, None);
+        }
+        Ok(())
+    }
+
     /// Dashed outline with an invitation to drop.
     unsafe fn draw_drop_zone(&self, x0: f32, x1: f32, h: f32, alpha: f32) {
         let inset = rect(x0 + 10.0, 8.0, x1 - 10.0, h - 10.0);
@@ -2413,7 +2468,13 @@ impl Renderer {
     /// mouse, and "Hapus semua".
     unsafe fn draw_shelf_card(&self, shelf: &ShelfScene, x0: f32, x1: f32, alpha: f32) {
         let layout = ShelfRects::new(x0, x1);
-        let heading = format!("{} berkas", shelf.items.len());
+        if shelf.items.is_empty() {
+            let bounds = rect(x0, 40.0, x1, 120.0);
+            let hint = "Seret berkas ke notch, atau copy teks dan gambar";
+            self.draw_text(hint, &self.tile_text, bounds, 0.5 * alpha);
+            return;
+        }
+        let heading = format!("{} item", shelf.items.len());
         if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
             self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
         }
@@ -2699,7 +2760,7 @@ impl Renderer {
         let cx = CANVAS.0 / 2.0;
         let layout = ShelfRects::new(cx - width / 2.0, cx + width / 2.0);
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-        if inside(layout.clear) {
+        if count > 0 && inside(layout.clear) {
             return Some(ShelfHit::ClearAll);
         }
         for index in 0..count {

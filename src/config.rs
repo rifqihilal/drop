@@ -47,6 +47,8 @@ pub struct Settings {
     pub notify_apps: bool,
     /// Put new screenshots on the shelf.
     pub shelf_screenshots: bool,
+    /// Put copied text and pictures on the shelf.
+    pub shelf_clipboard: bool,
     /// Play the notification sound with notices.
     pub sound: bool,
     /// Minutes without input before the eyes appear.
@@ -94,6 +96,7 @@ impl Default for Settings {
             notify_prayer: true,
             notify_apps: true,
             shelf_screenshots: true,
+            shelf_clipboard: true,
             sound: true,
             idle_minutes: 2,
             weather: true,
@@ -202,6 +205,8 @@ impl Settings {
              shelf = {}\n\
              ; Screenshot baru langsung masuk shelf.\n\
              screenshot = {}\n\
+             ; Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup.\n\
+             riwayat_copy = {}\n\
              halaman_sholat = {}\n\
              mata = {}\n\
              tugas = {}\n\
@@ -249,6 +254,7 @@ impl Settings {
             flag(self.module_calendar),
             flag(self.module_shelf),
             flag(self.shelf_screenshots),
+            flag(self.shelf_clipboard),
             flag(self.module_prayer),
             flag(self.module_eyes),
             flag(self.module_todo),
@@ -340,6 +346,7 @@ fn parse(text: &str) -> Settings {
             "kalender" => s.module_calendar = flag(true),
             "shelf" => s.module_shelf = flag(true),
             "screenshot" => s.shelf_screenshots = flag(true),
+            "riwayat_copy" => s.shelf_clipboard = flag(true),
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
@@ -394,6 +401,7 @@ mod tests {
             notify_prayer: true,
             notify_apps: false,
             shelf_screenshots: false,
+            shelf_clipboard: false,
             sound: false,
             idle_minutes: 5,
             weather: false,

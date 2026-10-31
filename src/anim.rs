@@ -61,6 +61,9 @@ pub const PRAYER_BANNER: (f32, f32) = (276.0, 30.0);
 /// little less, which makes it bounce.
 const DAMPING: f32 = 30.0;
 const CARD_DAMPING: f32 = 17.0;
+/// Stiffness and damping of the liquid's colour fading after a drop: slow,
+/// with no bounce.
+const LIQUID_FADE: (f32, f32) = (2.2, 3.0);
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -485,6 +488,12 @@ pub struct Notch {
     pub peek_visible: Spring,
     /// How far the music card's volume slider has opened, 0..1.
     pub volume_visible: Spring,
+    /// How far liquid has risen in the notch while something is dragged
+    /// over it, 0..1, and how bright it is.
+    pub liquid_level: Spring,
+    pub liquid_glow: Spring,
+    /// Seconds the liquid's waves have run.
+    pub liquid_time: f32,
     idle: bool,
     /// The eyes stay until this moment after being woken.
     waking: Option<Instant>,
@@ -517,6 +526,9 @@ impl Notch {
             nav_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             peek_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             volume_visible: Spring::new(0.0, 200.0, 28.0, 0.002),
+            liquid_level: Spring::new(0.0, 40.0, 11.0, 0.002),
+            liquid_glow: Spring::new(0.0, 60.0, 15.0, 0.002),
+            liquid_time: 0.0,
             idle: false,
             waking: None,
             banner_active: false,
@@ -664,6 +676,7 @@ impl Notch {
             || self.idle
             || self.banner.is_some()
             || self.card_visible.value > 0.01
+            || self.liquid_glow.value > 0.0
     }
 
     /// Advances every animation. Returns true while anything is still moving.
@@ -686,6 +699,14 @@ impl Notch {
         moving |= self.nav_visible.step(dt);
         moving |= self.peek_visible.step(dt);
         moving |= self.volume_visible.step(dt);
+        moving |= self.liquid_level.step(dt);
+        moving |= self.liquid_glow.step(dt);
+        if self.liquid_glow.value > 0.0 {
+            self.liquid_time += dt;
+            moving = true;
+        } else {
+            self.liquid_level = Spring::new(0.0, 40.0, 11.0, 0.002);
+        }
         if let Some(Banner {
             content: Content::Level { level, .. },
             ..
@@ -760,6 +781,25 @@ impl Notch {
         }
     }
 
+    /// Fills the notch with liquid while something is dragged over it, or
+    /// drains it when that leaves.
+    pub fn set_liquid(&mut self, over: bool) {
+        let target = if over { 1.0 } else { 0.0 };
+        self.liquid_level.target = target;
+        self.liquid_glow.target = target;
+        self.liquid_glow.stiffness = 60.0;
+        self.liquid_glow.damping = 15.0;
+    }
+
+    /// Something was dropped: the liquid stays and its colour slowly goes,
+    /// leaving the notch black.
+    pub fn settle_liquid(&mut self) {
+        self.liquid_level.target = 1.0;
+        self.liquid_glow.target = 0.0;
+        self.liquid_glow.stiffness = LIQUID_FADE.0;
+        self.liquid_glow.damping = LIQUID_FADE.1;
+    }
+
     /// Opens or closes the music card's volume slider.
     pub fn set_volume(&mut self, open: bool) {
         self.volume_visible.target = if open { 1.0 } else { 0.0 };
@@ -805,6 +845,29 @@ mod tests {
         assert!(bell.step(now, false));
         assert!(!bell.step(now, false));
         assert!(bell.step(now, true));
+    }
+
+    #[test]
+    fn a_drop_fades_the_liquid_without_draining_it() {
+        let now = Instant::now();
+        let mut notch = Notch::new(now, 7);
+        notch.set_liquid(true);
+        for _ in 0..120 {
+            notch.step(now, 1.0 / 60.0);
+        }
+        assert!(notch.liquid_level.value > 0.95);
+        notch.set_liquid(false);
+        notch.settle_liquid();
+        for _ in 0..30 {
+            notch.step(now, 1.0 / 60.0);
+        }
+        assert!(notch.liquid_level.value > 0.95);
+        assert!(notch.liquid_glow.value > 0.5);
+        for _ in 0..1200 {
+            notch.step(now, 1.0 / 60.0);
+        }
+        assert_eq!(notch.liquid_glow.value, 0.0);
+        assert_eq!(notch.liquid_level.value, 0.0);
     }
 
     #[test]
