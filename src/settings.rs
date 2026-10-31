@@ -52,6 +52,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
+use windows::Win32::System::SystemServices::MK_LBUTTON;
+
 use crate::config::{self, NotchSize, Settings};
 use crate::geo::{self, Place};
 use crate::{autostart, prayer};
@@ -144,6 +146,16 @@ enum Row {
         title: &'static str,
         note: &'static str,
     },
+    /// The notch's style, picked from [`STYLES`].
+    Style {
+        title: &'static str,
+        note: &'static str,
+    },
+    /// How see-through the notch is, set on a slider.
+    Fill {
+        title: &'static str,
+        note: &'static str,
+    },
 }
 
 const SIZES: [(&str, NotchSize); 3] = [
@@ -152,6 +164,11 @@ const SIZES: [(&str, NotchSize); 3] = [
     ("Besar", NotchSize::Large),
 ];
 const SIZE_WIDTH: f32 = 60.0;
+const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
+const STYLE_WIDTH: f32 = 90.0;
+/// The slider's track, and the steps its value moves in.
+const SLIDER_WIDTH: f32 = 170.0;
+const SLIDER_STEP: u32 = 5;
 
 struct Group {
     title: &'static str,
@@ -173,58 +190,54 @@ static PAGES: [Page; 9] = [
         glyph: "\u{E713}",
         color: 0x8e8e93,
         top: CONTENT_TOP,
-        groups: &[
-            Group {
-                title: "Mulai & suara",
-                rows: &[
-                    Row::Switch {
-                        toggle: 5,
-                        title: "Jalankan saat Windows menyala",
-                        note: "Drop terbuka sendiri setelah masuk Windows",
-                    },
-                    Row::Switch {
-                        toggle: 4,
-                        title: "Bunyi notifikasi",
-                        note: "Bunyi singkat saat notifikasi muncul",
-                    },
-                ],
-            },
-            Group {
-                title: "Notch",
-                rows: &[
-                    Row::Size {
-                        title: "Ukuran notch",
-                        note: "Hanya notch saat tertutup, kartu tetap",
-                    },
-                    Row::Switch {
-                        toggle: 17,
-                        title: "Notch minimal",
-                        note: "Bar hitam tipis saat tertutup, tab browser tetap terlihat",
-                    },
-                    Row::Switch {
-                        toggle: 18,
-                        title: "Buka kartu dengan klik",
-                        note: "Hover hanya melebarkan notch dan menampilkan tanggal",
-                    },
-                    Row::Switch {
-                        toggle: 21,
-                        title: "Efek pantul",
-                        note: "Notch dan kartu memantul saat melebar",
-                    },
-                    Row::Switch {
-                        toggle: 11,
-                        title: "Mata saat idle",
-                        note: "Notch menampilkan mata saat komputer dibiarkan",
-                    },
-                    Row::Field {
-                        id: ID_IDLE,
-                        width: 64.0,
-                        title: "Mata muncul setelah",
-                        note: "Menit tanpa aktivitas, 1 sampai 120",
-                    },
-                ],
-            },
-        ],
+        groups: &[Group {
+            title: "Notch",
+            rows: &[
+                Row::Style {
+                    title: "Gaya notch",
+                    note: "Menempel di tepi atas, atau mengambang",
+                },
+                Row::Size {
+                    title: "Ukuran notch",
+                    note: "Hanya notch saat tertutup, kartu tetap",
+                },
+                Row::Fill {
+                    title: "Transparansi notch",
+                    note: "0 paling tembus, tetap terlihat",
+                },
+                Row::Switch {
+                    toggle: 17,
+                    title: "Notch minimal",
+                    note: "Bar hitam tipis saat tertutup, tab browser tetap terlihat",
+                },
+                Row::Switch {
+                    toggle: 18,
+                    title: "Buka kartu dengan klik",
+                    note: "Hover hanya melebarkan notch dan menampilkan tanggal",
+                },
+                Row::Switch {
+                    toggle: 21,
+                    title: "Efek pantul",
+                    note: "Notch dan kartu memantul saat melebar",
+                },
+                Row::Switch {
+                    toggle: 11,
+                    title: "Mata saat idle",
+                    note: "Notch menampilkan mata saat komputer dibiarkan",
+                },
+                Row::Field {
+                    id: ID_IDLE,
+                    width: 64.0,
+                    title: "Mata muncul setelah",
+                    note: "Menit tanpa aktivitas, 1 sampai 120",
+                },
+                Row::Switch {
+                    toggle: 5,
+                    title: "Jalankan saat Windows menyala",
+                    note: "Drop terbuka sendiri setelah masuk Windows",
+                },
+            ],
+        }],
     },
     Page {
         title: "Notifikasi",
@@ -253,6 +266,11 @@ static PAGES: [Page; 9] = [
                     toggle: 19,
                     title: "Notifikasi aplikasi",
                     note: "Pesan dari aplikasi lain, seperti WhatsApp",
+                },
+                Row::Switch {
+                    toggle: 4,
+                    title: "Bunyi notifikasi",
+                    note: "Bunyi singkat saat notifikasi muncul",
                 },
             ],
         }],
@@ -504,6 +522,30 @@ fn size_segment(row: Rect, index: usize) -> Rect {
     Rect::new(left, cy - 15.0, left + SIZE_WIDTH, cy + 15.0)
 }
 
+/// Segment `index` of the style picker at the right end of a row.
+fn style_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - STYLE_WIDTH * (STYLES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + STYLE_WIDTH, cy + 15.0)
+}
+
+/// The slider's track at the right end of a row.
+fn slider_track(row: Rect) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    Rect::new(
+        row.right - 26.0 - SLIDER_WIDTH,
+        cy - 12.0,
+        row.right - 26.0,
+        cy + 12.0,
+    )
+}
+
+/// The slider's value at `x`, in whole steps.
+fn slider_value(track: Rect, x: f32) -> u32 {
+    let at = ((x - track.left) / (track.right - track.left)).clamp(0.0, 1.0);
+    (at * 100.0 / SLIDER_STEP as f32).round() as u32 * SLIDER_STEP
+}
+
 /// The text field at the right end of a row.
 fn row_field(row: Rect, width: f32) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
@@ -576,6 +618,8 @@ struct Window {
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     notch_size: NotchSize,
+    notch_fill: u32,
+    notch_floating: bool,
     /// The settings as they were when the window opened, for Batal.
     opened: Settings,
     opened_autostart: bool,
@@ -822,6 +866,8 @@ impl Window {
                 settings.stretch_minutes,
             ],
             notch_size: settings.notch_size,
+            notch_fill: settings.notch_fill,
+            notch_floating: settings.notch_floating,
             opened: settings.clone(),
             opened_autostart: autostart::is_enabled(),
             applied: false,
@@ -1076,6 +1122,8 @@ impl Window {
             notch_minimal: self.toggles[17],
             open_on_click: self.toggles[18],
             notch_size: self.notch_size,
+            notch_fill: self.notch_fill,
+            notch_floating: self.notch_floating,
         })
     }
 
@@ -1146,6 +1194,35 @@ impl Window {
         })
     }
 
+    /// The style under a point on the current page.
+    fn style_at(&self, x: f32, y: f32) -> Option<bool> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Style { .. } => (0..STYLES.len())
+                .find(|&i| style_segment(rect, i).contains(x, y))
+                .map(|i| STYLES[i].1),
+            _ => None,
+        })
+    }
+
+    /// Moves the slider to `x` if (`x`, `y`) is on it, putting a new value
+    /// into effect at once. Returns whether it was on the slider.
+    fn slide(&mut self, x: f32, y: f32) -> bool {
+        let track = rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Fill { .. } => Some(slider_track(rect)),
+            _ => None,
+        });
+        let Some(track) = track.filter(|track| track.contains(x, y)) else {
+            return false;
+        };
+        let value = slider_value(track, x);
+        if value != self.notch_fill {
+            self.notch_fill = value;
+            self.invalidate();
+            self.apply_live();
+        }
+        true
+    }
+
     fn search_button(&self, x: f32, y: f32) -> bool {
         self.page == PAGE_PRAYER && SEARCH_BUTTON.contains(x, y)
     }
@@ -1170,6 +1247,11 @@ impl Window {
             self.save();
         } else if CANCEL_BUTTON.contains(x, y) {
             self.cancel();
+        } else if let Some(floating) = self.style_at(x, y) {
+            self.notch_floating = floating;
+            self.invalidate();
+            self.apply_live();
+        } else if self.slide(x, y) {
         } else if let Some(size) = self.size_at(x, y) {
             self.notch_size = size;
             self.invalidate();
@@ -1193,6 +1275,10 @@ impl Window {
             || CANCEL_BUTTON.contains(x, y)
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
+            || self.style_at(x, y).is_some()
+            || rows(&PAGES[self.page]).any(|(rect, row)| {
+                matches!(row, Row::Fill { .. }) && slider_track(rect).contains(x, y)
+            })
     }
 
     unsafe fn paint(&self, hdc: HDC) {
@@ -1324,6 +1410,8 @@ impl Window {
                     let width = SIZE_WIDTH * SIZES.len() as f32;
                     (*title, *note, rect.right - 32.0 - width)
                 }
+                Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
+                Row::Fill { title, note } => (*title, *note, slider_track(rect).left - 56.0),
             };
             let title_box = Rect::new(
                 rect.left + 16.0,
@@ -1338,6 +1426,23 @@ impl Window {
                 rect.bottom - 5.0,
             );
             self.text_at(title, &f.body, title_box, 0xffffff, 0.95);
+            if let Row::Style { .. } = row {
+                let track = Rect {
+                    right: style_segment(rect, STYLES.len() - 1).right,
+                    ..style_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, floating)) in STYLES.iter().enumerate() {
+                    let segment = style_segment(rect, index);
+                    if *floating == self.notch_floating {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
+            }
+            if let Row::Fill { .. } = row {
+                self.slider(slider_track(rect));
+            }
             if let Row::Size { .. } = row {
                 let track = Rect {
                     right: size_segment(rect, SIZES.len() - 1).right,
@@ -1511,6 +1616,40 @@ impl Window {
         );
     }
 
+    /// The slider with its value on the left.
+    unsafe fn slider(&self, track: Rect) {
+        let cy = (track.top + track.bottom) / 2.0;
+        let line = Rect::new(track.left, cy - 2.0, track.right, cy + 2.0);
+        let knob = track.left + (track.right - track.left) * self.notch_fill as f32 / 100.0;
+        self.rounded(line, 2.0, FIELD, 1.0);
+        self.rounded(
+            Rect {
+                right: knob,
+                ..line
+            },
+            2.0,
+            ACCENT,
+            1.0,
+        );
+        self.brush.SetColor(&rgb(0xffffff, 1.0));
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: windows_numerics::Vector2 { X: knob, Y: cy },
+                radiusX: 8.0,
+                radiusY: 8.0,
+            },
+            &self.brush,
+        );
+        let label = Rect::new(
+            track.left - 54.0,
+            track.top,
+            track.left - 12.0,
+            track.bottom,
+        );
+        let value = self.notch_fill.to_string();
+        self.text_at(&value, &self.fonts.button, label, 0xffffff, 0.95);
+    }
+
     unsafe fn rounded(&self, rect: Rect, radius: f32, color: u32, alpha: f32) {
         self.brush.SetColor(&rgb(color, alpha));
         self.target.FillRoundedRectangle(
@@ -1627,7 +1766,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEMOVE => {
             let (x, y) = (lparam.0 as i16 as f32, (lparam.0 >> 16) as i16 as f32);
-            with_window(|window| window.hover_at(x / window.scale, y / window.scale));
+            let held = wparam.0 & MK_LBUTTON.0 as usize != 0;
+            with_window(|window| {
+                let (x, y) = (x / window.scale, y / window.scale);
+                if held {
+                    window.slide(x, y);
+                }
+                window.hover_at(x, y);
+            });
             LRESULT(0)
         }
         WM_SETCURSOR => {
@@ -1760,7 +1906,7 @@ mod tests {
             .flat_map(rows)
             .filter_map(|(_, row)| match row {
                 Row::Switch { toggle, .. } => Some(*toggle),
-                Row::Field { .. } | Row::Size { .. } => None,
+                Row::Field { .. } | Row::Size { .. } | Row::Style { .. } | Row::Fill { .. } => None,
             })
             .collect()
     }

@@ -19,10 +19,10 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
     D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND,
-    D2D1_COMBINE_MODE_INTERSECT, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2,
-    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
+    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
+    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND,
+    D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
     D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
@@ -200,6 +200,8 @@ fn sun_arc(position: f32) -> f32 {
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
+/// Radius of the brush that draws ripples: past their reach and width.
+const RIPPLE_BRUSH: f32 = 480.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
     max_of(&[
@@ -668,6 +670,10 @@ pub struct Scene<'a> {
     /// The prayer close at hand and the wait for it, which take the
     /// temperature's place in the closed notch.
     pub prayer_soon: Option<(&'static str, String)>,
+    /// How solid the notch's black is, 0..1.
+    pub notch_opacity: f32,
+    /// The notch floats, rounded all round, instead of joining the top edge.
+    pub floating: bool,
     /// The closed notch's bell's tilt in degrees.
     pub bell_angle: f32,
     /// The prayer location's name.
@@ -676,11 +682,11 @@ pub struct Scene<'a> {
     pub minimal: bool,
     /// Files are being dragged over the notch.
     pub drop_zone: bool,
-    /// The liquid in the notch: how far it has risen and how bright it is,
-    /// both 0..1, and the seconds its waves have run.
-    pub liquid_level: f32,
+    /// The dark water in the notch: how visible it is, 0..1, where its
+    /// ripples start, and each ring's radius and strength.
     pub liquid_glow: f32,
-    pub liquid_time: f32,
+    pub ripple_at: (f32, f32),
+    pub ripples: Vec<(f32, f32)>,
     /// While switching pages: the page being left, how far the switch has
     /// gone (0..1), and its direction (1 toward later pages, -1 back).
     pub previous_page: Option<Page>,
@@ -1190,25 +1196,38 @@ impl Renderer {
 
         let geometry = self.factory.CreatePathGeometry()?;
         let sink = geometry.Open()?;
-        sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-        sink.AddLine(pt(x1 + ear, 0.0));
-        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-            point1: pt(x1, 0.0),
-            point2: pt(x1, ear),
-        });
+        if scene.floating {
+            sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(x1 - r, 0.0));
+            sink.AddArc(&arc(pt(x1, r), r));
+        } else {
+            sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(x1 + ear, 0.0));
+            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                point1: pt(x1, 0.0),
+                point2: pt(x1, ear),
+            });
+        }
         sink.AddLine(pt(x1, h - r));
         sink.AddArc(&arc(pt(x1 - r, h), r));
         sink.AddLine(pt(x0 + r, h));
         sink.AddArc(&arc(pt(x0, h - r), r));
-        sink.AddLine(pt(x0, ear));
-        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-            point1: pt(x0, 0.0),
-            point2: pt(x0 - ear, 0.0),
-        });
+        if scene.floating {
+            sink.AddLine(pt(x0, r));
+            sink.AddArc(&arc(pt(x0 + r, 0.0), r));
+        } else {
+            sink.AddLine(pt(x0, ear));
+            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                point1: pt(x0, 0.0),
+                point2: pt(x0 - ear, 0.0),
+            });
+        }
         sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         sink.Close()?;
 
+        self.black.SetOpacity(scene.notch_opacity);
         self.target.FillGeometry(&geometry, &self.black, None);
+        self.black.SetOpacity(1.0);
         if scene.liquid_glow > 0.005 {
             self.fill_liquid(&geometry, scene, x0, x1)?;
         }
@@ -2391,8 +2410,8 @@ impl Renderer {
         self.target.CreateBitmapFromWicBitmap(&converter, None)
     }
 
-    /// Two waves of coloured liquid inside the notch's shape, the far one
-    /// fainter and a little higher.
+    /// Dark water inside the notch's shape, with rings running out from
+    /// where something was dropped.
     unsafe fn fill_liquid(
         &self,
         shape: &ID2D1PathGeometry,
@@ -2400,40 +2419,49 @@ impl Renderer {
         x0: f32,
         x1: f32,
     ) -> Result<()> {
-        const STEPS: u32 = 40;
-        const WAVE: f32 = 5.0;
-        let h = scene.height;
-        let time = scene.liquid_time;
-        // Filled, the wave's troughs clear the top of the notch.
-        let surface = (h + 2.0 * WAVE) * (1.0 - scene.liquid_level.clamp(0.0, 1.0)) - 2.0 * WAVE;
-        let (left, right) = (x0 - EAR - 2.0, x1 + EAR + 2.0);
-        let drift = 50.0 * (time * 0.7).sin();
+        let glow = scene.liquid_glow.clamp(0.0, 1.0);
         let stops = [
-            (0.0, color(0.18, 0.83, 0.75, 1.0)),
-            (0.5, color(0.23, 0.51, 0.96, 1.0)),
-            (1.0, color(0.66, 0.33, 0.97, 1.0)),
+            (0.0, color(0.01, 0.03, 0.09, 1.0)),
+            (1.0, color(0.03, 0.09, 0.24, 1.0)),
         ];
-        let fill = self.gradient(pt(x0 + drift, 0.0), pt(x1 + drift, h), &stops)?;
-        for (rise, speed, length, opacity) in [(5.0, -2.1, 62.0, 0.5), (0.0, 2.8, 84.0, 1.0)] {
-            let wave = self.factory.CreatePathGeometry()?;
-            let sink = wave.Open()?;
-            sink.BeginFigure(pt(left, h + 2.0), D2D1_FIGURE_BEGIN_FILLED);
-            for step in 0..=STEPS {
-                let x = left + (right - left) * step as f32 / STEPS as f32;
-                let y = surface - rise + WAVE * (x / length * 6.0 + time * speed).sin();
-                sink.AddLine(pt(x, y));
-            }
-            sink.AddLine(pt(right, h + 2.0));
-            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-            sink.Close()?;
-
-            let inside = self.factory.CreatePathGeometry()?;
-            let sink = inside.Open()?;
-            shape.CombineWithGeometry(&wave, D2D1_COMBINE_MODE_INTERSECT, None, 0.25, &sink)?;
-            sink.Close()?;
-            fill.SetOpacity(opacity * scene.liquid_glow.clamp(0.0, 1.0));
-            self.target.FillGeometry(&inside, &fill, None);
+        let water = self.gradient(pt(x0, 0.0), pt(x1, scene.height), &stops)?;
+        water.SetOpacity(glow);
+        self.target.FillGeometry(shape, &water, None);
+        if scene.ripples.is_empty() {
+            return Ok(());
         }
+
+        // Each ring is a soft crest between two clear stops of one brush.
+        let crest = |alpha: f32| color(0.38, 0.6, 1.0, alpha);
+        let mut stops: Vec<D2D1_GRADIENT_STOP> = Vec::with_capacity(scene.ripples.len() * 3);
+        for &(radius, strength) in &scene.ripples {
+            let width = 12.0 + 22.0 * (1.0 - strength);
+            for (offset, alpha) in [(-width, 0.0), (0.0, 0.34 * strength), (width, 0.0)] {
+                stops.push(D2D1_GRADIENT_STOP {
+                    position: ((radius + offset) / RIPPLE_BRUSH).clamp(0.0, 1.0),
+                    color: crest(alpha),
+                });
+            }
+        }
+        stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+        let collection = self.target.CreateGradientStopCollection(
+            &stops,
+            D2D1_GAMMA_2_2,
+            D2D1_EXTEND_MODE_CLAMP,
+        )?;
+        let (x, y) = scene.ripple_at;
+        let rings = self.target.CreateRadialGradientBrush(
+            &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+                center: pt(x, y),
+                gradientOriginOffset: pt(0.0, 0.0),
+                radiusX: RIPPLE_BRUSH,
+                radiusY: RIPPLE_BRUSH,
+            },
+            None,
+            &collection,
+        )?;
+        rings.SetOpacity(glow);
+        self.target.FillGeometry(shape, &rings, None);
         Ok(())
     }
 
@@ -3920,8 +3948,8 @@ impl Renderer {
         self.target.PopAxisAlignedClip();
     }
 
-    /// The charge as a ring: green with a bolt inside while charging, red
-    /// when low.
+    /// The charge as a ring: green, with a bolt inside while charging, and
+    /// red when low on battery.
     unsafe fn draw_battery(
         &self,
         cx: f32,
@@ -3931,12 +3959,10 @@ impl Renderer {
         charging: bool,
         alpha: f32,
     ) {
-        let fill = if charging {
-            accent_color(Accent::Green)
-        } else if percent <= 20 {
+        let fill = if !charging && percent <= 20 {
             accent_color(Accent::Red)
         } else {
-            color(1.0, 1.0, 1.0, 1.0)
+            accent_color(Accent::Green)
         };
         let _ = self.draw_ring(cx, cy, radius, percent as f32 / 100.0, fill, alpha);
         if charging {
@@ -4145,7 +4171,7 @@ impl Renderer {
         }
         let cy = height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            self.draw_battery(bounds.left + 19.0, cy, 7.5, percent, charging, alpha);
+            self.draw_battery(bounds.left + 21.0, cy, 6.5, percent, charging, alpha);
         }
         // On the right the temperature, or the wait for a prayer close at
         // hand. Widened, the weather or the prayer's name joins it.
@@ -4161,9 +4187,9 @@ impl Renderer {
         let right = prayer.or(weather);
         if let Some((value, label)) = right.filter(|_| !(scene.inbox.unread && unread_bell(scene)))
         {
-            if let Some(text) = self.text_layout(value, &self.small_left, 50.0) {
-                let x = bounds.right - 13.0 - text.width;
-                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.75 * alpha);
+            if let Some(text) = self.text_layout(value, &self.bold_left, 56.0) {
+                let x = bounds.right - 14.0 - text.width;
+                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha);
                 if let Some(sky) = self.text_layout(label, &self.small_left, 90.0) {
                     let x = x - 7.0 - sky.width;
                     let opacity = 0.75 * alpha * peek * peek;

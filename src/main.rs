@@ -66,12 +66,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, IsWindow,
     LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
     SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_CLIPBOARDUPDATE,
-    WM_DESTROY, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE, SW_SHOWNOACTIVATE,
+    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
@@ -107,8 +107,11 @@ const FRAME_MS: u32 = 16;
 const BUSY_MS: u32 = 100;
 /// Wake-up interval while compact: only the idle check and the clock need it.
 const COMPACT_MS: u32 = 500;
+/// Logical pixels between the floating notch and the screen's top.
+const FLOAT_GAP: f32 = 8.0;
 const MENU_QUIT: usize = 1;
 const MENU_AUTOSTART: usize = 2;
+const MENU_MINIMAL: usize = 4;
 /// A Wi-Fi drop is only announced if it does not come back within this time,
 /// so roaming between access points stays quiet.
 const WIFI_GRACE: Duration = Duration::from_secs(4);
@@ -666,9 +669,11 @@ impl App {
             || self.editing.is_some();
         self.notch.set_peek(hovering && by_click && !open);
         if !open {
-            // The next opening starts on the first page, this month, unless
+            // The next opening returns to the last page, on this month, unless
             // notifications are waiting to be seen.
-            self.page = self.opening_page();
+            if self.unread {
+                self.page = Page::Notifications;
+            }
             self.month_offset = 0;
             self.page_switch = None;
             self.nav_open = false;
@@ -768,6 +773,7 @@ impl App {
             return;
         }
         self.renderer.sync_thumbnails(self.shelf.items());
+        self.notch.ripple_at = self.cursor_on_canvas();
         self.notch.settle_liquid();
         self.page = Page::Shelf;
         self.card_until = Some(Instant::now() + SHELF_SHOWN);
@@ -1248,6 +1254,17 @@ impl App {
         self.tick();
     }
 
+    /// The mouse in the canvas' logical pixels.
+    fn cursor_on_canvas(&self) -> (f32, f32) {
+        let mut point = POINT::default();
+        let scale = window_scale(self.hwnd);
+        unsafe {
+            let _ = GetCursorPos(&mut point);
+            let _ = ScreenToClient(self.hwnd, &mut point);
+        }
+        (point.x as f32 / scale, point.y as f32 / scale)
+    }
+
     fn logical_point(&self, lparam: LPARAM) -> (f32, f32) {
         let scale = window_scale(self.hwnd);
         (
@@ -1331,14 +1348,6 @@ impl App {
         self.renderer.inbox_row_at(x, y, width, count)
     }
 
-    fn opening_page(&self) -> Page {
-        if self.unread {
-            Page::Notifications
-        } else {
-            Page::Music
-        }
-    }
-
     fn shown_page(&self) -> Page {
         let pages = self.pages();
         if pages.contains(&self.page) {
@@ -1376,11 +1385,9 @@ impl App {
             .position(|page| *page == self.shown_page())
             .unwrap_or(0);
         if self.notch.card_visible.target == 0.0 {
-            self.page = if self.unread {
-                Page::Notifications
-            } else {
-                pages[0]
-            };
+            if self.unread {
+                self.page = Page::Notifications;
+            }
             self.card_until = Some(now + KEY_CARD);
         } else if current + 1 < pages.len() {
             self.page_switch = Some(PageSwitch {
@@ -2039,27 +2046,13 @@ impl App {
         })
     }
 
-    /// Today's schedule for the tray menu: a heading and one line per prayer.
-    fn prayer_menu(&self) -> (String, Vec<String>) {
-        match &self.prayer {
-            Some(day) => {
-                let heading = if day.settings.city.is_empty() {
-                    "Jadwal sholat".to_string()
-                } else {
-                    format!("Jadwal sholat · {}", day.settings.city)
-                };
-                let lines = prayer::NAMES
-                    .iter()
-                    .zip(day.times)
-                    .map(|(name, time)| format!("{name}\t{}", prayer::format_time(time)))
-                    .collect();
-                (heading, lines)
-            }
-            None => (
-                "Jadwal sholat".to_string(),
-                vec!["Lokasi belum diatur".to_string()],
-            ),
-        }
+    /// Switches the thin bar on or off from the tray.
+    fn toggle_minimal(&mut self) {
+        self.settings.notch_minimal = !self.settings.notch_minimal;
+        let _ = self.settings.save();
+        self.config_stamp = config::modified();
+        self.apply_settings(false);
+        self.tick();
     }
 
     fn on_volume(&mut self, wparam: WPARAM, lparam: LPARAM) {
@@ -2229,6 +2222,8 @@ impl App {
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
+            notch_opacity: self.settings.notch_opacity(),
+            floating: self.settings.notch_floating,
             bell_angle: self.bell.angle,
             minimal: self.settings.notch_minimal,
             place: &self.settings.city,
@@ -2249,9 +2244,9 @@ impl App {
                 self.agenda_scene(self.month_events(shown))
             },
             drop_zone: self.drag_over,
-            liquid_level: n.liquid_level.value,
             liquid_glow: n.liquid_glow.value,
-            liquid_time: n.liquid_time,
+            ripple_at: n.ripple_at,
+            ripples: n.ripple_rings(),
             previous_page: self.page_switch.as_ref().map(|switch| switch.from),
             page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
                 let t =
@@ -2284,7 +2279,11 @@ impl App {
         let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
         POINT {
             x: (screen_w - self.renderer.size().cx) / 2,
-            y: 0,
+            y: if self.settings.notch_floating {
+                (FLOAT_GAP * window_scale(self.hwnd)).round() as i32
+            } else {
+                0
+            },
         }
     }
 
@@ -2457,7 +2456,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         settings::SAVED_MSG => {
-            with_app(App::update_prayer);
+            with_app(|app| {
+                app.update_prayer();
+                app.draw();
+            });
             LRESULT(0)
         }
         system::DEVICE_MSG => {
@@ -2511,6 +2513,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 fn handle_menu(hwnd: HWND) {
     match show_menu(hwnd) {
+        MENU_MINIMAL => {
+            with_app(App::toggle_minimal);
+        }
         MENU_AUTOSTART => autostart::set_enabled(!autostart::is_enabled()),
         MENU_SETTINGS => settings::open(hwnd),
         MENU_QUIT => unsafe {
@@ -2535,33 +2540,25 @@ fn show_menu(hwnd: HWND) -> usize {
             return 0;
         };
 
-        // Today's schedule as a read-only submenu.
-        let (heading, lines) = APP.with(|cell| {
+        let minimal = APP.with(|cell| {
             cell.try_borrow()
                 .ok()
-                .and_then(|app| app.as_ref().map(App::prayer_menu))
+                .and_then(|app| app.as_ref().map(|app| app.settings.notch_minimal))
                 .unwrap_or_default()
         });
-        if let Ok(schedule) = CreatePopupMenu() {
-            for line in &lines {
-                let _ = AppendMenuW(schedule, MF_STRING | MF_GRAYED, 0, &HSTRING::from(line));
-            }
-            let _ = AppendMenuW(menu, MF_POPUP, schedule.0 as usize, &HSTRING::from(heading));
-        }
-        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Pengaturan…"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-
+        let minimal_flags = if minimal {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(menu, minimal_flags, MENU_MINIMAL, w!("Notch minimal"));
         let autostart_flags = if autostart::is_enabled() {
             MF_STRING | MF_CHECKED
         } else {
             MF_STRING
         };
-        let _ = AppendMenuW(
-            menu,
-            autostart_flags,
-            MENU_AUTOSTART,
-            w!("Jalankan saat Windows menyala"),
-        );
+        let _ = AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, w!("Mulai otomatis"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Pengaturan…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Keluar Drop"));
         let mut cursor = POINT::default();

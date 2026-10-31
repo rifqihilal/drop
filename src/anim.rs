@@ -60,10 +60,13 @@ pub const PRAYER_BANNER: (f32, f32) = (276.0, 30.0);
 /// Damping of the notch's shape: close to no overshoot, and for a card a
 /// little less, which makes it bounce.
 const DAMPING: f32 = 30.0;
-const CARD_DAMPING: f32 = 17.0;
+const CARD_DAMPING: f32 = 23.0;
 /// Stiffness and damping of the liquid's colour fading after a drop: slow,
 /// with no bounce.
 const LIQUID_FADE: (f32, f32) = (2.2, 3.0);
+/// How long a ripple runs, and how far it reaches.
+const RIPPLE_SECS: f32 = 2.0;
+const RIPPLE_REACH: f32 = 430.0;
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -401,6 +404,13 @@ impl Bell {
     }
 }
 
+/// A ripple's radius and strength `age` seconds in: quick at first, then
+/// slowing as it dies away.
+fn ripple_ring(age: f32) -> (f32, f32) {
+    let left = (1.0 - age / RIPPLE_SECS).clamp(0.0, 1.0);
+    (RIPPLE_REACH * (1.0 - left * left), left * left)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum LevelKind {
     Volume,
@@ -488,12 +498,14 @@ pub struct Notch {
     pub peek_visible: Spring,
     /// How far the music card's volume slider has opened, 0..1.
     pub volume_visible: Spring,
-    /// How far liquid has risen in the notch while something is dragged
-    /// over it, 0..1, and how bright it is.
-    pub liquid_level: Spring,
+    /// How visible the dark water is while something is dragged over the
+    /// notch, 0..1.
     pub liquid_glow: Spring,
-    /// Seconds the liquid's waves have run.
-    pub liquid_time: f32,
+    /// Where something landed, on the canvas, for the ripples to start from.
+    pub ripple_at: (f32, f32),
+    /// Seconds the ripples have run, and when each starts in them.
+    liquid_time: f32,
+    ripples: Vec<f32>,
     idle: bool,
     /// The eyes stay until this moment after being woken.
     waking: Option<Instant>,
@@ -526,9 +538,10 @@ impl Notch {
             nav_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             peek_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             volume_visible: Spring::new(0.0, 200.0, 28.0, 0.002),
-            liquid_level: Spring::new(0.0, 40.0, 11.0, 0.002),
             liquid_glow: Spring::new(0.0, 60.0, 15.0, 0.002),
+            ripple_at: (0.0, 0.0),
             liquid_time: 0.0,
+            ripples: Vec::new(),
             idle: false,
             waking: None,
             banner_active: false,
@@ -699,13 +712,12 @@ impl Notch {
         moving |= self.nav_visible.step(dt);
         moving |= self.peek_visible.step(dt);
         moving |= self.volume_visible.step(dt);
-        moving |= self.liquid_level.step(dt);
         moving |= self.liquid_glow.step(dt);
-        if self.liquid_glow.value > 0.0 {
+        if !self.ripples.is_empty() {
             self.liquid_time += dt;
             moving = true;
-        } else {
-            self.liquid_level = Spring::new(0.0, 40.0, 11.0, 0.002);
+            let time = self.liquid_time;
+            self.ripples.retain(|start| time - start < RIPPLE_SECS);
         }
         if let Some(Banner {
             content: Content::Level { level, .. },
@@ -781,23 +793,33 @@ impl Notch {
         }
     }
 
-    /// Fills the notch with liquid while something is dragged over it, or
-    /// drains it when that leaves.
+    /// Turns the notch dark blue while something is dragged over it, or
+    /// clears it when that leaves.
     pub fn set_liquid(&mut self, over: bool) {
-        let target = if over { 1.0 } else { 0.0 };
-        self.liquid_level.target = target;
-        self.liquid_glow.target = target;
+        self.liquid_glow.target = if over { 1.0 } else { 0.0 };
         self.liquid_glow.stiffness = 60.0;
         self.liquid_glow.damping = 15.0;
     }
 
-    /// Something was dropped: the liquid stays and its colour slowly goes,
-    /// leaving the notch black.
+    /// Something was dropped: rings run out from where it landed, and the
+    /// colour slowly goes, leaving the notch black.
     pub fn settle_liquid(&mut self) {
-        self.liquid_level.target = 1.0;
+        let time = self.liquid_time;
+        self.ripples.extend([time, time + 0.22, time + 0.44]);
+        self.liquid_glow.value = self.liquid_glow.value.max(1.0);
         self.liquid_glow.target = 0.0;
         self.liquid_glow.stiffness = LIQUID_FADE.0;
         self.liquid_glow.damping = LIQUID_FADE.1;
+    }
+
+    /// The ripples showing now, each as its radius and strength.
+    pub fn ripple_rings(&self) -> Vec<(f32, f32)> {
+        let time = self.liquid_time;
+        self.ripples
+            .iter()
+            .filter(|&&start| start <= time)
+            .map(|start| ripple_ring(time - start))
+            .collect()
     }
 
     /// Opens or closes the music card's volume slider.
@@ -848,26 +870,36 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_fades_the_liquid_without_draining_it() {
+    fn a_drop_sends_rings_out_and_fades_to_black() {
         let now = Instant::now();
         let mut notch = Notch::new(now, 7);
         notch.set_liquid(true);
         for _ in 0..120 {
             notch.step(now, 1.0 / 60.0);
         }
-        assert!(notch.liquid_level.value > 0.95);
+        assert!(notch.liquid_glow.value > 0.95);
+        assert!(notch.ripple_rings().is_empty());
         notch.set_liquid(false);
         notch.settle_liquid();
-        for _ in 0..30 {
+        for _ in 0..45 {
             notch.step(now, 1.0 / 60.0);
         }
-        assert!(notch.liquid_level.value > 0.95);
-        assert!(notch.liquid_glow.value > 0.5);
+        assert!(notch.liquid_glow.value > 0.3);
+        assert!(notch.ripple_rings().len() >= 3);
         for _ in 0..1200 {
             notch.step(now, 1.0 / 60.0);
         }
         assert_eq!(notch.liquid_glow.value, 0.0);
-        assert_eq!(notch.liquid_level.value, 0.0);
+        assert!(notch.ripple_rings().is_empty());
+    }
+
+    #[test]
+    fn ripples_spread_and_die_away() {
+        let (first, strong) = ripple_ring(0.2);
+        let (later, weak) = ripple_ring(1.2);
+        assert!(later > first);
+        assert!(weak < strong);
+        assert_eq!(ripple_ring(RIPPLE_SECS).1, 0.0);
     }
 
     #[test]

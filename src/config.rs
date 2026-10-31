@@ -10,6 +10,9 @@ use crate::prayer::Location;
 /// How many calendar links the agenda takes.
 pub const FEEDS: usize = 3;
 
+/// How see-through the notch can get at most.
+const MIN_OPACITY: f32 = 0.45;
+
 /// How large the closed notch is; open cards keep one size.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum NotchSize {
@@ -70,6 +73,10 @@ pub struct Settings {
     /// The card and the widened notch bounce as they open.
     pub card_bounce: bool,
     pub notch_size: NotchSize,
+    /// How solid the notch's black is, 0..100; see [`Settings::notch_opacity`].
+    pub notch_fill: u32,
+    /// The notch floats below the screen's top edge instead of joining it.
+    pub notch_floating: bool,
     /// Links to iCalendar feeds for the agenda; each slot has its colour,
     /// and an empty one is unused.
     pub ical_urls: [String; FEEDS],
@@ -111,6 +118,8 @@ impl Default for Settings {
             open_on_click: false,
             card_bounce: true,
             notch_size: NotchSize::Normal,
+            notch_fill: 100,
+            notch_floating: false,
             ical_urls: Default::default(),
             water: true,
             water_minutes: 60,
@@ -220,6 +229,10 @@ impl Settings {
              pantulan = {}\n\
              ; Ukuran notch: kecil, normal atau besar.\n\
              ukuran_notch = {}\n\
+             ; Transparansi notch: 100 hitam penuh, 0 paling tembus tapi tetap terlihat.\n\
+             transparansi = {}\n\
+             ; Notch mengambang di bawah tepi atas layar, tidak menempel.\n\
+             notch_mengambang = {}\n\
              \n\
              [agenda]\n\
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
@@ -263,6 +276,8 @@ impl Settings {
             flag(self.open_on_click),
             flag(self.card_bounce),
             self.notch_size.name(),
+            self.notch_fill,
+            flag(self.notch_floating),
             self.ical_urls[0],
             self.ical_urls[1],
             self.ical_urls[2],
@@ -274,6 +289,13 @@ impl Settings {
             flag(self.stretch),
             self.stretch_minutes,
         )
+    }
+}
+
+impl Settings {
+    /// The notch's opacity: never below [`MIN_OPACITY`], so it stays visible.
+    pub fn notch_opacity(&self) -> f32 {
+        MIN_OPACITY + (1.0 - MIN_OPACITY) * self.notch_fill.min(100) as f32 / 100.0
     }
 }
 
@@ -361,6 +383,8 @@ fn parse(text: &str) -> Settings {
                     _ => NotchSize::Normal,
                 }
             }
+            "transparansi" => s.notch_fill = number().map_or(100, |v| v.clamp(0.0, 100.0) as u32),
+            "notch_mengambang" => s.notch_floating = flag(false),
             "ical" => s.ical_urls[0] = value.to_string(),
             "ical2" => s.ical_urls[1] = value.to_string(),
             "ical3" => s.ical_urls[2] = value.to_string(),
@@ -416,6 +440,8 @@ mod tests {
             open_on_click: true,
             card_bounce: false,
             notch_size: NotchSize::Large,
+            notch_fill: 40,
+            notch_floating: true,
             ical_urls: [
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),
@@ -430,6 +456,21 @@ mod tests {
             stretch_minutes: 90,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
+    }
+
+    #[test]
+    fn the_notch_never_turns_invisible() {
+        let at = |notch_fill| {
+            Settings {
+                notch_fill,
+                ..Settings::default()
+            }
+            .notch_opacity()
+        };
+        assert_eq!(at(100), 1.0);
+        assert_eq!(at(0), MIN_OPACITY);
+        assert_eq!(parse("transparansi = 500\n").notch_fill, 100);
+        assert_eq!(Settings::default().notch_fill, 100);
     }
 
     #[test]
