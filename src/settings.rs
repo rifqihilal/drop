@@ -131,12 +131,12 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 24;
+const TOGGLE_COUNT: usize = 25;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
 const PAGE_GENERAL: usize = 0;
-const PAGE_PRAYER: usize = 7;
+const PAGE_PRAYER: usize = 8;
 
 enum Row {
     Switch {
@@ -193,7 +193,7 @@ struct Page {
     groups: &'static [Group],
 }
 
-static PAGES: [Page; 10] = [
+static PAGES: [Page; 11] = [
     Page {
         title: "General",
         glyph: "\u{E713}",
@@ -220,16 +220,6 @@ static PAGES: [Page; 10] = [
                     note: "Bar hitam tipis saat tertutup, tab browser tetap kelihatan",
                 },
                 Row::Switch {
-                    toggle: 18,
-                    title: "Klik buat buka kartu",
-                    note: "Hover cuma melebarkan notch dan kasih lihat tanggal",
-                },
-                Row::Switch {
-                    toggle: 21,
-                    title: "Bounce",
-                    note: "Notch dan kartu mantul saat melebar",
-                },
-                Row::Switch {
                     toggle: 11,
                     title: "Mata saat idle",
                     note: "Notch kasih lihat mata saat PC didiamkan",
@@ -244,6 +234,32 @@ static PAGES: [Page; 10] = [
                     toggle: 5,
                     title: "Start bareng Windows",
                     note: "Drop kebuka sendiri setelah masuk Windows",
+                },
+            ],
+        }],
+    },
+    Page {
+        title: "Kartu",
+        glyph: "\u{E8A1}",
+        color: 0xbf5af2,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Kartu",
+            rows: &[
+                Row::Switch {
+                    toggle: 18,
+                    title: "Klik buat buka kartu",
+                    note: "Hover cuma melebarkan notch dan kasih lihat tanggal",
+                },
+                Row::Switch {
+                    toggle: 21,
+                    title: "Bounce",
+                    note: "Notch dan kartu mantul saat melebar",
+                },
+                Row::Switch {
+                    toggle: 24,
+                    title: "Panah halaman",
+                    note: "Panah kiri dan kanan di kartu buat ganti halaman",
                 },
             ],
         }],
@@ -343,7 +359,7 @@ static PAGES: [Page; 10] = [
             rows: &[Row::Switch {
                 toggle: 23,
                 title: "Screen Time",
-                note: "Waktu pakai per app hari ini, cuma disimpan di PC ini",
+                note: "Waktu pakai per app sampai 7 hari, cuma disimpan di PC ini",
             }],
         }],
     },
@@ -902,6 +918,7 @@ impl Window {
                 settings.card_bounce,
                 settings.shelf_clipboard,
                 settings.module_usage,
+                settings.card_arrows,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1149,6 +1166,7 @@ impl Window {
             shelf_screenshots: self.toggles[20],
             shelf_clipboard: self.toggles[22],
             card_bounce: self.toggles[21],
+            card_arrows: self.toggles[24],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),
@@ -1160,6 +1178,7 @@ impl Window {
             module_eyes: self.toggles[11],
             module_todo: self.toggles[12],
             module_usage: self.toggles[23],
+            usage_week: self.opened.usage_week,
             module_lyrics: self.toggles[13],
             water: self.toggles[14],
             water_minutes: self.health_minutes[0],

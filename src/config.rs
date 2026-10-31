@@ -66,6 +66,8 @@ pub struct Settings {
     pub module_eyes: bool,
     pub module_todo: bool,
     pub module_usage: bool,
+    /// Screen Time shows the last seven days instead of today.
+    pub usage_week: bool,
     pub module_lyrics: bool,
     /// Rest as a thin bar, with no clock or live strip.
     pub notch_minimal: bool,
@@ -73,6 +75,8 @@ pub struct Settings {
     pub open_on_click: bool,
     /// The card and the widened notch bounce as they open.
     pub card_bounce: bool,
+    /// The open card shows arrows to the pages on either side.
+    pub card_arrows: bool,
     pub notch_size: NotchSize,
     /// How solid the notch's black is, 0..100; see [`Settings::notch_opacity`].
     pub notch_fill: u32,
@@ -115,10 +119,12 @@ impl Default for Settings {
             module_eyes: true,
             module_todo: true,
             module_usage: true,
+            usage_week: false,
             module_lyrics: true,
             notch_minimal: false,
             open_on_click: false,
             card_bounce: true,
+            card_arrows: true,
             notch_size: NotchSize::Normal,
             notch_fill: 100,
             notch_floating: false,
@@ -223,6 +229,8 @@ impl Settings {
              tugas = {}\n\
              ; Waktu pakai per app hari ini, cuma disimpan di PC ini.\n\
              screen_time = {}\n\
+             ; Screen Time menampilkan 7 hari terakhir, bukan hari ini.\n\
+             screen_time_7_hari = {}\n\
              ; Lirik dicari di lrclib.net dari judul dan penyanyi lagu.\n\
              lirik = {}\n\
              ; Saat tertutup notch hanya bar hitam tipis.\n\
@@ -231,6 +239,8 @@ impl Settings {
              buka_klik = {}\n\
              ; Notch dan kartu memantul saat melebar.\n\
              pantulan = {}\n\
+             ; Panah kiri dan kanan untuk ganti halaman kartu.\n\
+             panah_halaman = {}\n\
              ; Ukuran notch: kecil, normal atau besar.\n\
              ukuran_notch = {}\n\
              ; Transparansi notch: 100 hitam penuh, 0 paling tembus tapi tetap terlihat.\n\
@@ -276,10 +286,12 @@ impl Settings {
             flag(self.module_eyes),
             flag(self.module_todo),
             flag(self.module_usage),
+            flag(self.usage_week),
             flag(self.module_lyrics),
             flag(self.notch_minimal),
             flag(self.open_on_click),
             flag(self.card_bounce),
+            flag(self.card_arrows),
             self.notch_size.name(),
             self.notch_fill,
             flag(self.notch_floating),
@@ -378,10 +390,12 @@ fn parse(text: &str) -> Settings {
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
             "screen_time" => s.module_usage = flag(true),
+            "screen_time_7_hari" => s.usage_week = flag(false),
             "lirik" => s.module_lyrics = flag(true),
             "notch_kecil" => s.notch_minimal = flag(false),
             "buka_klik" => s.open_on_click = flag(false),
             "pantulan" => s.card_bounce = flag(true),
+            "panah_halaman" => s.card_arrows = flag(true),
             "ukuran_notch" => {
                 s.notch_size = match value.to_lowercase().as_str() {
                     "kecil" => NotchSize::Small,
@@ -442,10 +456,12 @@ mod tests {
             module_eyes: false,
             module_todo: false,
             module_usage: false,
+            usage_week: true,
             module_lyrics: false,
             notch_minimal: true,
             open_on_click: true,
             card_bounce: false,
+            card_arrows: false,
             notch_size: NotchSize::Large,
             notch_fill: 40,
             notch_floating: true,

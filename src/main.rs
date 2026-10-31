@@ -76,7 +76,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    Accent, Bell, LevelKind, Motion, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT,
+    Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
     COMPACT_LARGE, COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX,
     MUSIC_STRIP, TIMER_STRIP,
 };
@@ -284,6 +284,8 @@ struct App {
     event_reminded: Vec<(i64, u32, String)>,
     health: Health,
     usage: Usage,
+    /// The Screen Time switch's thumb, from today (0) to the week (1).
+    usage_switch: Spring,
     todo: Todo,
     /// Task under the mouse.
     todo_hover: Option<usize>,
@@ -463,12 +465,15 @@ fn main() -> Result<()> {
             weather: None,
             health: Health::default(),
             usage: Usage::load(prayer::today(), now),
+            usage_switch: Spring::new(0.0, 260.0, 32.0, 0.002),
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
         app.config_stamp = config::modified();
         app.apply_settings(false);
+        app.usage_switch.value = app.usage_switch.target;
         app.update_usage();
+        app.sync_usage_icons();
         app.renderer.sync_thumbnails(app.shelf.items());
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -583,7 +588,8 @@ impl App {
         }
         let rolling = self.update_lyric_roll(now);
         let zooming = self.step_zooms(dt);
-        let moving = self.notch.step(now, dt) || switching || rolling || zooming;
+        let sliding = self.usage_switch.step(dt);
+        let moving = self.notch.step(now, dt) || switching || rolling || zooming || sliding;
         let moving = self.step_bell(now) || moving;
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
@@ -1024,7 +1030,7 @@ impl App {
 
     /// The side arrow at (`x`, `y`), when the card has pages to switch to.
     fn arrow_at(&self, x: f32, y: f32) -> Option<f32> {
-        if self.pages().len() < 2 {
+        if !self.settings.card_arrows || self.pages().len() < 2 {
             return None;
         }
         let n = &self.notch;
@@ -1218,7 +1224,8 @@ impl App {
                         .is_some()
             }
             Page::Todo => self.todo_hit(x, y).is_some(),
-            Page::Status | Page::Prayer | Page::Usage => false,
+            Page::Usage => self.renderer.usage_switch_at(x, y, width).is_some(),
+            Page::Status | Page::Prayer => false,
         }
     }
 
@@ -1283,11 +1290,20 @@ impl App {
         )
     }
 
-    /// What zooms in for the mouse at (`x`, `y`): a page icon, or a media
+    /// What zooms in for the mouse at (`x`, `y`): a page icon, a side arrow, or a media
     /// control on an app notification, the widened notch or the music card.
     fn zoom_at(&self, x: f32, y: f32) -> Option<u16> {
         if let Some(index) = self.nav_item_at(x, y) {
             return Some(zoom::NAV + index as u16);
+        }
+        if self.notch.card_visible.value >= 0.5 {
+            if let Some(direction) = self.arrow_at(x, y) {
+                return Some(if direction < 0.0 {
+                    zoom::ARROW_BACK
+                } else {
+                    zoom::ARROW_ON
+                });
+            }
         }
         self.track.as_ref()?;
         let width = self.notch.width.value;
@@ -1761,6 +1777,13 @@ impl App {
             self.on_todo_click(x, y);
             return;
         }
+        if self.shown_page() == Page::Usage {
+            let width = self.notch.width.value;
+            if let Some(week) = self.renderer.usage_switch_at(x, y, width) {
+                self.set_usage_week(week);
+            }
+            return;
+        }
         if self.shown_page() == Page::Notifications {
             let width = self.notch.width.value;
             if self.inbox.total > 0 && self.renderer.inbox_clear_at(x, y, width) {
@@ -1910,6 +1933,7 @@ impl App {
         let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
         self.notch.bounce = self.settings.card_bounce;
+        self.aim_usage_switch();
         let resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,
             NotchSize::Normal => COMPACT,
@@ -1968,6 +1992,43 @@ impl App {
             let app = self.usage.in_front();
             self.usage.update(app, prayer::today(), now);
         }
+        self.sync_usage_icons();
+    }
+
+    /// The apps Screen Time lists now.
+    fn usage_apps(&self) -> &[usage::AppTime] {
+        if self.settings.usage_week {
+            self.usage.week()
+        } else {
+            self.usage.apps()
+        }
+    }
+
+    fn sync_usage_icons(&mut self) {
+        let paths: Vec<PathBuf> = self
+            .usage_apps()
+            .iter()
+            .take(usage::SHOWN)
+            .filter_map(|app| app.path.clone())
+            .collect();
+        self.renderer.sync_usage_icons(&paths);
+    }
+
+    fn aim_usage_switch(&mut self) {
+        self.usage_switch.target = if self.settings.usage_week { 1.0 } else { 0.0 };
+    }
+
+    /// Shows the last seven days on Screen Time, or today.
+    fn set_usage_week(&mut self, week: bool) {
+        if week == self.settings.usage_week {
+            return;
+        }
+        self.settings.usage_week = week;
+        let _ = self.settings.save();
+        self.config_stamp = config::modified();
+        self.aim_usage_switch();
+        self.sync_usage_icons();
+        self.tick();
     }
 
     /// Counts a minute of use toward the health reminders, held back while
@@ -2263,6 +2324,7 @@ impl App {
             notice_beat: n.notice_beat,
             notch_opacity: self.settings.notch_opacity(),
             floating: self.settings.notch_floating,
+            arrows: self.settings.card_arrows,
             bell_angle: self.bell.angle,
             minimal: self.settings.notch_minimal,
             place: &self.settings.city,
@@ -2277,8 +2339,10 @@ impl App {
             inbox: self.inbox_scene(),
             todo: self.todo_scene(),
             usage: UsageScene {
-                apps: self.usage.apps(),
-                total_ms: self.usage.total_ms(),
+                apps: self.usage_apps(),
+                week: self.settings.usage_week,
+                switch: self.usage_switch.value,
+                average_ms: self.usage.daily_average_ms(),
             },
             agenda: self.agenda_scene(self.upcoming()),
             month_agenda: {
@@ -2347,6 +2411,7 @@ impl App {
         if let Ok(renderer) = Renderer::new(window_scale(self.hwnd)) {
             self.renderer = renderer;
             self.renderer.sync_thumbnails(self.shelf.items());
+            self.sync_usage_icons();
             // Bitmaps belong to the old surface; decode the art again.
             let art = self.track.as_ref().and_then(|track| track.art.clone());
             self.renderer

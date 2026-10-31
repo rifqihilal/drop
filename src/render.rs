@@ -43,9 +43,10 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, HPALETTE,
 };
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
-    WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnLoad, WICRect,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICFormatConverter,
+    IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+    WICBitmapPaletteTypeMedianCut, WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnLoad,
+    WICRect,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Shell::{
@@ -378,6 +379,8 @@ pub mod zoom {
     pub const NEXT: u16 = 2;
     pub const LYRICS: u16 = 3;
     pub const VOLUME: u16 = 4;
+    pub const ARROW_BACK: u16 = 5;
+    pub const ARROW_ON: u16 = 6;
     /// Page icons count on from here.
     pub const NAV: u16 = 10;
 }
@@ -404,6 +407,13 @@ fn unread_bell(scene: &Scene) -> bool {
 
 /// Shelf thumbnails are made at most this many pixels square.
 const THUMB_PIXELS: u32 = 96;
+/// App icons on the Screen Time card are made this many pixels square.
+const ICON_PIXELS: u32 = 48;
+
+/// The Screen Time switch between today and the week, on the card's left.
+fn usage_switch(x0: f32) -> D2D_RECT_F {
+    rect(x0 + 20.0, 106.0, x0 + 134.0, 132.0)
+}
 
 // Shelf card layout: five 64 px tiles per row.
 const TILE: (f32, f32) = (64.0, 46.0);
@@ -691,6 +701,8 @@ pub struct Scene<'a> {
     pub notch_opacity: f32,
     /// The notch floats, rounded all round, instead of joining the top edge.
     pub floating: bool,
+    /// The open card shows its side arrows.
+    pub arrows: bool,
     /// The closed notch's bell's tilt in degrees.
     pub bell_angle: f32,
     /// The prayer location's name.
@@ -812,10 +824,16 @@ pub enum ShelfHit {
     ClearAll,
 }
 
+type UsageIcons = Vec<(PathBuf, Option<(ID2D1Bitmap, Option<[f32; 3]>)>)>;
+
 pub struct UsageScene<'a> {
-    /// Today's apps, longest first.
+    /// The apps of the period shown, longest first.
     pub apps: &'a [AppTime],
-    pub total_ms: u64,
+    /// The period shown is the last seven days, not today.
+    pub week: bool,
+    /// The switch's thumb, from today (0) to the week (1).
+    pub switch: f32,
+    pub average_ms: u64,
 }
 
 pub struct TodoScene<'a> {
@@ -975,6 +993,8 @@ pub struct Renderer {
     thumbs: Vec<(PathBuf, Option<ID2D1Bitmap>)>,
     /// Logos of the apps on the notification page, by app identity.
     logos: Vec<(String, ID2D1Bitmap)>,
+    /// App icons on the Screen Time card, each with its colour if it has one.
+    usage_icons: UsageIcons,
     /// Dashed outline of the drop zone.
     dashes: ID2D1StrokeStyle,
     dc: HDC,
@@ -1158,6 +1178,7 @@ impl Renderer {
                 art_tint: None,
                 thumbs: Vec::new(),
                 logos: Vec::new(),
+                usage_icons: Vec::new(),
                 dashes,
                 dc,
                 bitmap,
@@ -1875,21 +1896,26 @@ impl Renderer {
                 });
             }
         }
-        if scene.page_list.len() > 1 {
+        if scene.arrows && scene.page_list.len() > 1 {
             // Arrows to the pages on either side.
-            for (direction, icon) in [(-1.0, glyph::CHEVRON_LEFT), (1.0, glyph::CHEVRON_RIGHT)] {
+            for (direction, icon, id) in [
+                (-1.0, glyph::CHEVRON_LEFT, zoom::ARROW_BACK),
+                (1.0, glyph::CHEVRON_RIGHT, zoom::ARROW_ON),
+            ] {
                 let (ax, ay) = card_arrow(direction, scene.width, scene.height);
-                self.light.SetOpacity(0.12 * alpha);
-                self.target.FillEllipse(
-                    &D2D1_ELLIPSE {
-                        point: pt(ax, ay),
-                        radiusX: ARROW_RADIUS,
-                        radiusY: ARROW_RADIUS,
-                    },
-                    &self.light,
-                );
-                self.light.SetOpacity(0.85 * alpha);
-                self.draw_small_glyph(icon, ax, ay, &self.light);
+                self.scaled_at(ax, ay, zoomed(scene.zoom(id)), || {
+                    self.light.SetOpacity(0.12 * alpha);
+                    self.target.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: pt(ax, ay),
+                            radiusX: ARROW_RADIUS,
+                            radiusY: ARROW_RADIUS,
+                        },
+                        &self.light,
+                    );
+                    self.light.SetOpacity(0.85 * alpha);
+                    self.draw_small_glyph(icon, ax, ay, &self.light);
+                });
             }
         }
         self.draw_page_dots(
@@ -2434,12 +2460,44 @@ impl Renderer {
         self.thumbs = thumbs;
     }
 
+    /// Keeps an icon for each app listed, making new ones as apps appear.
+    pub fn sync_usage_icons(&mut self, paths: &[PathBuf]) {
+        let mut icons = Vec::with_capacity(paths.len());
+        for path in paths {
+            let existing = self
+                .usage_icons
+                .iter()
+                .position(|(known, _)| known == path)
+                .map(|index| self.usage_icons.swap_remove(index));
+            icons.push(existing.unwrap_or_else(|| {
+                let icon = unsafe { self.app_icon(path).ok() };
+                (path.clone(), icon)
+            }));
+        }
+        self.usage_icons = icons;
+    }
+
+    unsafe fn app_icon(&self, path: &Path) -> Result<(ID2D1Bitmap, Option<[f32; 3]>)> {
+        let image = self.shell_image(path, ICON_PIXELS)?;
+        let (mut width, mut height) = (0, 0);
+        image.GetSize(&mut width, &mut height)?;
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        image.CopyPixels(std::ptr::null(), width * 4, &mut pixels)?;
+        let bitmap = self.target.CreateBitmapFromWicBitmap(&image, None)?;
+        Ok((bitmap, usage::icon_color(&pixels)))
+    }
+
+    unsafe fn thumbnail(&self, path: &Path) -> Result<ID2D1Bitmap> {
+        let image = self.shell_image(path, THUMB_PIXELS)?;
+        self.target.CreateBitmapFromWicBitmap(&image, None)
+    }
+
     /// The shell's own preview: a picture for images and videos, the file
     /// type icon for everything else.
-    unsafe fn thumbnail(&self, path: &Path) -> Result<ID2D1Bitmap> {
+    unsafe fn shell_image(&self, path: &Path, pixels: u32) -> Result<IWICFormatConverter> {
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
-        let side = THUMB_PIXELS as i32;
+        let side = pixels as i32;
         let bitmap = factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT)?;
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
@@ -2458,7 +2516,7 @@ impl Renderer {
             0.0,
             WICBitmapPaletteTypeMedianCut,
         )?;
-        self.target.CreateBitmapFromWicBitmap(&converter, None)
+        Ok(converter)
     }
 
     /// The notch's dark blue, from near black to navy.
@@ -2906,58 +2964,155 @@ impl Renderer {
             .map(ShelfHit::Tile)
     }
 
-    /// Today's total on the left, the apps used most on the right, each with
-    /// a bar measured against the first.
+    /// The side of the Screen Time switch at (`x`, `y`): true for the week.
+    pub fn usage_switch_at(&self, x: f32, y: f32, width: f32) -> Option<bool> {
+        let (y, width) = on_page(y, width);
+        let track = usage_switch(CANVAS.0 / 2.0 - width / 2.0);
+        let inside = x >= track.left && x < track.right && y >= track.top && y < track.bottom;
+        inside.then_some(x >= (track.left + track.right) / 2.0)
+    }
+
+    /// A track with both periods, the shown one under a thumb that slides.
+    unsafe fn draw_usage_switch(&self, track: D2D_RECT_F, position: f32, alpha: f32) {
+        const THUMB_INSET: f32 = 2.0;
+        let half = (track.right - track.left) / 2.0;
+        let pill = |bounds: D2D_RECT_F| D2D1_ROUNDED_RECT {
+            rect: bounds,
+            radiusX: (bounds.bottom - bounds.top) / 2.0,
+            radiusY: (bounds.bottom - bounds.top) / 2.0,
+        };
+        self.light.SetOpacity(0.1 * alpha);
+        self.target.FillRoundedRectangle(&pill(track), &self.light);
+        let thumb_left = track.left + half * position + THUMB_INSET;
+        self.light.SetOpacity(0.2 * alpha);
+        self.target.FillRoundedRectangle(
+            &pill(rect(
+                thumb_left,
+                track.top + THUMB_INSET,
+                thumb_left + half - 2.0 * THUMB_INSET,
+                track.bottom - THUMB_INSET,
+            )),
+            &self.light,
+        );
+        for (label, left, lit) in [
+            ("Hari ini", track.left, 1.0 - position),
+            ("7 hari", track.left + half, position),
+        ] {
+            self.draw_text(
+                label,
+                &self.tiny,
+                rect(left, track.top, left + half, track.bottom),
+                (0.55 + 0.45 * lit) * alpha,
+            );
+        }
+    }
+
+    /// The total on the left over the switch between periods, the apps
+    /// used most on the right, each with its icon and a bar in its colour,
+    /// measured against the first.
     unsafe fn draw_usage_card(&self, scene: &UsageScene, x0: f32, x1: f32, alpha: f32) {
         const TOTAL_ROOM: f32 = 122.0;
         const TOP: f32 = 14.0;
         const ROW: f32 = 31.0;
-        if scene.apps.is_empty() {
-            self.draw_text(
-                "Belum ada data hari ini",
-                &self.tiny,
-                rect(x0, 54.0, x1, 54.0 + TODO_ROW),
-                0.5 * alpha,
-            );
-            return;
-        }
-        let total = usage::format_time(scene.total_ms);
+        const ICON: f32 = 20.0;
+        const ICON_ROOM: f32 = 28.0;
+        let period = if scene.week {
+            "7 hari terakhir"
+        } else {
+            "hari ini"
+        };
+        self.draw_usage_switch(usage_switch(x0), scene.switch, alpha);
+        let total = usage::format_time(usage::total_ms(scene.apps));
         if let Some(text) = self.text_layout(&total, &self.big_clock, TOTAL_ROOM) {
-            self.draw_layout(&text.layout, x0 + 20.0, 34.0, alpha);
+            self.draw_layout(&text.layout, x0 + 20.0, 20.0, alpha);
         }
-        if let Some(label) = self.text_layout("hari ini", &self.small_left, TOTAL_ROOM) {
-            self.draw_layout(&label.layout, x0 + 20.0, 76.0, 0.55 * alpha);
+        if let Some(label) = self.text_layout(period, &self.small_left, TOTAL_ROOM) {
+            self.draw_layout(&label.layout, x0 + 20.0, 62.0, 0.55 * alpha);
+        }
+        if scene.week {
+            let average = format!("rata-rata {}", usage::format_time(scene.average_ms));
+            if let Some(label) = self.text_layout(&average, &self.small_left, TOTAL_ROOM) {
+                self.draw_layout(&label.layout, x0 + 20.0, 79.0, 0.55 * alpha);
+            }
         }
 
         let left = x0 + 20.0 + TOTAL_ROOM;
         let right = x1 - 20.0;
+        if scene.apps.is_empty() {
+            self.draw_text(
+                "Belum ada data",
+                &self.tiny,
+                rect(left, 54.0, right, 54.0 + TODO_ROW),
+                0.5 * alpha,
+            );
+            return;
+        }
         let longest = scene.apps[0].ms.max(1) as f32;
         for (index, app) in scene.apps.iter().take(usage::SHOWN).enumerate() {
             let y = TOP + index as f32 * ROW;
+            let icon = app.path.as_ref().and_then(|path| {
+                self.usage_icons
+                    .iter()
+                    .find(|(known, _)| known == path)
+                    .and_then(|(_, icon)| icon.as_ref())
+            });
+            if let Some((bitmap, _)) = icon {
+                self.target.DrawBitmap(
+                    bitmap,
+                    Some(&rect(left, y + 1.0, left + ICON, y + 1.0 + ICON)),
+                    alpha,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    None,
+                );
+            } else {
+                // No icon to show: the app's first letter on a disc.
+                self.light.SetOpacity(0.14 * alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(left + ICON / 2.0, y + 1.0 + ICON / 2.0),
+                        radiusX: ICON / 2.0,
+                        radiusY: ICON / 2.0,
+                    },
+                    &self.light,
+                );
+                let letter: String = app.name.chars().take(1).collect();
+                self.draw_text(
+                    &letter.to_uppercase(),
+                    &self.tiny,
+                    rect(left, y + 1.0, left + ICON, y + 1.0 + ICON),
+                    0.8 * alpha,
+                );
+            }
+            let text_left = left + ICON_ROOM;
             let time = usage::format_time(app.ms);
             let mut name_right = right;
             if let Some(text) = self.text_layout(&time, &self.small_left, 70.0) {
                 name_right -= text.width + 10.0;
                 self.draw_layout(&text.layout, right - text.width, y, 0.55 * alpha);
             }
-            if let Some(text) = self.text_layout(&app.name, &self.tile_text, name_right - left) {
+            if let Some(text) = self.text_layout(&app.name, &self.tile_text, name_right - text_left)
+            {
                 let _ = text.layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
                 let _ = text
                     .layout
                     .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-                self.draw_layout(&text.layout, left, y, alpha);
+                self.draw_layout(&text.layout, text_left, y, alpha);
             }
             let share = (app.ms as f32 / longest).clamp(0.04, 1.0);
             let bar = |right: f32| D2D1_ROUNDED_RECT {
-                rect: rect(left, y + 18.0, right, y + 21.0),
+                rect: rect(text_left, y + 18.0, right, y + 21.0),
                 radiusX: 1.5,
                 radiusY: 1.5,
             };
             self.light.SetOpacity(0.12 * alpha);
             self.target.FillRoundedRectangle(&bar(right), &self.light);
-            self.accent.SetColor(&accent_color(Accent::Teal));
+            let tint = icon.and_then(|(_, tint)| *tint);
+            self.accent.SetColor(&tint.map_or_else(
+                || accent_color(Accent::Teal),
+                |[red, green, blue]| color(red, green, blue, 1.0),
+            ));
             self.accent.SetOpacity(alpha);
-            let filled = left + (right - left) * share;
+            let filled = text_left + (right - text_left) * share;
             self.target.FillRoundedRectangle(&bar(filled), &self.accent);
         }
     }
