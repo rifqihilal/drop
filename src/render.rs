@@ -92,15 +92,14 @@ fn page_title<'a>(
 ) -> (&'a str, &'a str, Accent) {
     match page {
         Page::Music => ("Sedang", "Diputar", Accent::Green),
-        Page::Status => ("Hari", "Ini", Accent::Teal),
         Page::Prayer if !place.is_empty() => ("Sholat", place, Accent::Green),
         Page::Prayer => ("Waktu", "Sholat", Accent::Green),
         Page::Calendar => (month, year, Accent::Red),
         Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
         Page::Shelf => ("Rak", "Berkas", Accent::Teal),
-        // Its own heading names it, so the header stays empty.
-        Page::Notifications => ("", "", Accent::Red),
+        // Their own headings name them, so the header stays empty.
+        Page::Status | Page::Notifications => ("", "", Accent::Red),
     }
 }
 
@@ -665,6 +664,11 @@ pub struct Scene<'a> {
     /// The events of the month the calendar shows.
     pub month_agenda: Vec<AgendaItem<'a>>,
     pub prayer: Option<PrayerScene>,
+    /// The prayer close at hand and the wait for it, which take the
+    /// temperature's place in the closed notch.
+    pub prayer_soon: Option<(&'static str, String)>,
+    /// The closed notch's bell's tilt in degrees.
+    pub bell_angle: f32,
     /// The prayer location's name.
     pub place: &'a str,
     /// The closed notch is the thin bar, with nothing on it.
@@ -1582,6 +1586,25 @@ impl Renderer {
             M32: current.M32 + current.M22 * cy * (1.0 - scale),
             ..current
         });
+        draw();
+        self.target.SetTransform(&current);
+    }
+
+    /// Draws turned `degrees` clockwise around (`cx`, `cy`), on top of the
+    /// current transform.
+    unsafe fn tilted_at(&self, cx: f32, cy: f32, degrees: f32, draw: impl FnOnce()) {
+        let mut current = Matrix3x2::default();
+        self.target.GetTransform(&mut current);
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let turn = Matrix3x2 {
+            M11: cos,
+            M12: sin,
+            M21: -sin,
+            M22: cos,
+            M31: cx - cos * cx + sin * cy,
+            M32: cy - sin * cx - cos * cy,
+        };
+        self.target.SetTransform(&(turn * current));
         draw();
         self.target.SetTransform(&current);
     }
@@ -2636,7 +2659,10 @@ impl Renderer {
         } else if unread_bell(scene) {
             let (x, y) = (right - 22.0, height / 2.0);
             self.light.SetOpacity(0.9 * alpha);
-            self.draw_nav_glyph(glyph::BELL, x, y, &self.light);
+            // It swings from its top.
+            self.tilted_at(x, y - 6.0, scene.bell_angle, || {
+                self.draw_nav_glyph(glyph::BELL, x, y, &self.light);
+            });
             self.draw_red_dot(x + 6.0, y - 6.0, 3.0, alpha);
         } else {
             self.draw_red_dot(right - 10.0, height / 2.0, 3.0, alpha);
@@ -3101,8 +3127,8 @@ impl Renderer {
         let status = &scene.status;
         let hour = clock_hour(scene.clock);
 
-        // The panel.
-        let panel = rect(x0 + 6.0, 6.0, x0 + 190.0, 146.0);
+        // The panel, reaching up into the header this page leaves empty.
+        let panel = rect(x0 + 6.0, -12.0, x0 + 190.0, 146.0);
         let (top, bottom) = sky_colors(hour);
         if let Ok(sky) = self.gradient(
             pt(0.0, panel.top),
@@ -3121,9 +3147,9 @@ impl Renderer {
         }
         let left = panel.left + 16.0;
         let room = panel.right - 12.0 - left;
-        text(greeting(hour), &self.subtitle_text, left, 16.0, room, 0.9);
-        text(scene.clock, &self.big_clock, left, 33.0, room, 1.0);
-        text(status.date, &self.subtitle_text, left, 75.0, room, 0.85);
+        text(greeting(hour), &self.subtitle_text, left, 4.0, room, 0.9);
+        text(scene.clock, &self.big_clock, left, 21.0, room, 1.0);
+        text(status.date, &self.subtitle_text, left, 63.0, room, 0.85);
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
             self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
@@ -4060,12 +4086,24 @@ impl Renderer {
         if let Some((percent, charging)) = scene.status.battery {
             self.draw_battery(bounds.left + 19.0, cy, 7.5, percent, charging, alpha);
         }
-        let weather = scene.status.weather.as_ref();
-        if let Some(weather) = weather.filter(|_| !(scene.inbox.unread && unread_bell(scene))) {
-            if let Some(text) = self.text_layout(&weather.temperature, &self.small_left, 50.0) {
+        // On the right the temperature, or the wait for a prayer close at
+        // hand. Widened, the weather or the prayer's name joins it.
+        let weather = scene
+            .status
+            .weather
+            .as_ref()
+            .map(|weather| (weather.temperature.as_str(), weather.description));
+        let prayer = scene
+            .prayer_soon
+            .as_ref()
+            .map(|(name, wait)| (wait.as_str(), *name));
+        let right = prayer.or(weather);
+        if let Some((value, label)) = right.filter(|_| !(scene.inbox.unread && unread_bell(scene)))
+        {
+            if let Some(text) = self.text_layout(value, &self.small_left, 50.0) {
                 let x = bounds.right - 13.0 - text.width;
                 self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.75 * alpha);
-                if let Some(sky) = self.text_layout(weather.description, &self.small_left, 90.0) {
+                if let Some(sky) = self.text_layout(label, &self.small_left, 90.0) {
                     let x = x - 7.0 - sky.width;
                     let opacity = 0.75 * alpha * peek * peek;
                     self.draw_layout(&sky.layout, x, cy - sky.height / 2.0, opacity);

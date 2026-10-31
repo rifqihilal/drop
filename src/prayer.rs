@@ -17,6 +17,8 @@ const ASR_FACTOR: f64 = 1.0;
 /// Safety margin added to each time, in minutes, as in the published
 /// Kemenag schedules (Dzuhur and Maghrib get a longer one).
 const IHTIYAT: [f64; 5] = [2.0, 3.0, 2.0, 3.0, 2.0];
+/// How long before a prayer the closed notch counts down to it.
+const SOON_MINUTES: u32 = 30;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Location {
@@ -192,6 +194,13 @@ pub fn day_position(times: &Schedule, now: u32) -> f32 {
     4.0
 }
 
+/// The prayer coming up within [`SOON_MINUTES`], and the minutes until it.
+pub fn soon(times: &Schedule, now: u32) -> Option<(usize, u32)> {
+    let next = times.iter().position(|&time| time >= now)?;
+    let wait = times[next] - now;
+    (wait <= SOON_MINUTES).then_some((next, wait))
+}
+
 /// How far `now` is from the last prayer to the next one, 0..1. `next` is in
 /// minutes after today's midnight, so tomorrow's Subuh is past 24 hours.
 pub fn wait_progress(times: &Schedule, now: u32, next: u32) -> f32 {
@@ -222,6 +231,16 @@ pub fn format_time(minutes: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soon_covers_the_last_half_hour() {
+        let times = [300, 720, 900, 1080, 1150];
+        assert_eq!(soon(&times, 689), None);
+        assert_eq!(soon(&times, 690), Some((1, 30)));
+        assert_eq!(soon(&times, 720), Some((1, 0)));
+        assert_eq!(soon(&times, 721), None);
+        assert_eq!(soon(&times, 1200), None);
+    }
 
     fn hm(text: &str) -> u32 {
         let (h, m) = text.split_once(':').unwrap();

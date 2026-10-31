@@ -74,7 +74,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    Accent, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT, COMPACT_LARGE,
+    Accent, Bell, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT, COMPACT_LARGE,
     COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX, MUSIC_STRIP,
     TIMER_STRIP,
 };
@@ -230,6 +230,7 @@ struct App {
     inbox: Inbox,
     /// A notification came in and its page has not been seen since.
     unread: bool,
+    bell: Bell,
     /// Notification row under the mouse.
     inbox_hover: Option<usize>,
     /// A shelf tile pressed and the logical point it was pressed at.
@@ -419,6 +420,7 @@ fn main() -> Result<()> {
             shelf_copied: None,
             inbox: Inbox::default(),
             unread: false,
+            bell: Bell::new(Instant::now()),
             inbox_hover: None,
             todo: Todo::load(),
             todo_hover: None,
@@ -562,6 +564,7 @@ impl App {
         let rolling = self.update_lyric_roll(now);
         let zooming = self.step_zooms(dt);
         let moving = self.notch.step(now, dt) || switching || rolling || zooming;
+        let moving = self.step_bell(now) || moving;
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
         let card_open = self.notch.card_visible.value > 0.01;
@@ -1218,6 +1221,19 @@ impl App {
         } else {
             None
         }
+    }
+
+    /// Shakes the bell while the closed notch shows it. Returns true while it
+    /// moves.
+    fn step_bell(&mut self, now: Instant) -> bool {
+        let n = &self.notch;
+        let shown = self.unread
+            && !self.settings.notch_minimal
+            && n.banner_visible.value < 0.01
+            && n.card_visible.value < 0.01
+            && n.music_visible.value < 0.01
+            && n.eyes_visible.value < 0.01;
+        self.bell.step(now, shown)
     }
 
     /// Eases what is under the mouse in and the rest out. Returns true while
@@ -1922,6 +1938,16 @@ impl App {
         self.schedule(FRAME_MS);
     }
 
+    /// The prayer close at hand and the wait for it, for the closed notch.
+    fn prayer_soon(&self) -> Option<(&'static str, String)> {
+        let day = self
+            .prayer
+            .as_ref()
+            .filter(|_| self.settings.module_prayer)?;
+        let (next, wait) = prayer::soon(&day.times, minutes_now())?;
+        Some((prayer::NAMES[next], prayer::format_wait(wait)))
+    }
+
     /// The prayer page: the next prayer (tomorrow's Subuh after Isya), how
     /// long until it, today's times, and the sun's place among them.
     fn prayer_scene(&self) -> Option<PrayerScene> {
@@ -2142,6 +2168,8 @@ impl App {
             }),
             strip: self.strip(),
             prayer: self.prayer_scene(),
+            prayer_soon: self.prayer_soon(),
+            bell_angle: self.bell.angle,
             minimal: self.settings.notch_minimal,
             place: &self.settings.city,
             shelf: ShelfScene {

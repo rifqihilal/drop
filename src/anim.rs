@@ -347,6 +347,57 @@ impl Eyes {
     }
 }
 
+/// How long the bell shakes, and the wait before it shakes again.
+const BELL_SECS: f32 = 0.9;
+const BELL_REST: Duration = Duration::from_secs(15);
+
+/// The bell's tilt in degrees `t` seconds into a shake, dying away.
+fn bell_swing(t: f32) -> f32 {
+    16.0 * (-3.5 * t).exp() * (std::f32::consts::TAU * 6.0 * t).sin()
+}
+
+/// The closed notch's bell, which shakes as it appears and now and then after.
+pub struct Bell {
+    /// Tilt in degrees.
+    pub angle: f32,
+    started: Option<Instant>,
+    next: Instant,
+}
+
+impl Bell {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            angle: 0.0,
+            started: None,
+            next: now,
+        }
+    }
+
+    /// Advances the shake while the bell `shown`. Returns true while it moves.
+    pub fn step(&mut self, now: Instant, shown: bool) -> bool {
+        if !shown {
+            self.angle = 0.0;
+            self.next = now;
+            return self.started.take().is_some();
+        }
+        if self.started.is_none() && now >= self.next {
+            self.started = Some(now);
+        }
+        let Some(start) = self.started else {
+            return false;
+        };
+        let t = (now - start).as_secs_f32();
+        if t >= BELL_SECS {
+            self.angle = 0.0;
+            self.started = None;
+            self.next = now + BELL_REST;
+        } else {
+            self.angle = bell_swing(t);
+        }
+        true
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum LevelKind {
     Volume,
@@ -732,6 +783,29 @@ impl Notch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bell_shakes_then_rests() {
+        let now = Instant::now();
+        let mut bell = Bell::new(now);
+        assert!(bell.step(now, true));
+        assert!(bell.step(now + Duration::from_millis(40), true));
+        assert!(bell.angle.abs() > 5.0);
+        assert!(bell.step(now + Duration::from_secs(1), true));
+        assert_eq!(bell.angle, 0.0);
+        assert!(!bell.step(now + Duration::from_secs(2), true));
+        assert!(bell.step(now + Duration::from_secs(1) + BELL_REST, true));
+    }
+
+    #[test]
+    fn a_hidden_bell_shakes_when_it_comes_back() {
+        let now = Instant::now();
+        let mut bell = Bell::new(now);
+        bell.step(now, true);
+        assert!(bell.step(now, false));
+        assert!(!bell.step(now, false));
+        assert!(bell.step(now, true));
+    }
 
     #[test]
     fn eyes_tire_with_time() {
