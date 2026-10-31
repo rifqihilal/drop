@@ -126,7 +126,7 @@ const PREVIEW: Rect = Rect::new(LEFT, 232.0, RIGHT, 310.0);
 /// Where the Sholat page's rows start, under the location block.
 const PRAYER_TOP: f32 = 318.0;
 
-const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
+const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
@@ -195,7 +195,7 @@ struct Page {
 
 static PAGES: [Page; 9] = [
     Page {
-        title: "Umum",
+        title: "General",
         glyph: "\u{E713}",
         color: 0x8e8e93,
         top: CONTENT_TOP,
@@ -203,12 +203,12 @@ static PAGES: [Page; 9] = [
             title: "Notch",
             rows: &[
                 Row::Style {
-                    title: "Gaya notch",
+                    title: "Style notch",
                     note: "Menempel di tepi atas, atau mengambang",
                 },
                 Row::Size {
                     title: "Ukuran notch",
-                    note: "Hanya notch saat tertutup, kartu tetap",
+                    note: "Cuma notch tertutup, kartu tetap",
                 },
                 Row::Fill {
                     title: "Transparansi notch",
@@ -217,22 +217,22 @@ static PAGES: [Page; 9] = [
                 Row::Switch {
                     toggle: 17,
                     title: "Notch minimal",
-                    note: "Bar hitam tipis saat tertutup, tab browser tetap terlihat",
+                    note: "Bar hitam tipis saat tertutup, tab browser tetap kelihatan",
                 },
                 Row::Switch {
                     toggle: 18,
-                    title: "Buka kartu dengan klik",
-                    note: "Hover hanya melebarkan notch dan menampilkan tanggal",
+                    title: "Klik buat buka kartu",
+                    note: "Hover cuma melebarkan notch dan kasih lihat tanggal",
                 },
                 Row::Switch {
                     toggle: 21,
-                    title: "Efek pantul",
-                    note: "Notch dan kartu memantul saat melebar",
+                    title: "Bounce",
+                    note: "Notch dan kartu mantul saat melebar",
                 },
                 Row::Switch {
                     toggle: 11,
                     title: "Mata saat idle",
-                    note: "Notch menampilkan mata saat komputer dibiarkan",
+                    note: "Notch kasih lihat mata saat PC didiamkan",
                 },
                 Row::Field {
                     id: ID_IDLE,
@@ -242,8 +242,8 @@ static PAGES: [Page; 9] = [
                 },
                 Row::Switch {
                     toggle: 5,
-                    title: "Jalankan saat Windows menyala",
-                    note: "Drop terbuka sendiri setelah masuk Windows",
+                    title: "Start bareng Windows",
+                    note: "Drop kebuka sendiri setelah masuk Windows",
                 },
             ],
         }],
@@ -258,34 +258,34 @@ static PAGES: [Page; 9] = [
             rows: &[
                 Row::Switch {
                     toggle: 0,
-                    title: "Wi-Fi tersambung dan terputus",
-                    note: "Kabar saat koneksi berubah",
+                    title: "Wi-Fi connect dan disconnect",
+                    note: "Kabarin saat koneksi berubah",
                 },
                 Row::Switch {
                     toggle: 1,
-                    title: "Perangkat Bluetooth",
-                    note: "Kabar saat perangkat tersambung atau terputus",
+                    title: "Device Bluetooth",
+                    note: "Kabarin saat device connect atau disconnect",
                 },
                 Row::Switch {
                     toggle: 2,
-                    title: "Baterai lemah",
-                    note: "Peringatan saat daya baterai hampir habis",
+                    title: "Battery",
+                    note: "Kabarin saat dicas, dilepas, dan baterai hampir habis",
                 },
                 Row::Switch {
                     toggle: 19,
-                    title: "Notifikasi aplikasi",
-                    note: "Pesan dari aplikasi lain, seperti WhatsApp",
+                    title: "Notifikasi app",
+                    note: "Pesan dari app lain, kayak WhatsApp",
                 },
                 Row::Switch {
                     toggle: 4,
-                    title: "Bunyi notifikasi",
-                    note: "Bunyi singkat saat notifikasi muncul",
+                    title: "Suara notifikasi",
+                    note: "Suara singkat saat notifikasi muncul",
                 },
             ],
         }],
     },
     Page {
-        title: "Musik & lirik",
+        title: "Music & lirik",
         glyph: "\u{E8D6}",
         color: 0xff375f,
         top: CONTENT_TOP,
@@ -294,13 +294,13 @@ static PAGES: [Page; 9] = [
             rows: &[
                 Row::Switch {
                     toggle: 7,
-                    title: "Musik",
-                    note: "Kartu pemutar dan info lagu di notch",
+                    title: "Music",
+                    note: "Kartu player dan info lagu di notch",
                 },
                 Row::Switch {
                     toggle: 13,
                     title: "Lirik lagu",
-                    note: "Lirik tersinkron dari LRCLIB",
+                    note: "Lirik sync dari LRCLIB",
                 },
             ],
         }],
@@ -315,12 +315,12 @@ static PAGES: [Page; 9] = [
             rows: &[Row::Switch {
                 toggle: 6,
                 title: "Cuaca",
-                note: "Suhu di notch dan kartu Hari Ini, memakai lokasi Sholat",
+                note: "Suhu di notch dan Home, pakai lokasi Sholat",
             }],
         }],
     },
     Page {
-        title: "Tugas",
+        title: "To-do",
         glyph: "\u{E73E}",
         color: 0x30d158,
         top: CONTENT_TOP,
@@ -328,8 +328,8 @@ static PAGES: [Page; 9] = [
             title: "Modul",
             rows: &[Row::Switch {
                 toggle: 12,
-                title: "Tugas",
-                note: "Daftar tugas di notch",
+                title: "To-do",
+                note: "To-do list di notch",
             }],
         }],
     },
@@ -344,7 +344,7 @@ static PAGES: [Page; 9] = [
                 rows: &[Row::Switch {
                     toggle: 8,
                     title: "Kalender & Pomodoro",
-                    note: "Kartu kalender, agenda dan pengatur waktu fokus",
+                    note: "Kartu kalender, agenda, dan timer fokus",
                 }],
             },
             Group {
@@ -353,20 +353,20 @@ static PAGES: [Page; 9] = [
                     Row::Field {
                         id: ID_ICAL,
                         width: 240.0,
-                        title: "Tautan kalender 1",
-                        note: "Tautan .ics, acaranya berwarna biru",
+                        title: "Link kalender 1",
+                        note: "Link .ics, acaranya warna biru",
                     },
                     Row::Field {
                         id: ID_ICAL2,
                         width: 240.0,
-                        title: "Tautan kalender 2",
-                        note: "Tautan .ics, acaranya berwarna hijau",
+                        title: "Link kalender 2",
+                        note: "Link .ics, acaranya warna hijau",
                     },
                     Row::Field {
                         id: ID_ICAL3,
                         width: 240.0,
-                        title: "Tautan kalender 3",
-                        note: "Tautan .ics, acaranya berwarna merah",
+                        title: "Link kalender 3",
+                        note: "Link .ics, acaranya warna merah",
                     },
                 ],
             },
@@ -400,7 +400,7 @@ static PAGES: [Page; 9] = [
         }],
     },
     Page {
-        title: "Kesehatan",
+        title: "Health",
         glyph: "\u{EB42}",
         color: 0x0a84ff,
         top: CONTENT_TOP,
@@ -414,12 +414,12 @@ static PAGES: [Page; 9] = [
                 },
                 Row::Switch {
                     toggle: 15,
-                    title: "Istirahatkan mata",
+                    title: "Istirahat mata",
                     note: "Pengingat istirahat mata",
                 },
                 Row::Switch {
                     toggle: 16,
-                    title: "Peregangan",
+                    title: "Stretching",
                     note: "Pengingat berdiri dan meregang",
                 },
             ],
@@ -436,7 +436,7 @@ static PAGES: [Page; 9] = [
                 Row::Switch {
                     toggle: 9,
                     title: "Shelf",
-                    note: "Tampung berkas yang diseret ke notch",
+                    note: "Tampung file yang di-drag ke notch",
                 },
                 Row::Switch {
                     toggle: 20,
@@ -445,7 +445,7 @@ static PAGES: [Page; 9] = [
                 },
                 Row::Switch {
                     toggle: 22,
-                    title: "Riwayat copy",
+                    title: "Clipboard",
                     note: "Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup",
                 },
             ],
@@ -732,7 +732,7 @@ impl Window {
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("DropSettings"),
-            w!("Pengaturan Drop"),
+            w!("Drop Settings"),
             style,
             x,
             y.max(work.top),
@@ -1001,7 +1001,7 @@ impl Window {
             self.set_status("Ketik nama tempat dulu", true);
             return;
         }
-        self.set_status("Mencari…", false);
+        self.set_status("Searching…", false);
         let target = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let result = Box::new(geo::search(&query));
@@ -1162,7 +1162,7 @@ impl Window {
     /// Writes `settings` and tells the notch. Returns false when that failed.
     fn apply(&mut self, settings: &Settings) -> bool {
         if settings.save().is_err() {
-            self.set_status("Pengaturan gagal disimpan", true);
+            self.set_status("Settings gagal disimpan", true);
             return false;
         }
         if self.toggles[5] != autostart::is_enabled() {
@@ -1366,8 +1366,8 @@ impl Window {
                 1.0,
             );
         }
-        self.button("Batal", CANCEL_BUTTON, false);
-        self.button("Simpan", SAVE_BUTTON, true);
+        self.button("Cancel", CANCEL_BUTTON, false);
+        self.button("Save", SAVE_BUTTON, true);
 
         let _ = t.EndDraw(None, None);
     }
@@ -1395,7 +1395,7 @@ impl Window {
     unsafe fn location(&self) {
         let f = &self.fonts;
         self.text_at("Lokasi", &f.section, LOCATION_HEADING, 0xffffff, 0.7);
-        self.button("Cari", SEARCH_BUTTON, false);
+        self.button("Search", SEARCH_BUTTON, false);
         let status_color = if self.status_is_error {
             0xff99a4
         } else {
@@ -1674,7 +1674,7 @@ impl Window {
             self.rounded(eye, 1.5, 0xffffff, 1.0);
         }
         let name = Rect::new(38.0, cy - 10.0, SIDEBAR, cy + 10.0);
-        self.text_at("Pengaturan Drop", &self.fonts.small, name, 0xffffff, 0.8);
+        self.text_at("Drop Settings", &self.fonts.small, name, 0xffffff, 0.8);
 
         let fill = if self.close_hover { CLOSE_RED } else { FIELD };
         self.brush.SetColor(&rgb(fill, 1.0));

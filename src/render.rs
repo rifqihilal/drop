@@ -92,13 +92,13 @@ fn page_title<'a>(
     year: &'a str,
 ) -> (&'a str, &'a str, Accent) {
     match page {
-        Page::Music => ("Sedang", "Diputar", Accent::Green),
+        Page::Music => ("Now", "Playing", Accent::Green),
         Page::Prayer if !place.is_empty() => ("Sholat", place, Accent::Green),
         Page::Prayer => ("Waktu", "Sholat", Accent::Green),
         Page::Calendar => (month, year, Accent::Red),
         Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
-        Page::Shelf => ("Rak", "Berkas", Accent::Teal),
+        Page::Shelf => ("Shelf", "Berkas", Accent::Teal),
         // Their own headings name them, so the header stays empty.
         Page::Status | Page::Notifications => ("", "", Accent::Red),
     }
@@ -2332,7 +2332,7 @@ impl Renderer {
             self.draw_layout(&text.layout, left, 16.0, 0.55 * alpha);
         }
         if agenda.is_empty() {
-            if let Some(text) = self.text_layout("Tidak ada acara", &self.small_left, room) {
+            if let Some(text) = self.text_layout("Belum ada acara", &self.small_left, room) {
                 self.draw_layout(&text.layout, left, AGENDA_TOP + 2.0, 0.5 * alpha);
             }
         }
@@ -2385,9 +2385,9 @@ impl Renderer {
             self.draw_layout(&text.layout, left, 54.0, 0.6 * alpha);
         }
         let (icon, label) = if timer.running {
-            (glyph::PAUSE, "Jeda")
+            (glyph::PAUSE, "Pause")
         } else {
-            (glyph::PLAY, "Mulai")
+            (glyph::PLAY, "Start")
         };
         self.draw_pill(layout.start_pause, icon, label, Some(accent), alpha);
         let (rx, ry) = layout.reset;
@@ -2533,11 +2533,11 @@ impl Renderer {
         let cy = (inset.top + inset.bottom) / 2.0;
         self.light.SetOpacity(alpha);
         self.draw_glyph(glyph::DOWNLOAD, x0 + 42.0, cy, &self.light);
-        if let Some(title) = self.text_layout("Lepaskan untuk menyimpan", &self.title_text, 230.0) {
+        if let Some(title) = self.text_layout("Lepas buat simpan", &self.title_text, 230.0) {
             self.draw_layout(&title.layout, x0 + 66.0, cy - 19.0, alpha);
         }
         if let Some(note) =
-            self.text_layout("Berkas tetap di tempat aslinya", &self.subtitle_text, 230.0)
+            self.text_layout("File tetap di tempat asalnya", &self.subtitle_text, 230.0)
         {
             self.draw_layout(&note.layout, x0 + 66.0, cy + 1.0, 0.55 * alpha);
         }
@@ -2549,7 +2549,7 @@ impl Renderer {
         let layout = ShelfRects::new(x0, x1);
         if shelf.items.is_empty() {
             let bounds = rect(x0, 40.0, x1, 120.0);
-            let hint = "Seret berkas ke notch, atau copy teks dan gambar";
+            let hint = "Drag file ke notch, atau copy teks dan gambar";
             self.draw_text(hint, &self.tile_text, bounds, 0.5 * alpha);
             return;
         }
@@ -2622,7 +2622,7 @@ impl Renderer {
                 tile.top + 45.0,
             );
             let label = if shelf.copied == Some(index) {
-                "Tersalin".to_string()
+                "Copied".to_string()
             } else {
                 shelf::display_name(path)
             };
@@ -2933,7 +2933,7 @@ impl Renderer {
             self.draw_pill(
                 layout.add(),
                 glyph::CHECK,
-                "Simpan",
+                "Save",
                 Some(Accent::Green),
                 alpha,
             );
@@ -3099,9 +3099,9 @@ impl Renderer {
     unsafe fn draw_prayer_card(&self, prayer: &PrayerScene, x0: f32, x1: f32, alpha: f32) {
         let left = x0 + 16.0;
         let caption = if prayer.next_today.is_none() {
-            "Berikutnya, besok"
+            "Next, besok"
         } else {
-            "Berikutnya"
+            "Next"
         };
         if let Some(text) = self.text_layout(caption, &self.subtitle_text, 150.0) {
             self.draw_layout(&text.layout, left, 14.0, 0.55 * alpha);

@@ -30,6 +30,7 @@ mod render;
 mod screenshots;
 mod settings;
 mod shelf;
+mod sound;
 mod system;
 mod todo;
 mod tray;
@@ -47,7 +48,6 @@ use windows::Win32::Foundation::{
     GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount, GetTickCount64};
@@ -147,7 +147,7 @@ const SHOT_WINDOW: Duration = Duration::from_secs(5);
 /// How long a shelf tile says its file was copied.
 const COPIED_SHOWN: Duration = Duration::from_millis(1500);
 /// How long a notification from another app stays up.
-const APP_BANNER_SHOWN: Duration = Duration::from_secs(6);
+const APP_BANNER_SHOWN: Duration = Duration::from_secs(4);
 /// Logical pixels a pressed shelf tile must move before it is dragged out.
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
@@ -472,6 +472,7 @@ fn main() -> Result<()> {
         keys::install(hwnd);
         dragdrop::accept_drops(hwnd);
         clipboard::listen(hwnd);
+        sound::prepare();
         // Alt+N opens the card and steps through its pages without the mouse.
         let _ = RegisterHotKey(
             Some(hwnd),
@@ -851,7 +852,7 @@ impl App {
         } else if self.inbox.fresh {
             self.unread = true;
             if self.settings.sound {
-                chime();
+                sound::play_app();
             }
             let notice = self.inbox.items[0].clone();
             self.notch
@@ -1444,8 +1445,8 @@ impl App {
                 motion: Motion::Shake,
                 accent: Accent::Green,
                 progress: 1.0,
-                title: "Waktunya istirahat".to_string(),
-                subtitle: format!("Sesi {} selesai · istirahat dimulai", self.pomodoro.session),
+                title: "Waktunya break".to_string(),
+                subtitle: format!("Sesi {} selesai · break dulu", self.pomodoro.session),
                 trailing: Trailing::Text(calendar::format_left(self.pomodoro.left(Instant::now()))),
                 dim: false,
             },
@@ -1454,8 +1455,8 @@ impl App {
                 motion: Motion::Shake,
                 accent: Accent::Teal,
                 progress: 1.0,
-                title: "Istirahat selesai".to_string(),
-                subtitle: "Mulai sesi fokus berikutnya".to_string(),
+                title: "Break selesai".to_string(),
+                subtitle: "Lanjut sesi fokus".to_string(),
                 trailing: Trailing::None,
                 dim: false,
             },
@@ -1489,7 +1490,7 @@ impl App {
         }
         self.music()?;
         Some(self.lyric().unwrap_or(if self.lyrics_missing {
-            ("", "Lirik tidak tersedia", "")
+            ("", "Liriknya belum ada", "")
         } else {
             ("", "Memuat lirik\u{2026}", "")
         }))
@@ -1575,7 +1576,7 @@ impl App {
                     },
                     time: event
                         .minute
-                        .map_or("Seharian".to_string(), prayer::format_time),
+                        .map_or("All day".to_string(), prayer::format_time),
                     summary: &event.summary,
                     today: event.day == today,
                     source: event.source,
@@ -1616,11 +1617,11 @@ impl App {
     /// What the status page shows in place of the weather.
     fn weather_hint(&self) -> &'static str {
         if !self.settings.weather {
-            "Cuaca dimatikan"
+            "Cuaca off"
         } else if self.settings.prayer().is_none() {
             "Atur lokasi di Pengaturan"
         } else {
-            "Memuat cuaca…"
+            "Loading cuaca…"
         }
     }
 
@@ -1883,7 +1884,7 @@ impl App {
 
     fn notify_for(&mut self, notice: Notice, duration: Duration) {
         if self.settings.sound {
-            chime();
+            sound::play_notice();
         }
         let width = self.renderer.notice_width(&notice);
         self.notch
@@ -1998,7 +1999,7 @@ impl App {
     /// Widens the notch for a moment with a prayer reminder.
     fn notify_prayer(&mut self, label: String) {
         if self.settings.sound {
-            chime();
+            sound::play_notice();
         }
         self.notch
             .show_prayer(label, PRAYER_NOTICE_DURATION, Instant::now());
@@ -2568,9 +2569,9 @@ fn show_menu(hwnd: HWND) -> usize {
             MF_STRING
         };
         let _ = AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, w!("Mulai otomatis"));
-        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Pengaturan…"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Settings…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Keluar Drop"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Keluar"));
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
         // Required so the menu closes when clicking elsewhere.
@@ -2664,17 +2665,6 @@ fn has_flag(flag: &str) -> bool {
     std::env::args().skip(1).any(|arg| arg == flag)
 }
 
-/// The system notification sound, played asynchronously.
-fn chime() {
-    unsafe {
-        let _ = PlaySoundW(
-            w!("Notification.Default"),
-            None,
-            SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
-        );
-    }
-}
-
 /// The notice cards Drop shows.
 mod notices {
     use crate::anim::{Accent, Motion, Notice, Trailing};
@@ -2690,11 +2680,11 @@ mod notices {
             motion: Motion::Flash,
             accent: Accent::Teal,
             progress: 1.0,
-            title: "Screenshot masuk Rak Berkas".to_string(),
+            title: "Screenshot masuk Shelf".to_string(),
             subtitle: if copied {
-                "Siap ditempel dengan Ctrl+V".to_string()
+                "Siap paste pakai Ctrl+V".to_string()
             } else {
-                "Salin dari Rak Berkas".to_string()
+                "Copy dari Shelf".to_string()
             },
             trailing: Trailing::None,
             dim: false,
@@ -2710,10 +2700,10 @@ mod notices {
             title: if connected {
                 ssid.to_string()
             } else {
-                "Wi-Fi terputus".to_string()
+                "Wi-Fi disconnected".to_string()
             },
             subtitle: if connected {
-                "Wi-Fi terhubung".to_string()
+                "Wi-Fi connected".to_string()
             } else {
                 ssid.to_string()
             },
@@ -2724,7 +2714,11 @@ mod notices {
 
     /// `battery` fills the ring and joins the subtitle once the device reports it.
     pub fn bluetooth(name: String, connected: bool, audio: bool, battery: Option<u32>) -> Notice {
-        let state = if connected { "Terhubung" } else { "Terputus" };
+        let state = if connected {
+            "Connected"
+        } else {
+            "Disconnected"
+        };
         Notice {
             icon: glyph::BLUETOOTH,
             motion: Motion::Pulse,
@@ -2757,7 +2751,7 @@ mod notices {
                 "Charger dilepas"
             }
             .to_string(),
-            subtitle: format!("Baterai {percent}%"),
+            subtitle: format!("Battery {percent}%"),
             trailing: Trailing::Icon(glyph::battery(percent)),
             dim: !plugged,
         }
@@ -2769,8 +2763,8 @@ mod notices {
             motion: Motion::Flash,
             accent: Accent::Red,
             progress: percent as f32 / 100.0,
-            title: "Baterai lemah".to_string(),
-            subtitle: "Colokkan charger".to_string(),
+            title: "Battery low".to_string(),
+            subtitle: "Colok charger dulu".to_string(),
             trailing: Trailing::Text(format!("{percent}%")),
             dim: false,
         }
@@ -2818,20 +2812,20 @@ mod notices {
             Kind::Water => (
                 glyph::WATER,
                 Accent::Blue,
-                "Waktunya minum air",
-                format!("Sudah {minutes} menit di depan layar"),
+                "Waktunya minum",
+                format!("{minutes} menit di depan layar"),
             ),
             Kind::Eyes => (
                 glyph::EYE,
                 Accent::Teal,
-                "Istirahatkan mata",
-                "Lihat sejauh 6 meter selama 20 detik".to_string(),
+                "Istirahat mata",
+                "Lihat sejauh 6 meter, 20 detik".to_string(),
             ),
             Kind::Stretch => (
                 glyph::WALK,
                 Accent::Green,
-                "Waktunya peregangan",
-                "Berdiri dan gerakkan badan sejenak".to_string(),
+                "Waktunya stretching",
+                "Berdiri, gerakin badan sebentar".to_string(),
             ),
         };
         Notice {

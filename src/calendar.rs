@@ -165,7 +165,7 @@ impl Pomodoro {
     pub fn label(&self) -> &'static str {
         match self.phase {
             Phase::Focus => "Fokus",
-            Phase::Break => "Istirahat",
+            Phase::Break => "Break",
         }
     }
 }
