@@ -65,6 +65,7 @@ pub struct Settings {
     pub module_prayer: bool,
     pub module_eyes: bool,
     pub module_todo: bool,
+    pub module_usage: bool,
     pub module_lyrics: bool,
     /// Rest as a thin bar, with no clock or live strip.
     pub notch_minimal: bool,
@@ -113,6 +114,7 @@ impl Default for Settings {
             module_prayer: true,
             module_eyes: true,
             module_todo: true,
+            module_usage: true,
             module_lyrics: true,
             notch_minimal: false,
             open_on_click: false,
@@ -219,6 +221,8 @@ impl Settings {
              halaman_sholat = {}\n\
              mata = {}\n\
              tugas = {}\n\
+             ; Waktu pakai per app hari ini, cuma disimpan di PC ini.\n\
+             screen_time = {}\n\
              ; Lirik dicari di lrclib.net dari judul dan penyanyi lagu.\n\
              lirik = {}\n\
              ; Saat tertutup notch hanya bar hitam tipis.\n\
@@ -271,6 +275,7 @@ impl Settings {
             flag(self.module_prayer),
             flag(self.module_eyes),
             flag(self.module_todo),
+            flag(self.module_usage),
             flag(self.module_lyrics),
             flag(self.notch_minimal),
             flag(self.open_on_click),
@@ -372,6 +377,7 @@ fn parse(text: &str) -> Settings {
             "halaman_sholat" => s.module_prayer = flag(true),
             "mata" => s.module_eyes = flag(true),
             "tugas" => s.module_todo = flag(true),
+            "screen_time" => s.module_usage = flag(true),
             "lirik" => s.module_lyrics = flag(true),
             "notch_kecil" => s.notch_minimal = flag(false),
             "buka_klik" => s.open_on_click = flag(false),
@@ -435,6 +441,7 @@ mod tests {
             module_prayer: true,
             module_eyes: false,
             module_todo: false,
+            module_usage: false,
             module_lyrics: false,
             notch_minimal: true,
             open_on_click: true,

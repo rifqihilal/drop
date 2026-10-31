@@ -63,6 +63,7 @@ use crate::anim::{
 use crate::media::Command;
 use crate::notifications::AppNotice;
 use crate::todo::Task;
+use crate::usage::{self, AppTime};
 use crate::{calendar, notifications, prayer, shelf, todo};
 
 /// A point on the open card (its `y`, and the card's `width`) as the page
@@ -98,6 +99,7 @@ fn page_title<'a>(
         Page::Calendar => (month, year, Accent::Red),
         Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
+        Page::Usage => ("Screen", "Time", Accent::Teal),
         Page::Shelf => ("Shelf", "Berkas", Accent::Teal),
         // Their own headings name them, so the header stays empty.
         Page::Status | Page::Notifications => ("", "", Accent::Red),
@@ -113,6 +115,7 @@ fn page_glyph(page: Page) -> &'static str {
         Page::Calendar => glyph::CALENDAR,
         Page::Pomodoro => glyph::TIMER,
         Page::Todo => glyph::CHECK,
+        Page::Usage => glyph::SCREEN,
         Page::Shelf => glyph::FILE,
         Page::Notifications => glyph::BELL,
     }
@@ -599,6 +602,7 @@ pub mod glyph {
     pub const CAMERA: &str = "\u{E722}";
     pub const COPY: &str = "\u{E8C8}";
     pub const BOLT: &str = "\u{E945}";
+    pub const SCREEN: &str = "\u{E7F4}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -671,6 +675,7 @@ pub struct Scene<'a> {
     pub shelf: ShelfScene<'a>,
     pub inbox: InboxScene<'a>,
     pub todo: TodoScene<'a>,
+    pub usage: UsageScene<'a>,
     /// The next events, whatever their month.
     pub agenda: Vec<AgendaItem<'a>>,
     /// The events of the month the calendar shows.
@@ -745,6 +750,7 @@ pub enum Page {
     Shelf,
     Prayer,
     Todo,
+    Usage,
     Pomodoro,
 }
 
@@ -804,6 +810,12 @@ pub enum ShelfHit {
     Remove(usize),
     Copy(usize),
     ClearAll,
+}
+
+pub struct UsageScene<'a> {
+    /// Today's apps, longest first.
+    pub apps: &'a [AppTime],
+    pub total_ms: u64,
 }
 
 pub struct TodoScene<'a> {
@@ -2096,6 +2108,7 @@ impl Renderer {
                 self.draw_notifications_card(&scene.inbox, x0, x1, alpha)
             }
             (Page::Todo, _, _) => self.draw_todo_card(&scene.todo, x0, x1, alpha),
+            (Page::Usage, _, _) => self.draw_usage_card(&scene.usage, x0, x1, alpha),
             (Page::Prayer, _, _) if scene.prayer.is_some() => {
                 if let Some(prayer) = &scene.prayer {
                     self.draw_prayer_card(prayer, x0, x1, alpha)
@@ -2891,6 +2904,62 @@ impl Renderer {
         (0..count)
             .find(|&index| inside(layout.tile(index)))
             .map(ShelfHit::Tile)
+    }
+
+    /// Today's total on the left, the apps used most on the right, each with
+    /// a bar measured against the first.
+    unsafe fn draw_usage_card(&self, scene: &UsageScene, x0: f32, x1: f32, alpha: f32) {
+        const TOTAL_ROOM: f32 = 122.0;
+        const TOP: f32 = 14.0;
+        const ROW: f32 = 31.0;
+        if scene.apps.is_empty() {
+            self.draw_text(
+                "Belum ada data hari ini",
+                &self.tiny,
+                rect(x0, 54.0, x1, 54.0 + TODO_ROW),
+                0.5 * alpha,
+            );
+            return;
+        }
+        let total = usage::format_time(scene.total_ms);
+        if let Some(text) = self.text_layout(&total, &self.big_clock, TOTAL_ROOM) {
+            self.draw_layout(&text.layout, x0 + 20.0, 34.0, alpha);
+        }
+        if let Some(label) = self.text_layout("hari ini", &self.small_left, TOTAL_ROOM) {
+            self.draw_layout(&label.layout, x0 + 20.0, 76.0, 0.55 * alpha);
+        }
+
+        let left = x0 + 20.0 + TOTAL_ROOM;
+        let right = x1 - 20.0;
+        let longest = scene.apps[0].ms.max(1) as f32;
+        for (index, app) in scene.apps.iter().take(usage::SHOWN).enumerate() {
+            let y = TOP + index as f32 * ROW;
+            let time = usage::format_time(app.ms);
+            let mut name_right = right;
+            if let Some(text) = self.text_layout(&time, &self.small_left, 70.0) {
+                name_right -= text.width + 10.0;
+                self.draw_layout(&text.layout, right - text.width, y, 0.55 * alpha);
+            }
+            if let Some(text) = self.text_layout(&app.name, &self.tile_text, name_right - left) {
+                let _ = text.layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                let _ = text
+                    .layout
+                    .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+                self.draw_layout(&text.layout, left, y, alpha);
+            }
+            let share = (app.ms as f32 / longest).clamp(0.04, 1.0);
+            let bar = |right: f32| D2D1_ROUNDED_RECT {
+                rect: rect(left, y + 18.0, right, y + 21.0),
+                radiusX: 1.5,
+                radiusY: 1.5,
+            };
+            self.light.SetOpacity(0.12 * alpha);
+            self.target.FillRoundedRectangle(&bar(right), &self.light);
+            self.accent.SetColor(&accent_color(Accent::Teal));
+            self.accent.SetOpacity(alpha);
+            let filled = left + (right - left) * share;
+            self.target.FillRoundedRectangle(&bar(filled), &self.accent);
+        }
     }
 
     /// The task list: a heading with the add button, or the field for a new

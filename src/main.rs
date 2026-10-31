@@ -34,6 +34,7 @@ mod sound;
 mod system;
 mod todo;
 mod tray;
+mod usage;
 mod watch;
 mod weather;
 mod wifi;
@@ -68,10 +69,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetTimer, ShowWindow, TrackPopupMenu, TranslateMessage, HTCLIENT, IDC_ARROW, IDC_HAND,
     MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSCREEN, SW_HIDE, SW_SHOWNOACTIVATE,
     SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_CHAR, WM_CLIPBOARDUPDATE, WM_DESTROY,
-    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_KILLFOCUS, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_KILLFOCUS,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use anim::{
@@ -91,11 +92,12 @@ use notifications::{AppNotice, Inbox};
 use render::{
     glyph, zoom, AgendaItem, CalendarControl, CalendarScene, InboxRow, InboxScene, MusicScene,
     Page, PomodoroControl, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
-    TimerScene, TodoHit, TodoScene, WeatherScene,
+    TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
 use todo::Todo;
+use usage::Usage;
 use weather::{Weather, WeatherWatch};
 use wifi::Wifi;
 
@@ -281,6 +283,7 @@ struct App {
     /// Events already announced: (day, minute, title).
     event_reminded: Vec<(i64, u32, String)>,
     health: Health,
+    usage: Usage,
     todo: Todo,
     /// Task under the mouse.
     todo_hover: Option<usize>,
@@ -459,11 +462,13 @@ fn main() -> Result<()> {
             event_reminded: Vec::new(),
             weather: None,
             health: Health::default(),
+            usage: Usage::load(prayer::today(), now),
         };
         config::ensure_exists();
         // Load quietly: the "schedule ready" notice is for later edits only.
         app.config_stamp = config::modified();
         app.apply_settings(false);
+        app.update_usage();
         app.renderer.sync_thumbnails(app.shelf.items());
         app.draw();
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -560,6 +565,7 @@ impl App {
         if clock_changed {
             self.update_prayer();
             self.update_health();
+            self.update_usage();
             self.update_agenda();
         }
 
@@ -733,7 +739,7 @@ impl App {
     /// those, music only when something plays.
     fn pages(&self) -> Vec<Page> {
         let modules = &self.settings;
-        let mut pages = Vec::with_capacity(8);
+        let mut pages = Vec::with_capacity(9);
         if self.music().is_some() {
             pages.push(Page::Music);
         }
@@ -752,6 +758,9 @@ impl App {
         }
         if modules.module_todo {
             pages.push(Page::Todo);
+        }
+        if modules.module_usage {
+            pages.push(Page::Usage);
         }
         if modules.module_shelf {
             pages.push(Page::Shelf);
@@ -1209,7 +1218,7 @@ impl App {
                         .is_some()
             }
             Page::Todo => self.todo_hit(x, y).is_some(),
-            Page::Status | Page::Prayer => false,
+            Page::Status | Page::Prayer | Page::Usage => false,
         }
     }
 
@@ -1942,6 +1951,25 @@ impl App {
         self.update_prayer();
     }
 
+    /// Follows the app in front for Screen Time. Time away from the computer
+    /// does not count, unless something full screen or music explains the
+    /// quiet mouse.
+    fn update_usage(&mut self) {
+        let now = Instant::now();
+        if !self.settings.module_usage {
+            self.usage.stop(now);
+            return;
+        }
+        let idle = Duration::from_millis(u64::from(idle_ms()));
+        let watching = !self.shown || self.track.as_ref().is_some_and(|track| track.playing);
+        if idle >= usage::IDLE_LIMIT && !watching {
+            self.usage.pause(idle, now);
+        } else {
+            let app = self.usage.in_front();
+            self.usage.update(app, prayer::today(), now);
+        }
+    }
+
     /// Counts a minute of use toward the health reminders, held back while
     /// the notch steps aside for a full-screen app.
     fn update_health(&mut self) {
@@ -2248,6 +2276,10 @@ impl App {
             },
             inbox: self.inbox_scene(),
             todo: self.todo_scene(),
+            usage: UsageScene {
+                apps: self.usage.apps(),
+                total_ms: self.usage.total_ms(),
+            },
             agenda: self.agenda_scene(self.upcoming()),
             month_agenda: {
                 let (year, month, _) = prayer::today();
@@ -2422,6 +2454,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         system::FOREGROUND_MSG => {
             system::stay_on_top(hwnd);
+            with_app(App::update_usage);
             LRESULT(0)
         }
         screenshots::SCREENSHOT_MSG => {
@@ -2508,7 +2541,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             tray::refresh(hwnd);
             LRESULT(0)
         }
+        WM_ENDSESSION => {
+            if wparam.0 != 0 {
+                with_app(|app| app.usage.stop(Instant::now()));
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
+            with_app(|app| app.usage.stop(Instant::now()));
             tray::remove(hwnd);
             osd::set_suppressed(false);
             PostQuitMessage(0);

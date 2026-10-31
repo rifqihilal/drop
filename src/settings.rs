@@ -131,12 +131,12 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 23;
+const TOGGLE_COUNT: usize = 24;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
 const PAGE_GENERAL: usize = 0;
-const PAGE_PRAYER: usize = 6;
+const PAGE_PRAYER: usize = 7;
 
 enum Row {
     Switch {
@@ -193,7 +193,7 @@ struct Page {
     groups: &'static [Group],
 }
 
-static PAGES: [Page; 9] = [
+static PAGES: [Page; 10] = [
     Page {
         title: "General",
         glyph: "\u{E713}",
@@ -330,6 +330,20 @@ static PAGES: [Page; 9] = [
                 toggle: 12,
                 title: "To-do",
                 note: "To-do list di notch",
+            }],
+        }],
+    },
+    Page {
+        title: "Screen Time",
+        glyph: "\u{E7F4}",
+        color: 0x5e5ce6,
+        top: CONTENT_TOP,
+        groups: &[Group {
+            title: "Modul",
+            rows: &[Row::Switch {
+                toggle: 23,
+                title: "Screen Time",
+                note: "Waktu pakai per app hari ini, cuma disimpan di PC ini",
             }],
         }],
     },
@@ -887,6 +901,7 @@ impl Window {
                 settings.shelf_screenshots,
                 settings.card_bounce,
                 settings.shelf_clipboard,
+                settings.module_usage,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1144,6 +1159,7 @@ impl Window {
             module_prayer: self.toggles[10],
             module_eyes: self.toggles[11],
             module_todo: self.toggles[12],
+            module_usage: self.toggles[23],
             module_lyrics: self.toggles[13],
             water: self.toggles[14],
             water_minutes: self.health_minutes[0],
