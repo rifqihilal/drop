@@ -38,25 +38,29 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::EM_SETSEL;
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
+use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetWindowTextLengthW, GetWindowTextW, IsChild, IsDialogMessageW, LoadCursorW, PostMessageW,
-    RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetWindowTextW, ShowWindow,
-    SystemParametersInfoW, EN_CHANGE, EN_KILLFOCUS, EN_SETFOCUS, ES_AUTOHSCROLL, HMENU, IDCANCEL,
-    IDC_ARROW, IDC_HAND, IDOK, MSG, SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_SETCURSOR, WM_SETFONT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetWindowPos, SetWindowTextW,
+    ShowWindow, SystemParametersInfoW, EN_CHANGE, EN_KILLFOCUS, EN_SETFOCUS, ES_AUTOHSCROLL, HMENU,
+    HTCAPTION, HTCLIENT, ICON_BIG, ICON_SMALL, IDCANCEL, IDC_ARROW, IDC_HAND, IDOK, MSG,
+    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSEMOVE, WM_PAINT,
+    WM_SETCURSOR, WM_SETFONT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 
+use windows_numerics::Matrix3x2;
+
 use crate::config::{self, NotchSize, Settings};
 use crate::geo::{self, Place};
-use crate::{autostart, prayer};
+use crate::{autostart, prayer, tray};
 
 /// Sent to the notch window after the settings were saved.
 pub const SAVED_MSG: u32 = WM_APP + 6;
@@ -64,6 +68,11 @@ pub const SAVED_MSG: u32 = WM_APP + 6;
 const SEARCH_DONE_MSG: u32 = WM_APP + 7;
 
 const CLIENT: (f32, f32) = (680.0, 560.0);
+/// The title bar above the page, whose coordinates start under it.
+const TITLE_BAR: f32 = 34.0;
+/// Center and radius of the close button, in the title bar.
+const CLOSE: (f32, f32, f32) = (CLIENT.0 - 21.0, -TITLE_BAR / 2.0, 10.0);
+const CLOSE_RED: u32 = 0xe5484d;
 
 // Child control IDs.
 const ID_SEARCH: usize = 101;
@@ -619,6 +628,8 @@ struct Window {
     health_minutes: [u32; 3],
     notch_size: NotchSize,
     notch_fill: u32,
+    /// The mouse is on the close button.
+    close_hover: bool,
     notch_floating: bool,
     /// The settings as they were when the window opened, for Batal.
     opened: Settings,
@@ -703,15 +714,11 @@ impl Window {
 
         let dpi = GetDpiForSystem();
         let scale = dpi as f32 / 96.0;
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-        let mut frame = RECT {
-            left: 0,
-            top: 0,
-            right: (CLIENT.0 * scale).round() as i32,
-            bottom: (CLIENT.1 * scale).round() as i32,
-        };
-        AdjustWindowRectExForDpi(&mut frame, style, false, WINDOW_EX_STYLE(0), dpi)?;
-        let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+        // The caption stays for the shadow and the rounded corners, but the
+        // client area covers it, and the page draws its own title bar.
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+        let width = (CLIENT.0 * scale).round() as i32;
+        let height = ((CLIENT.1 + TITLE_BAR) * scale).round() as i32;
         let mut work = RECT::default();
         let _ = SystemParametersInfoW(
             SPI_GETWORKAREA,
@@ -736,6 +743,26 @@ impl Window {
             Some(instance.into()),
             None,
         )?;
+        // Windows sizes the frame before the first WM_NCCALCSIZE that counts.
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+        if let Some((small, large)) = tray::window_icons() {
+            for (kind, icon) in [(ICON_SMALL, small), (ICON_BIG, large)] {
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    Some(WPARAM(kind as usize)),
+                    Some(LPARAM(icon.0 as isize)),
+                );
+            }
+        }
         // Dark title bar in the same grey as the window.
         let dark: i32 = 1;
         let _ = DwmSetWindowAttribute(
@@ -833,6 +860,7 @@ impl Window {
             field_brush,
             fields,
             page: PAGE_GENERAL,
+            close_hover: false,
             places: Vec::new(),
             hover: 0,
             toggles: [
@@ -1027,6 +1055,10 @@ impl Window {
 
     /// Follows the mouse over the dropdown.
     fn hover_at(&mut self, x: f32, y: f32) {
+        if on_close(x, y) != self.close_hover {
+            self.close_hover = on_close(x, y);
+            self.invalidate();
+        }
         if let Some(index) = self.result_at(x, y).filter(|&i| i != self.hover) {
             self.hover = index;
             self.invalidate();
@@ -1228,6 +1260,10 @@ impl Window {
     }
 
     fn click(&mut self, x: f32, y: f32) {
+        if on_close(x, y) {
+            self.close();
+            return;
+        }
         if let Some(index) = (0..PAGES.len()).find(|&i| nav_row(i).contains(x, y)) {
             self.set_page(index);
             return;
@@ -1264,6 +1300,9 @@ impl Window {
     }
 
     fn clickable(&self, x: f32, y: f32) -> bool {
+        if on_close(x, y) {
+            return true;
+        }
         if (0..PAGES.len()).any(|i| nav_row(i).contains(x, y)) {
             return true;
         }
@@ -1290,7 +1329,9 @@ impl Window {
         let t = &self.target;
         t.BeginDraw();
         t.Clear(Some(&rgb(BACKGROUND, 1.0)));
+        t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR));
 
+        self.title_bar();
         self.sidebar();
         let page = &PAGES[self.page];
         self.text_at(page.title, &self.fonts.title, TITLE, 0xffffff, 1.0);
@@ -1616,6 +1657,49 @@ impl Window {
         );
     }
 
+    /// Drop's eyes and the window's name, and a round close button.
+    unsafe fn title_bar(&self) {
+        let (cx, cy, radius) = CLOSE;
+        self.brush.SetColor(&rgb(SIDEBAR_FILL, 1.0));
+        self.target
+            .FillRectangle(&Rect::new(0.0, -TITLE_BAR, SIDEBAR, 0.0).d2d(), &self.brush);
+        self.rounded(
+            Rect::new(14.0, cy - 8.0, 30.0, cy + 8.0),
+            4.0,
+            0x000000,
+            1.0,
+        );
+        for left in [18.0, 23.0] {
+            let eye = Rect::new(left, cy - 4.5, left + 3.0, cy + 4.5);
+            self.rounded(eye, 1.5, 0xffffff, 1.0);
+        }
+        let name = Rect::new(38.0, cy - 10.0, SIDEBAR, cy + 10.0);
+        self.text_at("Pengaturan Drop", &self.fonts.small, name, 0xffffff, 0.8);
+
+        let fill = if self.close_hover { CLOSE_RED } else { FIELD };
+        self.brush.SetColor(&rgb(fill, 1.0));
+        let point = |x: f32, y: f32| windows_numerics::Vector2 { X: x, Y: y };
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: point(cx, cy),
+                radiusX: radius,
+                radiusY: radius,
+            },
+            &self.brush,
+        );
+        self.brush.SetColor(&rgb(0xffffff, 0.95));
+        let arm = 3.5;
+        for side in [-1.0, 1.0] {
+            self.target.DrawLine(
+                point(cx - arm, cy - side * arm),
+                point(cx + arm, cy + side * arm),
+                &self.brush,
+                1.4,
+                None,
+            );
+        }
+    }
+
     /// The slider with its value on the left.
     unsafe fn slider(&self, track: Rect) {
         let cy = (track.top + track.bottom) / 2.0;
@@ -1759,16 +1843,42 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let brush = with_window(|window| window.field_brush).unwrap_or_default();
             LRESULT(brush.0 as isize)
         }
+        // The client area takes the whole window, the caption included.
+        WM_NCCALCSIZE if wparam.0 != 0 => LRESULT(0),
+        // The title bar moves the window, except on its close button.
+        WM_NCHITTEST => {
+            let mut point = POINT {
+                x: lparam.0 as i16 as i32,
+                y: (lparam.0 >> 16) as i16 as i32,
+            };
+            let _ = ScreenToClient(hwnd, &mut point);
+            let on_bar = with_window(|window| {
+                let (x, y) = (point.x as f32, point.y as f32);
+                let (x, y) = (x / window.scale, y / window.scale - TITLE_BAR);
+                y < 0.0 && !on_close(x, y)
+            });
+            LRESULT(if on_bar == Some(true) {
+                HTCAPTION
+            } else {
+                HTCLIENT
+            } as isize)
+        }
+        WM_NCMOUSEMOVE => {
+            with_window(|window| window.hover_at(-1.0, -1.0));
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_LBUTTONUP => {
             let (x, y) = (lparam.0 as i16 as f32, (lparam.0 >> 16) as i16 as f32);
-            with_window(|window| window.click(x / window.scale, y / window.scale));
+            with_window(|window| {
+                window.click(x / window.scale, y / window.scale - TITLE_BAR);
+            });
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
             let (x, y) = (lparam.0 as i16 as f32, (lparam.0 >> 16) as i16 as f32);
             let held = wparam.0 & MK_LBUTTON.0 as usize != 0;
             with_window(|window| {
-                let (x, y) = (x / window.scale, y / window.scale);
+                let (x, y) = (x / window.scale, y / window.scale - TITLE_BAR);
                 if held {
                     window.slide(x, y);
                 }
@@ -1781,7 +1891,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = GetCursorPos(&mut point);
             let _ = ScreenToClient(hwnd, &mut point);
             let over = with_window(|window| {
-                window.clickable(point.x as f32 / window.scale, point.y as f32 / window.scale)
+                let (x, y) = (point.x as f32, point.y as f32);
+                window.clickable(x / window.scale, y / window.scale - TITLE_BAR)
             });
             if over == Some(true) && (lparam.0 & 0xffff) as i32 == 1 {
                 if let Ok(hand) = LoadCursorW(None, IDC_HAND) {
@@ -1844,6 +1955,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
+/// Whether a point is on the close button.
+fn on_close(x: f32, y: f32) -> bool {
+    let (cx, cy, radius) = CLOSE;
+    (x - cx).powi(2) + (y - cy).powi(2) <= (radius + 2.0).powi(2)
+}
+
 /// Creates a child control at a logical rect.
 unsafe fn create_child(
     parent: HWND,
@@ -1859,7 +1976,7 @@ unsafe fn create_child(
         None,
         style,
         (rect.left * scale).round() as i32,
-        (rect.top * scale).round() as i32,
+        ((rect.top + TITLE_BAR) * scale).round() as i32,
         ((rect.right - rect.left) * scale).round() as i32,
         ((rect.bottom - rect.top) * scale).round() as i32,
         Some(parent),

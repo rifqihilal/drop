@@ -1,5 +1,6 @@
-//! Notification-area icon: a pair of eyes drawn at runtime, recolored to stay
-//! visible on both light and dark taskbars.
+//! Drop's icons, drawn at runtime. In the notification area, a pair of eyes
+//! recolored to stay visible on both light and dark taskbars; on windows, the
+//! same eyes on a dark tile.
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -18,7 +19,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, DestroyIcon, GetSystemMetrics, RegisterWindowMessageW, HICON, ICONINFO,
-    SM_CXSMICON, WM_APP,
+    SM_CXICON, SM_CXSMICON, WM_APP,
 };
 
 /// Message the shell sends when the icon is clicked.
@@ -27,6 +28,8 @@ const ICON_ID: u32 = 1;
 
 thread_local! {
     static ICON: Cell<Option<HICON>> = const { Cell::new(None) };
+    /// The window icons, made once: small and large.
+    static WINDOW_ICONS: Cell<Option<(HICON, HICON)>> = const { Cell::new(None) };
 }
 
 /// Broadcast when Explorer restarts; the icon has to be added again.
@@ -87,6 +90,17 @@ fn replace_icon(icon: Option<HICON>) {
     }
 }
 
+/// The icons for a window's title bar and taskbar button: small and large.
+pub fn window_icons() -> Option<(HICON, HICON)> {
+    if let Some(icons) = WINDOW_ICONS.with(Cell::get) {
+        return Some(icons);
+    }
+    let small = tile_icon(unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16))?;
+    let large = tile_icon(unsafe { GetSystemMetrics(SM_CXICON) }.max(32))?;
+    WINDOW_ICONS.with(|cell| cell.set(Some((small, large))));
+    Some((small, large))
+}
+
 /// True when Windows uses the light theme for the taskbar.
 fn taskbar_is_light() -> bool {
     let mut value: u32 = 0;
@@ -105,21 +119,20 @@ fn taskbar_is_light() -> bool {
     result.is_ok() && value != 0
 }
 
-/// Two eye capsules, antialiased with a signed distance per pixel.
-fn eyes_icon(light_taskbar: bool) -> Option<HICON> {
-    let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
+/// How much two eye capsules cover each pixel, 0..1, antialiased with a signed
+/// distance.
+fn eye_coverage(size: i32) -> Vec<f32> {
     let s = size as f32;
     let (eye_w, eye_h) = (0.24 * s, 0.56 * s);
     let radius = eye_w / 2.0;
     let half_segment = (eye_h - eye_w) / 2.0;
     let centers = [(0.31 * s, 0.5 * s), (0.69 * s, 0.5 * s)];
-    let shade: u32 = if light_taskbar { 0x1c } else { 0xff };
 
-    let mut pixels = vec![0u32; (size * size) as usize];
+    let mut coverage = vec![0.0f32; (size * size) as usize];
     for y in 0..size {
         for x in 0..size {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let coverage = centers
+            coverage[(y * size + x) as usize] = centers
                 .iter()
                 .map(|&(cx, cy)| {
                     let dy = ((py - cy).abs() - half_segment).max(0.0);
@@ -127,13 +140,50 @@ fn eyes_icon(light_taskbar: bool) -> Option<HICON> {
                     (0.5 - distance).clamp(0.0, 1.0)
                 })
                 .fold(0.0f32, f32::max);
-            let alpha = (coverage * 255.0).round() as u32;
-            // Icons take premultiplied BGRA.
-            let c = shade * alpha / 255;
-            pixels[(y * size + x) as usize] = (alpha << 24) | (c << 16) | (c << 8) | c;
         }
     }
+    coverage
+}
 
+/// Premultiplied BGRA, the way icons take it.
+fn premultiplied(shade: f32, alpha: f32) -> u32 {
+    let a = (alpha * 255.0).round() as u32;
+    let c = (shade * alpha).round() as u32;
+    (a << 24) | (c << 16) | (c << 8) | c
+}
+
+/// The eyes alone, in a shade that shows on the taskbar.
+fn eyes_icon(light_taskbar: bool) -> Option<HICON> {
+    let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
+    let shade = if light_taskbar { 28.0 } else { 255.0 };
+    let pixels: Vec<u32> = eye_coverage(size)
+        .into_iter()
+        .map(|eye| premultiplied(shade, eye))
+        .collect();
+    make_icon(size, &pixels)
+}
+
+/// The eyes in white on a dark rounded tile, which shows on any background.
+fn tile_icon(size: i32) -> Option<HICON> {
+    const TILE_SHADE: f32 = 20.0;
+    let s = size as f32;
+    let radius = 0.24 * s;
+    let eyes = eye_coverage(size);
+    let mut pixels = vec![0u32; (size * size) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let index = (y * size + x) as usize;
+            let dx = ((x as f32 + 0.5 - s / 2.0).abs() - (s / 2.0 - radius)).max(0.0);
+            let dy = ((y as f32 + 0.5 - s / 2.0).abs() - (s / 2.0 - radius)).max(0.0);
+            let tile = (0.5 - ((dx * dx + dy * dy).sqrt() - radius)).clamp(0.0, 1.0);
+            let shade = TILE_SHADE + (255.0 - TILE_SHADE) * eyes[index];
+            pixels[index] = premultiplied(shade, tile);
+        }
+    }
+    make_icon(size, &pixels)
+}
+
+fn make_icon(size: i32, pixels: &[u32]) -> Option<HICON> {
     unsafe {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {

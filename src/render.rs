@@ -200,6 +200,14 @@ fn sun_arc(position: f32) -> f32 {
 
 /// Width of the concave curves joining the notch to the top screen edge.
 const EAR: f32 = 10.0;
+/// The idle eyes' glow: its colour, and each layer's width and strength.
+const EYE_GLOW: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 0.42,
+    g: 0.68,
+    b: 1.0,
+    a: 1.0,
+};
+const EYE_HALO: [(f32, f32); 4] = [(20.0, 0.05), (14.0, 0.08), (9.5, 0.14), (6.0, 0.28)];
 /// Radius of the brush that draws ripples: past their reach and width.
 const RIPPLE_BRUSH: f32 = 480.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
@@ -1228,6 +1236,11 @@ impl Renderer {
         self.black.SetOpacity(scene.notch_opacity);
         self.target.FillGeometry(&geometry, &self.black, None);
         self.black.SetOpacity(1.0);
+        // The idle eyes shine out of the same dark blue.
+        let idle = scene.eyes_visible.clamp(0.0, 1.0);
+        if idle > 0.01 {
+            self.fill_water(&geometry, x0, x1, h, idle)?;
+        }
         if scene.liquid_glow > 0.005 {
             self.fill_liquid(&geometry, scene, x0, x1)?;
         }
@@ -1298,26 +1311,31 @@ impl Renderer {
                 });
                 sink.EndFigure(D2D1_FIGURE_END_OPEN);
                 sink.Close()?;
-                // A soft halo first, then the eye itself.
-                for (width, alpha) in [(10.0, 0.05), (6.5, 0.10), (3.4, 1.0)] {
-                    self.light.SetOpacity(alpha * visible * (1.0 - wide));
+                // A blue glow in widening strokes, then the eye itself.
+                self.accent.SetColor(&EYE_GLOW);
+                for (width, alpha) in EYE_HALO {
+                    self.accent.SetOpacity(alpha * visible * (1.0 - wide));
                     self.target
-                        .DrawGeometry(&geometry, &self.light, width, &self.round_caps);
+                        .DrawGeometry(&geometry, &self.accent, width, &self.round_caps);
                 }
+                self.light.SetOpacity(visible * (1.0 - wide));
+                self.target
+                    .DrawGeometry(&geometry, &self.light, 3.4, &self.round_caps);
             }
             if wide > 0.01 {
-                for (grow, alpha) in [(4.5, 0.05), (2.0, 0.10), (0.0, 1.0)] {
-                    let radius = 8.5 * wide + grow;
-                    self.light.SetOpacity(alpha * visible);
-                    self.target.FillEllipse(
-                        &D2D1_ELLIPSE {
-                            point: pt(cx, cy),
-                            radiusX: radius,
-                            radiusY: radius,
-                        },
-                        &self.light,
-                    );
+                let disc = |radius: f32| D2D1_ELLIPSE {
+                    point: pt(cx, cy),
+                    radiusX: radius,
+                    radiusY: radius,
+                };
+                self.accent.SetColor(&EYE_GLOW);
+                for (width, alpha) in EYE_HALO {
+                    self.accent.SetOpacity(alpha * visible);
+                    self.target
+                        .FillEllipse(&disc(8.5 * wide + width / 2.0), &self.accent);
                 }
+                self.light.SetOpacity(visible);
+                self.target.FillEllipse(&disc(8.5 * wide), &self.light);
             }
         }
 
@@ -2410,6 +2428,25 @@ impl Renderer {
         self.target.CreateBitmapFromWicBitmap(&converter, None)
     }
 
+    /// The notch's dark blue, from near black to navy.
+    unsafe fn fill_water(
+        &self,
+        shape: &ID2D1PathGeometry,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        opacity: f32,
+    ) -> Result<()> {
+        let stops = [
+            (0.0, color(0.01, 0.03, 0.09, 1.0)),
+            (1.0, color(0.03, 0.09, 0.24, 1.0)),
+        ];
+        let water = self.gradient(pt(x0, 0.0), pt(x1, h), &stops)?;
+        water.SetOpacity(opacity);
+        self.target.FillGeometry(shape, &water, None);
+        Ok(())
+    }
+
     /// Dark water inside the notch's shape, with rings running out from
     /// where something was dropped.
     unsafe fn fill_liquid(
@@ -2420,13 +2457,7 @@ impl Renderer {
         x1: f32,
     ) -> Result<()> {
         let glow = scene.liquid_glow.clamp(0.0, 1.0);
-        let stops = [
-            (0.0, color(0.01, 0.03, 0.09, 1.0)),
-            (1.0, color(0.03, 0.09, 0.24, 1.0)),
-        ];
-        let water = self.gradient(pt(x0, 0.0), pt(x1, scene.height), &stops)?;
-        water.SetOpacity(glow);
-        self.target.FillGeometry(shape, &water, None);
+        self.fill_water(shape, x0, x1, scene.height, glow)?;
         if scene.ripples.is_empty() {
             return Ok(());
         }
