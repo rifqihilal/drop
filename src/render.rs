@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use windows::core::{w, Interface, Result, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
     D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_GRADIENT_STOP,
     D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_F,
 };
@@ -56,7 +56,7 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
-    Accent, Content, LevelKind, Notice, Trailing, AGENDA_ROWS, APP_BANNER, CARD, CARD_BOUNCE,
+    Accent, Content, LevelKind, Notice, Pose, Trailing, AGENDA_ROWS, APP_BANNER, CARD, CARD_BOUNCE,
     CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, IDLE, LEVEL, LYRIC_CARD_EXTRA, LYRIC_STRIP_MAX,
     NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
@@ -598,6 +598,7 @@ pub mod glyph {
     pub const MESSAGE: &str = "\u{E8BD}";
     pub const CAMERA: &str = "\u{E722}";
     pub const COPY: &str = "\u{E8C8}";
+    pub const BOLT: &str = "\u{E945}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -678,6 +679,9 @@ pub struct Scene<'a> {
     /// The prayer close at hand and the wait for it, which take the
     /// temperature's place in the closed notch.
     pub prayer_soon: Option<(&'static str, String)>,
+    /// How far a notice's ring has filled, 0..1, and its beat while that runs.
+    pub notice_meter: f32,
+    pub notice_beat: Option<f32>,
     /// How solid the notch's black is, 0..1.
     pub notch_opacity: f32,
     /// The notch floats, rounded all round, instead of joining the top edge.
@@ -941,7 +945,6 @@ pub struct Renderer {
     /// Icons inside pill buttons.
     pill_glyph: IDWriteTextFormat,
     /// Icons in the page navigation pill.
-    nav_glyph: IDWriteTextFormat,
     /// The same, emboldened.
     nav_bold: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
@@ -1108,7 +1111,6 @@ impl Renderer {
             let lyric_next = wrapped(DWRITE_FONT_WEIGHT_SEMI_BOLD, 15.0)?;
             let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let pill_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
-            let nav_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 13.0)?;
             let nav_bold = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
@@ -1133,7 +1135,6 @@ impl Renderer {
                 lyric_next,
                 close_glyph,
                 pill_glyph,
-                nav_glyph,
                 nav_bold,
                 symbols,
                 icons,
@@ -1392,7 +1393,7 @@ impl Renderer {
                 self.draw_text(glyph, &self.icons, icon_box, alpha);
                 self.draw_level(x0, x1, h, level, *muted, alpha);
             }
-            Content::Notice(notice) => self.draw_notice(notice, x0, x1, h, alpha),
+            Content::Notice(notice) => self.draw_notice(scene, notice, x0, x1, h, alpha),
             Content::App(notice) => self.draw_app_banner(scene, notice, x0, x1, h, alpha),
             Content::Prayer(label) => self.draw_prayer_banner(label, x0, x1, h, alpha),
             // The cover, date and level bars in a row, the song's name below.
@@ -1649,6 +1650,25 @@ impl Renderer {
             M22: cos,
             M31: cx - cos * cx + sin * cy,
             M32: cy - sin * cx - cos * cy,
+        };
+        self.target.SetTransform(&(turn * current));
+        draw();
+        self.target.SetTransform(&current);
+    }
+
+    /// Draws in `pose` around (`cx`, `cy`), on top of the current transform.
+    unsafe fn posed_at(&self, cx: f32, cy: f32, pose: Pose, draw: impl FnOnce()) {
+        let mut current = Matrix3x2::default();
+        self.target.GetTransform(&mut current);
+        let (sin, cos) = pose.angle.to_radians().sin_cos();
+        let (x, y) = (pose.scale_x, pose.scale_y);
+        let turn = Matrix3x2 {
+            M11: cos * x,
+            M12: sin * x,
+            M21: -sin * y,
+            M22: cos * y,
+            M31: cx + pose.dx - (cos * x * cx - sin * y * cy),
+            M32: cy + pose.dy - (sin * x * cx + cos * y * cy),
         };
         self.target.SetTransform(&(turn * current));
         draw();
@@ -2760,6 +2780,42 @@ impl Renderer {
         );
     }
 
+    /// A solid bell in the light brush, with its clapper under it. Drawn, as
+    /// the icon font's bell is only an outline.
+    unsafe fn fill_bell(&self, cx: f32, cy: f32) -> Result<()> {
+        let point = |x: f32, y: f32| pt(cx + x, cy + y - 0.5);
+        let curves = [
+            [(-4.6, 2.3), (-4.8, 0.6), (-4.8, -1.5)],
+            [(-4.8, -4.8), (-2.6, -6.6), (0.0, -6.6)],
+            [(2.6, -6.6), (4.8, -4.8), (4.8, -1.5)],
+            [(4.8, 0.6), (4.6, 2.3), (6.2, 3.6)],
+        ];
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        sink.BeginFigure(point(-6.2, 3.6), D2D1_FIGURE_BEGIN_FILLED);
+        for [a, b, c] in curves {
+            sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: point(a.0, a.1),
+                point2: point(b.0, b.1),
+                point3: point(c.0, c.1),
+            });
+        }
+        sink.AddLine(point(6.2, 4.7));
+        sink.AddLine(point(-6.2, 4.7));
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
+        self.target.FillGeometry(&geometry, &self.light, None);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: point(0.0, 6.1),
+                radiusX: 1.8,
+                radiusY: 1.4,
+            },
+            &self.light,
+        );
+        Ok(())
+    }
+
     /// Tells the closed notch there are notifications to see: a bell in the
     /// temperature's place, or only the dot where the notch shows other things.
     unsafe fn draw_unread(&self, scene: &Scene) {
@@ -2781,7 +2837,7 @@ impl Renderer {
             self.light.SetOpacity(0.9 * alpha);
             // It swings from its top.
             self.tilted_at(x, y - 6.0, scene.bell_angle, || {
-                self.draw_nav_glyph(glyph::BELL, x, y, &self.light);
+                let _ = self.fill_bell(x, y);
             });
             self.draw_red_dot(x + 6.0, y - 6.0, 3.0, alpha);
         } else {
@@ -3826,19 +3882,6 @@ impl Renderer {
         );
     }
 
-    /// An icon in the page navigation pill.
-    unsafe fn draw_nav_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
-        let wide: Vec<u16> = icon.encode_utf16().collect();
-        self.target.DrawText(
-            &wide,
-            &self.nav_glyph,
-            &rect(cx - 11.0, cy - 11.0, cx + 11.0, cy + 11.0),
-            brush,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
-            DWRITE_MEASURING_MODE_NATURAL,
-        );
-    }
-
     /// A small icon, as on the shelf's remove buttons.
     unsafe fn draw_small_glyph(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
         let wide: Vec<u16> = icon.encode_utf16().collect();
@@ -3916,9 +3959,17 @@ impl Renderer {
         })
     }
 
-    /// Ring with icon, title over subtitle, then the trailing element; centered
-    /// as one group and clipped to the notch while it grows.
-    unsafe fn draw_notice(&self, notice: &Notice, x0: f32, x1: f32, h: f32, alpha: f32) {
+    /// Filled circle with icon, title over subtitle, then the trailing element;
+    /// centered as one group and clipped to the notch while it grows.
+    unsafe fn draw_notice(
+        &self,
+        scene: &Scene,
+        notice: &Notice,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
         let Some(card) = self.notice_layout(notice) else {
             return;
         };
@@ -3929,28 +3980,33 @@ impl Renderer {
         let cy = h / 2.0;
         let accent = accent_color(notice.accent);
 
-        // Ring: a faint track, then the filled part in the accent colour.
+        // The icon, dark on a filled circle in the accent colour.
         let ring_cx = start + CARD_PAD_LEFT + RING / 2.0;
-        let (ring_color, ring_alpha, icon_alpha) = if notice.dim {
-            (color(1.0, 1.0, 1.0, 1.0), 0.35, 0.55)
+        let (ring_color, ring_alpha) = if notice.dim {
+            (color(1.0, 1.0, 1.0, 1.0), 0.45)
         } else {
-            (accent, 1.0, 1.0)
+            (accent, 1.0)
         };
-        let _ = self.draw_ring(
-            ring_cx,
-            cy,
-            (RING - RING_STROKE) / 2.0,
-            notice.progress,
-            ring_color,
-            ring_alpha * alpha,
+        self.accent.SetColor(&ring_color);
+        self.accent.SetOpacity(ring_alpha * alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(ring_cx, cy),
+                radiusX: RING / 2.0,
+                radiusY: RING / 2.0,
+            },
+            &self.accent,
         );
-        let half = RING / 2.0;
-        self.draw_text(
-            notice.icon,
-            &self.icons,
-            rect(ring_cx - half, cy - half, ring_cx + half, cy + half),
-            icon_alpha * alpha,
-        );
+        // It moves while the notice beats, unless it reports something gone.
+        let pose = scene
+            .notice_beat
+            .filter(|_| !notice.dim)
+            .map_or_else(|| notice.motion.pose(0.0), |t| notice.motion.pose(t));
+        self.black.SetOpacity(pose.alpha * alpha);
+        self.posed_at(ring_cx, cy, pose, || {
+            self.draw_glyph(notice.icon, ring_cx, cy, &self.black);
+        });
+        self.black.SetOpacity(1.0);
 
         // Title over subtitle, the pair centered vertically.
         let text_x = start + CARD_PAD_LEFT + RING + RING_GAP;
@@ -3971,7 +4027,14 @@ impl Renderer {
                 self.draw_layout(&big.layout, trailing_x, y, 0.97 * alpha);
             }
             (Trailing::Icon(icon), _) => {
-                self.draw_badge(icon, trailing_x + TRAILING_ICON / 2.0, cy, accent, alpha);
+                let (fill, beat) = if notice.dim {
+                    (color(1.0, 1.0, 1.0, 1.0), None)
+                } else {
+                    (accent, scene.notice_beat)
+                };
+                let center = trailing_x + TRAILING_ICON / 2.0;
+                let state = (scene.notice_meter, beat);
+                self.draw_badge(icon, center, cy, fill, state, alpha);
             }
             _ => {}
         }
@@ -4077,8 +4140,17 @@ impl Renderer {
         Ok(())
     }
 
-    /// An accent-coloured icon in a softly glowing circle.
-    unsafe fn draw_badge(&self, icon: &str, cx: f32, cy: f32, accent: D2D1_COLOR_F, alpha: f32) {
+    /// An icon in a softly glowing ring filled to `meter`, with rings beating
+    /// out from it while `beat` runs.
+    unsafe fn draw_badge(
+        &self,
+        icon: &str,
+        cx: f32,
+        cy: f32,
+        accent: D2D1_COLOR_F,
+        (meter, beat): (f32, Option<f32>),
+        alpha: f32,
+    ) {
         let r = TRAILING_ICON / 2.0;
         let circle = |radius: f32| D2D1_ELLIPSE {
             point: pt(cx, cy),
@@ -4088,23 +4160,24 @@ impl Renderer {
         self.accent.SetColor(&accent);
         self.accent.SetOpacity(0.12 * alpha);
         self.target.FillEllipse(&circle(r), &self.accent);
-        self.accent.SetOpacity(0.18 * alpha);
-        self.target
-            .DrawEllipse(&circle(r + 1.5), &self.accent, 4.0, None);
-        self.accent.SetOpacity(0.8 * alpha);
-        self.target
-            .DrawEllipse(&circle(r - 4.0), &self.accent, 1.8, None);
+        if let Some(beat) = beat {
+            for lag in [0.0, 0.5] {
+                let t = (beat * 2.0 - lag * 2.0).clamp(0.0, 1.0);
+                if t > 0.0 && t < 1.0 {
+                    self.accent.SetOpacity(0.5 * (1.0 - t) * alpha);
+                    self.target
+                        .DrawEllipse(&circle(r - 2.0 + 9.0 * t), &self.accent, 2.0, None);
+                }
+            }
+        }
+        let _ = self.draw_ring(cx, cy, r - 2.5, meter, accent, alpha);
+        self.draw_glyph_at(icon, cx, cy, alpha);
+    }
 
-        let wide: Vec<u16> = icon.encode_utf16().collect();
-        self.accent.SetOpacity(alpha);
-        self.target.DrawText(
-            &wide,
-            &self.icons,
-            &rect(cx - r, cy - r, cx + r, cy + r),
-            &self.accent,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
-            DWRITE_MEASURING_MODE_NATURAL,
-        );
+    /// An icon in white, centered on a point.
+    unsafe fn draw_glyph_at(&self, icon: &str, cx: f32, cy: f32, alpha: f32) {
+        self.light.SetOpacity(alpha);
+        self.draw_glyph(icon, cx, cy, &self.light);
     }
 
     unsafe fn draw_layout(&self, layout: &IDWriteTextLayout, x: f32, y: f32, alpha: f32) {

@@ -67,6 +67,10 @@ const LIQUID_FADE: (f32, f32) = (2.2, 3.0);
 /// How long a ripple runs, and how far it reaches.
 const RIPPLE_SECS: f32 = 2.0;
 const RIPPLE_REACH: f32 = 430.0;
+/// Stiffness and damping of a notice's ring as it fills.
+const METER: (f32, f32) = (26.0, 10.0);
+/// How long a notice's ring beats.
+const BEAT_SECS: f32 = 1.4;
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -444,6 +448,93 @@ pub enum Accent {
     Teal,
 }
 
+/// How a notice's icon moves, by what it stands for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Motion {
+    /// Swells and settles, as a signal arriving.
+    Pulse,
+    /// Closes twice, as eyes do.
+    Blink,
+    /// Sways from side to side, as a step.
+    Walk,
+    /// Bounces up and down, as a drop.
+    Bob,
+    /// Rocks fast, as a ringing alarm.
+    Shake,
+    /// Fades and returns, as a flash.
+    Flash,
+}
+
+/// Where an icon stands in its motion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub dx: f32,
+    pub dy: f32,
+    /// Degrees clockwise.
+    pub angle: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub alpha: f32,
+}
+
+impl Pose {
+    const REST: Self = Self {
+        dx: 0.0,
+        dy: 0.0,
+        angle: 0.0,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        alpha: 1.0,
+    };
+}
+
+impl Motion {
+    /// The pose `t` of the way through the motion, 0..1. It starts and ends
+    /// at rest.
+    pub fn pose(self, t: f32) -> Pose {
+        use std::f32::consts::{PI, TAU};
+        let t = t.clamp(0.0, 1.0);
+        let fade = 1.0 - t;
+        match self {
+            Self::Pulse => {
+                let swell = 1.0 + 0.18 * (TAU * t).sin().abs() * fade.sqrt();
+                Pose {
+                    scale_x: swell,
+                    scale_y: swell,
+                    ..Pose::REST
+                }
+            }
+            Self::Blink => {
+                let close = |from: f32| 1.0 - ((t - from) / 0.1).abs();
+                Pose {
+                    scale_y: 1.0 - 0.9 * close(0.25).max(close(0.65)).max(0.0),
+                    ..Pose::REST
+                }
+            }
+            Self::Walk => {
+                let step = (TAU * 3.0 * t).sin() * fade;
+                Pose {
+                    dx: 3.0 * step,
+                    angle: 10.0 * step,
+                    ..Pose::REST
+                }
+            }
+            Self::Bob => Pose {
+                dy: -4.0 * (TAU * 2.0 * t).sin().abs() * fade,
+                ..Pose::REST
+            },
+            Self::Shake => Pose {
+                angle: 16.0 * (TAU * 5.0 * t).sin() * fade,
+                ..Pose::REST
+            },
+            Self::Flash => Pose {
+                alpha: 0.35 + 0.65 * (PI * 3.0 * t).cos().abs(),
+                ..Pose::REST
+            },
+        }
+    }
+}
+
 /// What sits on the right of a notice, if anything.
 pub enum Trailing {
     None,
@@ -457,6 +548,7 @@ pub enum Trailing {
 /// subtitle, and an optional trailing element.
 pub struct Notice {
     pub icon: &'static str,
+    pub motion: Motion,
     pub accent: Accent,
     /// How much of the ring is filled, 0..1.
     pub progress: f32,
@@ -498,6 +590,10 @@ pub struct Notch {
     pub peek_visible: Spring,
     /// How far the music card's volume slider has opened, 0..1.
     pub volume_visible: Spring,
+    /// How far a notice's ring has filled, 0..1.
+    pub notice_meter: Spring,
+    /// How far a notice's beat has gone, 0..1, while it lasts.
+    pub notice_beat: Option<f32>,
     /// How visible the dark water is while something is dragged over the
     /// notch, 0..1.
     pub liquid_glow: Spring,
@@ -538,6 +634,8 @@ impl Notch {
             nav_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             peek_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             volume_visible: Spring::new(0.0, 200.0, 28.0, 0.002),
+            notice_meter: Spring::new(0.0, METER.0, METER.1, 0.002),
+            notice_beat: None,
             liquid_glow: Spring::new(0.0, 60.0, 15.0, 0.002),
             ripple_at: (0.0, 0.0),
             liquid_time: 0.0,
@@ -602,6 +700,10 @@ impl Notch {
 
     /// Shows a notice in a notch `width` wide (measured by the renderer).
     pub fn show_notice(&mut self, notice: Notice, width: f32, duration: Duration, now: Instant) {
+        // The ring fills from empty, and beats meanwhile.
+        self.notice_meter = Spring::new(0.0, METER.0, METER.1, 0.002);
+        self.notice_meter.target = notice.progress;
+        self.notice_beat = Some(0.0);
         self.banner = Some(Banner {
             content: Content::Notice(notice),
             size: (width.clamp(NOTICE_WIDTH.0, NOTICE_WIDTH.1), NOTICE_HEIGHT),
@@ -671,11 +773,17 @@ impl Notch {
         if shown.title != notice.title {
             return false;
         }
+        self.notice_meter.target = notice.progress;
         banner.content = Content::Notice(notice);
         banner.size = (width.clamp(NOTICE_WIDTH.0, NOTICE_WIDTH.1), NOTICE_HEIGHT);
         banner.until = banner.until.max(now + NOTICE_REFRESH_HOLD);
         self.retarget();
         true
+    }
+
+    /// Fills the showing notice's ring, for a device that reports no level.
+    pub fn fill_notice_meter(&mut self) {
+        self.notice_meter.target = 1.0;
     }
 
     fn activate(&mut self) {
@@ -713,6 +821,12 @@ impl Notch {
         moving |= self.peek_visible.step(dt);
         moving |= self.volume_visible.step(dt);
         moving |= self.liquid_glow.step(dt);
+        moving |= self.notice_meter.step(dt);
+        if let Some(beat) = self.notice_beat {
+            let beat = beat + dt / BEAT_SECS;
+            self.notice_beat = (beat < 1.0).then_some(beat);
+            moving = true;
+        }
         if !self.ripples.is_empty() {
             self.liquid_time += dt;
             moving = true;
@@ -900,6 +1014,70 @@ mod tests {
         assert!(later > first);
         assert!(weak < strong);
         assert_eq!(ripple_ring(RIPPLE_SECS).1, 0.0);
+    }
+
+    fn notice(progress: f32) -> Notice {
+        Notice {
+            icon: "",
+            motion: Motion::Pulse,
+            accent: Accent::Blue,
+            progress,
+            title: "A".to_string(),
+            subtitle: String::new(),
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
+
+    #[test]
+    fn a_notice_ring_fills_to_its_level_and_stops_beating() {
+        let now = Instant::now();
+        let mut notch = Notch::new(now, 7);
+        notch.show_notice(notice(0.7), 200.0, NOTICE_DURATION, now);
+        assert_eq!(notch.notice_meter.value, 0.0);
+        assert!(notch.notice_beat.is_some());
+        for _ in 0..180 {
+            notch.step(now, 1.0 / 60.0);
+        }
+        assert!((notch.notice_meter.value - 0.7).abs() < 0.01);
+        assert!(notch.notice_beat.is_none());
+    }
+
+    #[test]
+    fn a_refreshed_notice_moves_its_ring_on() {
+        let now = Instant::now();
+        let mut notch = Notch::new(now, 7);
+        notch.show_notice(notice(0.0), 200.0, NOTICE_DURATION, now);
+        assert!(notch.refresh_notice(notice(0.5), 200.0, now));
+        assert_eq!(notch.notice_meter.target, 0.5);
+    }
+
+    #[test]
+    fn icons_start_and_end_at_rest() {
+        let motions = [
+            Motion::Pulse,
+            Motion::Blink,
+            Motion::Walk,
+            Motion::Bob,
+            Motion::Shake,
+            Motion::Flash,
+        ];
+        for motion in motions {
+            for t in [0.0, 1.0] {
+                let pose = motion.pose(t);
+                assert!(pose.dx.abs() < 0.01 && pose.dy.abs() < 0.01, "{motion:?}");
+                assert!(pose.angle.abs() < 0.01, "{motion:?}");
+                assert!((pose.scale_y - 1.0).abs() < 0.01, "{motion:?}");
+                assert!((pose.alpha - 1.0).abs() < 0.01, "{motion:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn eyes_close_while_blinking_and_steps_sway() {
+        assert!(Motion::Blink.pose(0.25).scale_y < 0.2);
+        assert_eq!(Motion::Blink.pose(0.45).scale_y, 1.0);
+        assert!(Motion::Walk.pose(1.0 / 12.0).dx > 1.0);
     }
 
     #[test]

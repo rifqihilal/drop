@@ -75,9 +75,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use anim::{
-    Accent, Bell, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT, COMPACT_LARGE,
-    COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX, MUSIC_STRIP,
-    TIMER_STRIP,
+    Accent, Bell, LevelKind, Motion, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT,
+    COMPACT_LARGE, COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX,
+    MUSIC_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -540,10 +540,10 @@ impl App {
         if let Some((index, at)) = self.demo {
             if now >= at {
                 self.demo = Some((index + 1, now + DEMO_STEP));
-                match index % 13 {
-                    10 => self.notify_prayer("Dzuhur 5 menit lagi".to_string()),
-                    11 => self.notify_prayer("Waktunya Dzuhur".to_string()),
-                    12 => self.notch.show_song(
+                match index % 15 {
+                    12 => self.notify_prayer("Dzuhur 5 menit lagi".to_string()),
+                    13 => self.notify_prayer("Waktunya Dzuhur".to_string()),
+                    14 => self.notch.show_song(
                         "Judul lagu \u{b7} Nama penyanyi".to_string(),
                         220.0,
                         SONG_SHOWN,
@@ -1441,6 +1441,7 @@ impl App {
         let notice = match finished {
             Phase::Focus => Notice {
                 icon: glyph::TIMER,
+                motion: Motion::Shake,
                 accent: Accent::Green,
                 progress: 1.0,
                 title: "Waktunya istirahat".to_string(),
@@ -1450,6 +1451,7 @@ impl App {
             },
             Phase::Break => Notice {
                 icon: glyph::TIMER,
+                motion: Motion::Shake,
                 accent: Accent::Teal,
                 progress: 1.0,
                 title: "Istirahat selesai".to_string(),
@@ -2081,9 +2083,14 @@ impl App {
                     self.show_level(LevelKind::Brightness, brightness as f32 / 100.0, false);
                 }
             }
-            // Plugging the charger in or out stays quiet; the power source only
-            // decides whether a falling charge needs a warning.
-            PowerEvent::OnAc(on_ac) => self.on_ac = Some(on_ac),
+            PowerEvent::OnAc(on_ac) => {
+                let changed = self.on_ac.replace(on_ac).is_some_and(|was| was != on_ac);
+                if let Some(percent) = self.battery.filter(|_| changed) {
+                    if self.settings.notify_battery {
+                        self.notify(notices::charger(on_ac, percent));
+                    }
+                }
+            }
             PowerEvent::Battery(percent) => {
                 let Some(previous) = self.battery.replace(percent) else {
                     return;
@@ -2142,6 +2149,7 @@ impl App {
     /// Adds the device's battery level to its card once it is known.
     fn check_device_battery(&mut self, event: DeviceEvent) {
         let Some(percent) = bluetooth::battery_level(event.address) else {
+            self.notch.fill_notice_meter();
             return;
         };
         let notice = notices::bluetooth(event.name, true, event.audio, Some(percent));
@@ -2222,6 +2230,8 @@ impl App {
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
+            notice_meter: n.notice_meter.value,
+            notice_beat: n.notice_beat,
             notch_opacity: self.settings.notch_opacity(),
             floating: self.settings.notch_floating,
             bell_angle: self.bell.angle,
@@ -2667,7 +2677,7 @@ fn chime() {
 
 /// The notice cards Drop shows.
 mod notices {
-    use crate::anim::{Accent, Notice, Trailing};
+    use crate::anim::{Accent, Motion, Notice, Trailing};
     use crate::health::Kind;
     use crate::prayer::{format_time, NAMES};
     use crate::render::glyph;
@@ -2677,6 +2687,7 @@ mod notices {
     pub fn screenshot(copied: bool) -> Notice {
         Notice {
             icon: glyph::CAMERA,
+            motion: Motion::Flash,
             accent: Accent::Teal,
             progress: 1.0,
             title: "Screenshot masuk Rak Berkas".to_string(),
@@ -2693,6 +2704,7 @@ mod notices {
     pub fn wifi(ssid: &str, connected: bool) -> Notice {
         Notice {
             icon: glyph::WIFI,
+            motion: Motion::Pulse,
             accent: Accent::Teal,
             progress: 1.0,
             title: if connected {
@@ -2710,13 +2722,14 @@ mod notices {
         }
     }
 
-    /// `battery` fills the ring and joins the subtitle when the device reports it.
+    /// `battery` fills the ring and joins the subtitle once the device reports it.
     pub fn bluetooth(name: String, connected: bool, audio: bool, battery: Option<u32>) -> Notice {
         let state = if connected { "Terhubung" } else { "Terputus" };
         Notice {
             icon: glyph::BLUETOOTH,
+            motion: Motion::Pulse,
             accent: Accent::Blue,
-            progress: battery.map_or(1.0, |percent| percent as f32 / 100.0),
+            progress: battery.map_or(0.0, |percent| percent as f32 / 100.0),
             title: name,
             subtitle: match battery {
                 Some(percent) => format!("{state} · {percent}%"),
@@ -2731,9 +2744,29 @@ mod notices {
         }
     }
 
+    /// The charger was plugged in or out, with the charge on its ring.
+    pub fn charger(plugged: bool, percent: u32) -> Notice {
+        Notice {
+            icon: glyph::BOLT,
+            motion: Motion::Flash,
+            accent: Accent::Green,
+            progress: percent as f32 / 100.0,
+            title: if plugged {
+                "Mengisi daya"
+            } else {
+                "Charger dilepas"
+            }
+            .to_string(),
+            subtitle: format!("Baterai {percent}%"),
+            trailing: Trailing::Icon(glyph::battery(percent)),
+            dim: !plugged,
+        }
+    }
+
     pub fn low_battery(percent: u32) -> Notice {
         Notice {
             icon: glyph::battery(percent),
+            motion: Motion::Flash,
             accent: Accent::Red,
             progress: percent as f32 / 100.0,
             title: "Baterai lemah".to_string(),
@@ -2755,6 +2788,7 @@ mod notices {
         let next = day.next(minutes_now()).unwrap_or(0);
         Notice {
             icon: glyph::PRAYER,
+            motion: Motion::Pulse,
             accent: Accent::Green,
             progress: 1.0,
             title: "Jadwal sholat aktif".to_string(),
@@ -2768,6 +2802,7 @@ mod notices {
     pub fn event(summary: &str, minutes_left: u32, start: u32) -> Notice {
         Notice {
             icon: glyph::CALENDAR,
+            motion: Motion::Shake,
             accent: Accent::Blue,
             progress: 1.0,
             title: summary.to_string(),
@@ -2801,6 +2836,11 @@ mod notices {
         };
         Notice {
             icon,
+            motion: match kind {
+                Kind::Water => Motion::Bob,
+                Kind::Eyes => Motion::Blink,
+                Kind::Stretch => Motion::Walk,
+            },
             accent,
             progress: 1.0,
             title: title.to_string(),
@@ -2813,12 +2853,14 @@ mod notices {
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
         match index % 12 {
+            10 => charger(true, 62),
+            11 => charger(false, 62),
             9 => health(Kind::Stretch, 50),
             8 => health(Kind::Eyes, 20),
             7 => health(Kind::Water, 60),
             6 => event("Rapat tim", 10, 14 * 60),
             0 => wifi("Rumah 5G", true),
-            1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(70)),
+            1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(99)),
             2 => low_battery(20),
             3 => wifi("Jaringan Kantor Lantai 3 dengan nama sangat panjang", true),
             4 => bluetooth("Galaxy Buds2 Pro".to_string(), false, true, None),
