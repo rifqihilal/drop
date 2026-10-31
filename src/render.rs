@@ -5,6 +5,7 @@
 //! what makes a webview-based notch heavy.
 
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::core::{w, Interface, Result, HSTRING};
@@ -43,7 +44,7 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, HPALETTE,
 };
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICFormatConverter,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmap, IWICFormatConverter,
     IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
     WICBitmapPaletteTypeMedianCut, WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnLoad,
     WICRect,
@@ -52,7 +53,9 @@ use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateMemStream, SIIGBF_RESIZETOFIT,
 };
-use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, PrivateExtractIconsW, UpdateLayeredWindow, HICON, ULW_ALPHA,
+};
 
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -409,6 +412,23 @@ fn unread_bell(scene: &Scene) -> bool {
 const THUMB_PIXELS: u32 = 96;
 /// App icons on the Screen Time card are made this many pixels square.
 const ICON_PIXELS: u32 = 48;
+
+/// `source` in the pixel format Direct2D bitmaps are made from.
+unsafe fn premultiplied(
+    wic: &IWICImagingFactory,
+    source: &IWICBitmap,
+) -> Result<IWICFormatConverter> {
+    let converter = wic.CreateFormatConverter()?;
+    converter.Initialize(
+        source,
+        &GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone,
+        None,
+        0.0,
+        WICBitmapPaletteTypeMedianCut,
+    )?;
+    Ok(converter)
+}
 
 /// The Screen Time switch between today and the week, on the card's left.
 fn usage_switch(x0: f32) -> D2D_RECT_F {
@@ -2477,8 +2497,27 @@ impl Renderer {
         self.usage_icons = icons;
     }
 
+    /// The icon inside the program's file. The shell's previews would do too,
+    /// but they load a dozen more libraries for good.
     unsafe fn app_icon(&self, path: &Path) -> Result<(ID2D1Bitmap, Option<[f32; 3]>)> {
-        let image = self.shell_image(path, ICON_PIXELS)?;
+        let mut file = [0u16; 260];
+        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if wide.len() >= file.len() {
+            return Err(windows::core::Error::empty());
+        }
+        file[..wide.len()].copy_from_slice(&wide);
+        let side = ICON_PIXELS as i32;
+        let mut icons = [HICON::default()];
+        let found = PrivateExtractIconsW(&file, 0, side, side, Some(&mut icons), None, 0);
+        let [icon] = icons;
+        if found == 0 || found == u32::MAX || icon.is_invalid() {
+            return Err(windows::core::Error::empty());
+        }
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let source = wic.CreateBitmapFromHICON(icon);
+        let _ = DestroyIcon(icon);
+        let image = premultiplied(&wic, &source?)?;
         let (mut width, mut height) = (0, 0);
         image.GetSize(&mut width, &mut height)?;
         let mut pixels = vec![0u8; (width * height * 4) as usize];
@@ -2487,17 +2526,12 @@ impl Renderer {
         Ok((bitmap, usage::icon_color(&pixels)))
     }
 
-    unsafe fn thumbnail(&self, path: &Path) -> Result<ID2D1Bitmap> {
-        let image = self.shell_image(path, THUMB_PIXELS)?;
-        self.target.CreateBitmapFromWicBitmap(&image, None)
-    }
-
     /// The shell's own preview: a picture for images and videos, the file
     /// type icon for everything else.
-    unsafe fn shell_image(&self, path: &Path, pixels: u32) -> Result<IWICFormatConverter> {
+    unsafe fn thumbnail(&self, path: &Path) -> Result<ID2D1Bitmap> {
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
-        let side = pixels as i32;
+        let side = THUMB_PIXELS as i32;
         let bitmap = factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT)?;
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
@@ -2507,16 +2541,8 @@ impl Renderer {
             WICBitmapUsePremultipliedAlpha,
         );
         let _ = DeleteObject(bitmap.into());
-        let converter = wic.CreateFormatConverter()?;
-        converter.Initialize(
-            &source?,
-            &GUID_WICPixelFormat32bppPBGRA,
-            WICBitmapDitherTypeNone,
-            None,
-            0.0,
-            WICBitmapPaletteTypeMedianCut,
-        )?;
-        Ok(converter)
+        let image = premultiplied(&wic, &source?)?;
+        self.target.CreateBitmapFromWicBitmap(&image, None)
     }
 
     /// The notch's dark blue, from near black to navy.

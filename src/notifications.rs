@@ -213,7 +213,7 @@ pub fn watch(hwnd: HWND) {
             return;
         };
         let mut known: Option<HashSet<u32>> = None;
-        let mut logos: HashMap<String, Option<Arc<Vec<u8>>>> = HashMap::new();
+        let mut logos: HashMap<String, Arc<Vec<u8>>> = HashMap::new();
         loop {
             if let Ok(toasts) = listener
                 .GetNotificationsAsync(NotificationKinds::Toast)
@@ -236,10 +236,13 @@ pub fn watch(hwnd: HWND) {
                     let total = shown.len();
                     let items = shown.into_iter().take(ROWS).map(|(id, mut item)| {
                         let toast = toasts.iter().find(|(known, _)| *known == id);
-                        item.logo = logos
-                            .entry(item.app_id.clone())
-                            .or_insert_with(|| toast.and_then(|(_, toast)| read_logo(toast)))
-                            .clone();
+                        // Only a logo that was read is kept: a failed read
+                        // gets another try with the next change.
+                        item.logo = logos.get(&item.app_id).cloned().or_else(|| {
+                            let logo = toast.and_then(|(_, toast)| read_logo(toast))?;
+                            logos.insert(item.app_id.clone(), logo.clone());
+                            Some(logo)
+                        });
                         item
                     });
                     let payload = Box::into_raw(Box::new(Inbox {

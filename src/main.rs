@@ -2412,6 +2412,7 @@ impl App {
             self.renderer = renderer;
             self.renderer.sync_thumbnails(self.shelf.items());
             self.sync_usage_icons();
+            self.renderer.sync_logos(&self.inbox.items);
             // Bitmaps belong to the old surface; decode the art again.
             let art = self.track.as_ref().and_then(|track| track.art.clone());
             self.renderer
