@@ -17,7 +17,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as Manager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
-use windows::Storage::Streams::DataReader;
+use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
@@ -72,6 +72,8 @@ pub enum Command {
     TogglePlay,
     Next,
     Previous,
+    /// Jump to this many seconds into the song.
+    Seek(f64),
 }
 
 enum Event {
@@ -264,13 +266,12 @@ fn windows_ticks_now() -> i64 {
 fn read_art(
     properties: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
 ) -> Option<Vec<u8>> {
-    let stream = properties
-        .Thumbnail()
-        .ok()?
-        .OpenReadAsync()
-        .ok()?
-        .get()
-        .ok()?;
+    read_image(&properties.Thumbnail().ok()?)
+}
+
+/// The bytes of an image Windows hands out by reference.
+pub fn read_image(image: &IRandomAccessStreamReference) -> Option<Vec<u8>> {
+    let stream = image.OpenReadAsync().ok()?.get().ok()?;
     let reader = DataReader::CreateDataReader(&stream).ok()?;
     let mut bytes = Vec::new();
     loop {
@@ -290,6 +291,9 @@ fn send_command(session: &Session, command: Command) {
         Command::TogglePlay => session.TryTogglePlayPauseAsync().and_then(|op| op.get()),
         Command::Next => session.TrySkipNextAsync().and_then(|op| op.get()),
         Command::Previous => session.TrySkipPreviousAsync().and_then(|op| op.get()),
+        Command::Seek(seconds) => session
+            .TryChangePlaybackPositionAsync((seconds * 10_000_000.0) as i64)
+            .and_then(|op| op.get()),
     };
 }
 

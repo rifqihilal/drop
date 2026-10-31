@@ -37,18 +37,19 @@ use windows::Win32::Graphics::Gdi::{
     DEFAULT_CHARSET, HBRUSH, HDC, HFONT, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
-    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, LoadCursorW, PostMessageW,
+    GetWindowTextLengthW, GetWindowTextW, IsChild, IsDialogMessageW, LoadCursorW, PostMessageW,
     RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetWindowTextW, ShowWindow,
     SystemParametersInfoW, EN_CHANGE, EN_KILLFOCUS, EN_SETFOCUS, ES_AUTOHSCROLL, HMENU, IDCANCEL,
     IDC_ARROW, IDC_HAND, IDOK, MSG, SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-    WM_SETCURSOR, WM_SETFONT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_SETCURSOR, WM_SETFONT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
 use crate::config::{self, NotchSize, Settings};
@@ -71,6 +72,8 @@ const ID_ELEVATION: usize = 105;
 const ID_REMIND: usize = 106;
 const ID_IDLE: usize = 107;
 const ID_ICAL: usize = 108;
+const ID_ICAL2: usize = 109;
+const ID_ICAL3: usize = 110;
 
 // Layout, in logical pixels.
 const SIDEBAR: f32 = 168.0;
@@ -117,7 +120,7 @@ const SEARCH_HINT: &str = "Cari nama kota, kabupaten atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, then opening
 /// the card by click.
-const TOGGLE_COUNT: usize = 21;
+const TOGGLE_COUNT: usize = 22;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -172,20 +175,19 @@ static PAGES: [Page; 9] = [
         top: CONTENT_TOP,
         groups: &[
             Group {
-                title: "Mulai",
-                rows: &[Row::Switch {
-                    toggle: 5,
-                    title: "Jalankan saat Windows menyala",
-                    note: "Drop terbuka sendiri setelah masuk Windows",
-                }],
-            },
-            Group {
-                title: "Suara",
-                rows: &[Row::Switch {
-                    toggle: 4,
-                    title: "Bunyi notifikasi",
-                    note: "Bunyi singkat saat notifikasi muncul",
-                }],
+                title: "Mulai & suara",
+                rows: &[
+                    Row::Switch {
+                        toggle: 5,
+                        title: "Jalankan saat Windows menyala",
+                        note: "Drop terbuka sendiri setelah masuk Windows",
+                    },
+                    Row::Switch {
+                        toggle: 4,
+                        title: "Bunyi notifikasi",
+                        note: "Bunyi singkat saat notifikasi muncul",
+                    },
+                ],
             },
             Group {
                 title: "Notch",
@@ -203,6 +205,11 @@ static PAGES: [Page; 9] = [
                         toggle: 18,
                         title: "Buka kartu dengan klik",
                         note: "Hover hanya melebarkan notch dan menampilkan tanggal",
+                    },
+                    Row::Switch {
+                        toggle: 21,
+                        title: "Efek pantul",
+                        note: "Notch dan kartu memantul saat melebar",
                     },
                     Row::Switch {
                         toggle: 11,
@@ -315,12 +322,26 @@ static PAGES: [Page; 9] = [
             },
             Group {
                 title: "Agenda",
-                rows: &[Row::Field {
-                    id: ID_ICAL,
-                    width: 240.0,
-                    title: "Tautan kalender",
-                    note: "Agenda dari tautan .ics",
-                }],
+                rows: &[
+                    Row::Field {
+                        id: ID_ICAL,
+                        width: 240.0,
+                        title: "Tautan kalender 1",
+                        note: "Tautan .ics, acaranya berwarna biru",
+                    },
+                    Row::Field {
+                        id: ID_ICAL2,
+                        width: 240.0,
+                        title: "Tautan kalender 2",
+                        note: "Tautan .ics, acaranya berwarna hijau",
+                    },
+                    Row::Field {
+                        id: ID_ICAL3,
+                        width: 240.0,
+                        title: "Tautan kalender 3",
+                        note: "Tautan .ics, acaranya berwarna merah",
+                    },
+                ],
             },
         ],
     },
@@ -589,13 +610,24 @@ pub fn open(notch: HWND) {
     }
 }
 
-/// Gives the settings window keyboard navigation (Tab, Enter, Esc) when the
-/// message is for it. Call from the message loop.
+/// Gives the settings window keyboard navigation (Tab, Enter, Esc) and
+/// Ctrl+A in its fields, which EDIT controls leave out, when the message is
+/// for it. Call from the message loop.
 pub fn handle_dialog_message(msg: &MSG) -> bool {
     let hwnd = WINDOW.with(|cell| cell.try_borrow().ok()?.as_ref().map(|w| w.hwnd));
-    match hwnd {
-        Some(hwnd) => unsafe { IsDialogMessageW(hwnd, msg).as_bool() },
-        None => false,
+    let Some(hwnd) = hwnd else {
+        return false;
+    };
+    unsafe {
+        let select_all = msg.message == WM_KEYDOWN
+            && msg.wParam.0 == usize::from(b'A')
+            && GetKeyState(VK_CONTROL.0 as i32) < 0
+            && IsChild(hwnd, msg.hwnd).as_bool();
+        if select_all {
+            SendMessageW(msg.hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+            return true;
+        }
+        IsDialogMessageW(hwnd, msg).as_bool()
     }
 }
 
@@ -714,7 +746,9 @@ impl Window {
             (ID_ELEVATION, settings.elevation.to_string()),
             (ID_REMIND, settings.remind_minutes.to_string()),
             (ID_IDLE, settings.idle_minutes.to_string()),
-            (ID_ICAL, settings.ical_url.clone()),
+            (ID_ICAL, settings.ical_urls[0].clone()),
+            (ID_ICAL2, settings.ical_urls[1].clone()),
+            (ID_ICAL3, settings.ical_urls[2].clone()),
         ];
         let mut fields = Vec::new();
         for (id, text) in field_specs {
@@ -774,6 +808,7 @@ impl Window {
                 settings.open_on_click,
                 settings.notify_apps,
                 settings.shelf_screenshots,
+                settings.card_bounce,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1013,9 +1048,10 @@ impl Window {
             notify_prayer: self.toggles[3],
             notify_apps: self.toggles[19],
             shelf_screenshots: self.toggles[20],
+            card_bounce: self.toggles[21],
             sound: self.toggles[4],
             idle_minutes: idle,
-            ical_url: self.text(ID_ICAL).trim().to_string(),
+            ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),
             weather: self.toggles[6],
             module_music: self.toggles[7],
             module_calendar: self.toggles[8],

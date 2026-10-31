@@ -15,15 +15,17 @@ use std::time::Duration;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
+use crate::config::FEEDS;
 use crate::{calendar, net, prayer};
 
 /// New events. LPARAM: a `Box<Vec<Event>>`.
 pub const EVENTS_MSG: u32 = WM_APP + 13;
 const REFRESH: Duration = Duration::from_secs(15 * 60);
 const RETRY: Duration = Duration::from_secs(5 * 60);
-/// Days kept before and after today: enough for the calendar's nearby months.
-const DAYS_BEFORE: i64 = 40;
-const DAYS_AFTER: i64 = 70;
+/// Days kept before and after today: the calendar shows a year ahead and a
+/// few months back.
+const DAYS_BEFORE: i64 = 100;
+const DAYS_AFTER: i64 = 370;
 /// Bound on the steps through one repeating event.
 const MAX_STEPS: i64 = 5000;
 
@@ -34,6 +36,35 @@ pub struct Event {
     /// Local minutes after midnight; None for an all-day event.
     pub minute: Option<u32>,
     pub summary: String,
+    /// Which of the feeds it came from, which gives it its colour.
+    pub source: usize,
+}
+
+/// `events` that fall in a month, leaving out those before `after`, a day
+/// and a minute.
+pub fn in_month(
+    events: &[Event],
+    (year, month): (i32, u32),
+    after: Option<(i64, u32)>,
+) -> Vec<&Event> {
+    events
+        .iter()
+        .filter(|event| {
+            let (y, m, _) = calendar::civil_from_days(event.day);
+            (y, m) == (year, month)
+        })
+        .filter(|event| {
+            after.is_none_or(|(day, minute)| {
+                event.day > day
+                    || event.day == day && event.minute.is_none_or(|start| start >= minute)
+            })
+        })
+        .collect()
+}
+
+fn by_time(a: &Event, b: &Event) -> std::cmp::Ordering {
+    let key = |event: &Event| (event.day, event.minute.map_or(-1, i64::from));
+    key(a).cmp(&key(b))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,11 +185,10 @@ pub fn parse(text: &str, from: i64, to: i64, offset_minutes: i32) -> Vec<Event> 
             day,
             minute,
             summary: summary.clone(),
+            source: 0,
         }));
     }
-    events.sort_by(|a, b| {
-        (a.day, a.minute.map_or(-1, |m| m as i64)).cmp(&(b.day, b.minute.map_or(-1, |m| m as i64)))
-    });
+    events.sort_by(by_time);
     events
 }
 
@@ -322,47 +352,51 @@ fn occurrences(rule: &Rule, start: i64, from: i64, to: i64) -> Vec<i64> {
     found
 }
 
-/// The feed to fetch, or None to stop.
+/// The feeds to fetch; blank ones are skipped.
 pub struct IcalWatch {
-    url: Sender<Option<String>>,
+    feeds: Sender<[String; FEEDS]>,
 }
 
 impl IcalWatch {
     pub fn start(hwnd: HWND) -> Self {
-        let (url, inbox) = channel::<Option<String>>();
+        let (feeds, inbox) = channel::<[String; FEEDS]>();
         let target = hwnd.0 as isize;
         std::thread::spawn(move || {
-            let mut feed: Option<String> = None;
+            let mut urls: [String; FEEDS] = Default::default();
+            // What each feed gave last, kept while it cannot be reached.
+            let mut found: [Vec<Event>; FEEDS] = Default::default();
             let mut wait = REFRESH;
             loop {
                 match inbox.recv_timeout(wait) {
-                    Ok(new) => feed = new,
+                    Ok(new) => urls = new,
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
-                let Some(url) = feed.as_deref() else {
-                    wait = REFRESH;
-                    continue;
-                };
-                match fetch(url) {
-                    Some(events) => {
-                        post(target, events);
-                        wait = REFRESH;
+                wait = REFRESH;
+                for (source, url) in urls.iter().enumerate() {
+                    if url.trim().is_empty() {
+                        found[source].clear();
+                    } else if let Some(events) = fetch(url, source) {
+                        found[source] = events;
+                    } else {
+                        wait = RETRY;
                     }
-                    None => wait = RETRY,
                 }
+                let mut events: Vec<Event> = found.iter().flatten().cloned().collect();
+                events.sort_by(by_time);
+                post(target, events);
             }
         });
-        Self { url }
+        Self { feeds }
     }
 
-    /// Fetches now from `url` (None or blank stops).
-    pub fn set_url(&self, url: Option<String>) {
-        let _ = self.url.send(url.filter(|url| !url.trim().is_empty()));
+    /// Fetches now from `urls`.
+    pub fn set_feeds(&self, urls: [String; FEEDS]) {
+        let _ = self.feeds.send(urls);
     }
 }
 
-fn fetch(url: &str) -> Option<Vec<Event>> {
+fn fetch(url: &str, source: usize) -> Option<Vec<Event>> {
     let body = net::get_url(url)?;
     let text = String::from_utf8_lossy(&body);
     if !text.contains("BEGIN:VCALENDAR") {
@@ -371,12 +405,11 @@ fn fetch(url: &str) -> Option<Vec<Event>> {
     let (year, month, day) = prayer::today();
     let today = calendar::days_from_civil(year as i32, month as u32, day as u32);
     let offset = (prayer::utc_offset_hours() * 60.0).round() as i32;
-    Some(parse(
-        &text,
-        today - DAYS_BEFORE,
-        today + DAYS_AFTER,
-        offset,
-    ))
+    let mut events = parse(&text, today - DAYS_BEFORE, today + DAYS_AFTER, offset);
+    for event in &mut events {
+        event.source = source;
+    }
+    Some(events)
 }
 
 fn post(target: isize, events: Vec<Event>) {
@@ -408,6 +441,41 @@ mod tests {
 
     fn day(year: i32, month: u32, date: u32) -> i64 {
         calendar::days_from_civil(year, month, date)
+    }
+
+    fn event(day: i64, minute: Option<u32>) -> Event {
+        Event {
+            day,
+            minute,
+            summary: String::new(),
+            source: 0,
+        }
+    }
+
+    #[test]
+    fn a_month_holds_only_its_own_events() {
+        let events = [
+            event(day(2026, 10, 31), None),
+            event(day(2026, 11, 1), Some(600)),
+            event(day(2026, 11, 2), None),
+            event(day(2026, 12, 1), None),
+        ];
+        let november = in_month(&events, (2026, 11), None);
+        assert_eq!(november.len(), 2);
+    }
+
+    #[test]
+    fn a_month_can_start_from_now() {
+        let today = day(2026, 11, 1);
+        let events = [
+            event(today, Some(500)),
+            event(today, Some(700)),
+            event(today, None),
+            event(today + 1, Some(1)),
+        ];
+        let left = in_month(&events, (2026, 11), Some((today, 600)));
+        assert_eq!(left.len(), 3);
+        assert_eq!(left[0].minute, Some(700));
     }
 
     fn feed(events: &str) -> String {

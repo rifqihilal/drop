@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::notifications::AppNotice;
+
 /// Notch size while the computer is in use (logical pixels).
 pub const COMPACT: (f32, f32) = (156.0, 28.0);
 /// The closed notch at the small and large settings.
@@ -10,7 +12,7 @@ pub const COMPACT_LARGE: (f32, f32) = (184.0, 34.0);
 /// Notch size in the minimal setting: a thin bar that leaves browser tabs free.
 pub const MINIMAL: (f32, f32) = (120.0, 6.0);
 /// Notch size while hovered in click-to-open mode: widened for the date.
-pub const PEEK: (f32, f32) = (320.0, 30.0);
+pub const PEEK: (f32, f32) = (360.0, 30.0);
 /// Notch size while the computer is idle and the eyes are showing.
 pub const IDLE: (f32, f32) = (164.0, 40.0);
 /// Notch size while showing the volume or brightness level.
@@ -18,6 +20,20 @@ pub const LEVEL: (f32, f32) = (220.0, 36.0);
 /// Notch width range and height while showing a notification.
 pub const NOTICE_WIDTH: (f32, f32) = (200.0, 380.0);
 pub const NOTICE_HEIGHT: f32 = 62.0;
+/// Notch width limits and height while a new song is announced: a row with
+/// the cover and date, and a line for its name.
+pub const SONG_BANNER: (f32, f32) = (360.0, 58.0);
+const SONG_BANNER_MAX: f32 = 480.0;
+/// Notch size in lyric mode at its narrowest. A song keeps one width, set
+/// once by its longest line, up to the most.
+pub const LYRIC_STRIP: (f32, f32) = (280.0, 30.0);
+pub const LYRIC_STRIP_MAX: f32 = 540.0;
+/// The music card's extra width in lyric mode, for the lines.
+pub const LYRIC_CARD_EXTRA: f32 = 120.0;
+/// Room the window keeps for a card overshooting as it opens.
+pub const CARD_BOUNCE: (f32, f32) = (30.0, 16.0);
+/// Notch size while showing a notification from another app.
+pub const APP_BANNER: (f32, f32) = (420.0, 112.0);
 /// Notch size while music plays: album art and level bars.
 pub const MUSIC_STRIP: (f32, f32) = (196.0, 30.0);
 /// Every open card is this wide: a page between two side arrows.
@@ -39,8 +55,12 @@ pub const TODO_ROW: f32 = 28.0;
 pub const AGENDA_ROWS: usize = 3;
 /// Notch size while the Pomodoro timer runs.
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
-/// Notch size while a prayer is close: the clock with the name and wait.
-pub const PRAYER_STRIP: (f32, f32) = (276.0, 30.0);
+/// Notch size while a prayer reminder shows: only wider than the clock.
+pub const PRAYER_BANNER: (f32, f32) = (276.0, 30.0);
+/// Damping of the notch's shape: close to no overshoot, and for a card a
+/// little less, which makes it bounce.
+const DAMPING: f32 = 30.0;
+const CARD_DAMPING: f32 = 17.0;
 /// How long the level stays up after the last change.
 const LEVEL_DURATION: Duration = Duration::from_millis(1600);
 /// How long a notification stays up by default.
@@ -209,6 +229,12 @@ pub enum Content {
         muted: bool,
     },
     Notice(Notice),
+    /// A notification from another app, which a click opens.
+    App(AppNotice),
+    /// A prayer reminder: the icon on the left, this text on the right.
+    Prayer(String),
+    /// A new song: its title and artist under the clock.
+    Song(String),
 }
 
 /// Colour of a notice's ring and accent icon.
@@ -253,6 +279,8 @@ pub struct Banner {
 
 /// The notch's animated state.
 pub struct Notch {
+    /// The card and the widened notch bounce as they open.
+    pub bounce: bool,
     pub width: Spring,
     pub height: Spring,
     /// How visible the eyes are, 0..1.
@@ -290,8 +318,9 @@ pub struct Notch {
 impl Notch {
     pub fn new(now: Instant, seed: u64) -> Self {
         Self {
-            width: Spring::new(COMPACT.0, 240.0, 30.0, 0.05),
-            height: Spring::new(COMPACT.1, 240.0, 30.0, 0.05),
+            bounce: true,
+            width: Spring::new(COMPACT.0, 240.0, DAMPING, 0.05),
+            height: Spring::new(COMPACT.1, 240.0, DAMPING, 0.05),
             eyes_visible: Spring::new(0.0, 260.0, 32.0, 0.002),
             eyes: Eyes::new(now, seed),
             banner_visible: Spring::new(0.0, 320.0, 34.0, 0.002),
@@ -363,6 +392,54 @@ impl Notch {
             until: now + duration,
         });
         self.activate();
+    }
+
+    /// Announces a new song.
+    pub fn show_song(&mut self, song: String, width: f32, duration: Duration, now: Instant) {
+        self.banner = Some(Banner {
+            content: Content::Song(song),
+            size: (width.clamp(SONG_BANNER.0, SONG_BANNER_MAX), SONG_BANNER.1),
+            until: now + duration,
+        });
+        self.activate();
+    }
+
+    /// Shows a prayer reminder.
+    pub fn show_prayer(&mut self, label: String, duration: Duration, now: Instant) {
+        self.banner = Some(Banner {
+            content: Content::Prayer(label),
+            size: (PRAYER_BANNER.0 * self.scale, PRAYER_BANNER.1 * self.scale),
+            until: now + duration,
+        });
+        self.activate();
+    }
+
+    /// Shows a notification from another app.
+    pub fn show_app(&mut self, notice: AppNotice, duration: Duration, now: Instant) {
+        self.banner = Some(Banner {
+            content: Content::App(notice),
+            size: APP_BANNER,
+            until: now + duration,
+        });
+        self.activate();
+    }
+
+    /// The app notification showing now, if any.
+    pub fn app_banner(&self) -> Option<&AppNotice> {
+        match self.banner.as_ref().filter(|_| self.banner_active)? {
+            Banner {
+                content: Content::App(notice),
+                ..
+            } => Some(notice),
+            _ => None,
+        }
+    }
+
+    /// Takes the banner down now, as if its time had run out.
+    pub fn end_banner(&mut self, now: Instant) {
+        if let Some(banner) = self.banner.as_mut() {
+            banner.until = now;
+        }
     }
 
     /// Swaps in new content for the notice still showing under the same title,
@@ -452,6 +529,15 @@ impl Notch {
         };
         self.width.target = w;
         self.height.target = h;
+        // A card or the widened notch bounces open; everything else settles
+        // without one.
+        let damping = if self.bounce && (card.is_some() || peek) {
+            CARD_DAMPING
+        } else {
+            DAMPING
+        };
+        self.width.damping = damping;
+        self.height.damping = damping;
         let on = |visible: bool| if visible { 1.0 } else { 0.0 };
         self.banner_visible.target = on(banner);
         self.card_visible.target = on(card.is_some());

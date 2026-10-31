@@ -7,6 +7,9 @@ use std::time::SystemTime;
 use crate::health;
 use crate::prayer::Location;
 
+/// How many calendar links the agenda takes.
+pub const FEEDS: usize = 3;
+
 /// How large the closed notch is; open cards keep one size.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum NotchSize {
@@ -62,9 +65,12 @@ pub struct Settings {
     pub notch_minimal: bool,
     /// Hovering only widens the notch; a click opens the card.
     pub open_on_click: bool,
+    /// The card and the widened notch bounce as they open.
+    pub card_bounce: bool,
     pub notch_size: NotchSize,
-    /// Link to an iCalendar feed for the agenda; empty when none.
-    pub ical_url: String,
+    /// Links to iCalendar feeds for the agenda; each slot has its colour,
+    /// and an empty one is unused.
+    pub ical_urls: [String; FEEDS],
     /// Health reminders, each after its minutes of use.
     pub water: bool,
     pub water_minutes: u32,
@@ -100,8 +106,9 @@ impl Default for Settings {
             module_lyrics: true,
             notch_minimal: false,
             open_on_click: false,
+            card_bounce: true,
             notch_size: NotchSize::Normal,
-            ical_url: String::new(),
+            ical_urls: Default::default(),
             water: true,
             water_minutes: 60,
             eyes: false,
@@ -204,6 +211,8 @@ impl Settings {
              notch_kecil = {}\n\
              ; Hover hanya melebarkan notch, kartu terbuka saat diklik.\n\
              buka_klik = {}\n\
+             ; Notch dan kartu memantul saat melebar.\n\
+             pantulan = {}\n\
              ; Ukuran notch: kecil, normal atau besar.\n\
              ukuran_notch = {}\n\
              \n\
@@ -211,6 +220,8 @@ impl Settings {
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
              ; dalam format iCal). Kosongkan untuk mematikan agenda.\n\
              ical = {}\n\
+             ical2 = {}\n\
+             ical3 = {}\n\
              \n\
              [kesehatan]\n\
              ; Pengingat setelah sekian menit memakai komputer; menjauh dari\n\
@@ -244,8 +255,11 @@ impl Settings {
             flag(self.module_lyrics),
             flag(self.notch_minimal),
             flag(self.open_on_click),
+            flag(self.card_bounce),
             self.notch_size.name(),
-            self.ical_url,
+            self.ical_urls[0],
+            self.ical_urls[1],
+            self.ical_urls[2],
             health::BREAK_MINUTES,
             flag(self.water),
             self.water_minutes,
@@ -332,6 +346,7 @@ fn parse(text: &str) -> Settings {
             "lirik" => s.module_lyrics = flag(true),
             "notch_kecil" => s.notch_minimal = flag(false),
             "buka_klik" => s.open_on_click = flag(false),
+            "pantulan" => s.card_bounce = flag(true),
             "ukuran_notch" => {
                 s.notch_size = match value.to_lowercase().as_str() {
                     "kecil" => NotchSize::Small,
@@ -339,7 +354,9 @@ fn parse(text: &str) -> Settings {
                     _ => NotchSize::Normal,
                 }
             }
-            "ical" => s.ical_url = value.to_string(),
+            "ical" => s.ical_urls[0] = value.to_string(),
+            "ical2" => s.ical_urls[1] = value.to_string(),
+            "ical3" => s.ical_urls[2] = value.to_string(),
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
             "istirahat_mata" => s.eyes = flag(false),
@@ -389,10 +406,14 @@ mod tests {
             module_lyrics: false,
             notch_minimal: true,
             open_on_click: true,
+            card_bounce: false,
             notch_size: NotchSize::Large,
-            ical_url:
+            ical_urls: [
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),
+                String::new(),
+                "https://example.com/kerja.ics".to_string(),
+            ],
             water: false,
             water_minutes: 45,
             eyes: true,

@@ -7,6 +7,7 @@
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::core::{implement, Result, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HGLOBAL;
@@ -44,13 +45,15 @@ use windows::Win32::System::SystemServices::{
     GUID_ACDC_POWER_SOURCE, GUID_BATTERY_PERCENTAGE_REMAINING,
     GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
 };
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
 use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState, DROPFILES, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, PostMessageW,
-    DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_APP,
+    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, PostMessageW, SetWindowPos,
+    DEVICE_NOTIFY_WINDOW_HANDLE, EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST, PBT_POWERSETTINGCHANGE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WINEVENT_OUTOFCONTEXT, WM_APP,
 };
 
 /// Volume changed. WPARAM: level in per mille, LPARAM: 1 when muted.
@@ -298,6 +301,55 @@ pub fn battery_status() -> Option<(u32, bool)> {
     }
     let charging = status.ACLineStatus == 1 || status.BatteryFlag & 8 != 0;
     Some((u32::from(status.BatteryLifePercent), charging))
+}
+
+/// Another window came to the front. Windows sometimes leaves a topmost
+/// window under ordinary ones then, so the notch takes its place back.
+pub const FOREGROUND_MSG: u32 = WM_APP + 17;
+
+static NOTCH: AtomicIsize = AtomicIsize::new(0);
+
+unsafe extern "system" fn foreground_changed(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    post(NOTCH.load(Ordering::Relaxed), FOREGROUND_MSG, 0, 0);
+}
+
+/// Asks for [`FOREGROUND_MSG`] whenever the foreground window changes.
+pub fn watch_foreground(hwnd: HWND) {
+    NOTCH.store(hwnd.0 as isize, Ordering::Relaxed);
+    unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
+    }
+}
+
+/// Puts the notch back above every ordinary window, without taking the focus.
+pub fn stay_on_top(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
 }
 
 /// True while another app fills the notch's monitor (a game, a full-screen

@@ -75,7 +75,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     Accent, LevelKind, Notch, Notice, Trailing, CARD, CARD_NAV, COMPACT, COMPACT_LARGE,
-    COMPACT_SMALL, DROP_ZONE, MUSIC_STRIP, PRAYER_STRIP, TIMER_STRIP,
+    COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX, MUSIC_STRIP,
+    TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -85,10 +86,11 @@ use health::Health;
 use ical::{Event, IcalWatch};
 use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
+use notifications::{AppNotice, Inbox};
 use render::{
-    glyph, AgendaItem, CalendarControl, CalendarScene, MusicScene, Page, PomodoroControl,
-    PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerScene, TodoHit,
-    TodoScene, WeatherScene,
+    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, InboxRow, InboxScene, MusicScene,
+    Page, PomodoroControl, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
+    TimerScene, TodoHit, TodoScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -118,8 +120,18 @@ const BATTERY_DELAY: Duration = Duration::from_millis(2500);
 /// Frame interval for the music level bars (~15 fps keeps them light).
 const BARS_MS: u32 = 40;
 const BAR_SPEEDS: [f32; 4] = [9.0, 13.0, 7.5, 15.0];
-/// How long the music card opens for a new song.
-const SONG_CARD: Duration = Duration::from_secs(4);
+/// How much of each new peak joins the running loudness of the song.
+const BAR_AVERAGING: f32 = 0.03;
+/// Bar height for a peak as loud as that running loudness, 0..1.
+const BAR_GAIN: f32 = 0.55;
+/// Peaks below this count as silence.
+const BAR_SILENCE: f32 = 0.002;
+/// How long a new song is announced.
+const SONG_SHOWN: Duration = Duration::from_secs(4);
+/// How fast a control zooms in and out under the mouse.
+const ZOOM_SPEED: f32 = 18.0;
+/// How long a new lyric line takes to roll into place.
+const LYRIC_ROLL: Duration = Duration::from_millis(350);
 /// The mouse rests this long on the notch before the music card opens.
 const HOVER_DELAY: Duration = Duration::from_millis(150);
 /// The card stays open this long after the mouse leaves.
@@ -128,12 +140,15 @@ const LEAVE_GRACE: Duration = Duration::from_millis(400);
 const SHELF_SHOWN: Duration = Duration::from_secs(3);
 /// How long a shelf tile says its file was copied.
 const COPIED_SHOWN: Duration = Duration::from_millis(1500);
+/// How long a notification from another app stays up.
+const APP_BANNER_SHOWN: Duration = Duration::from_secs(6);
 /// Logical pixels a pressed shelf tile must move before it is dragged out.
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
 const PAGE_SWITCH: Duration = Duration::from_millis(260);
-/// A prayer this many minutes away or closer shows in the closed notch.
-const PRAYER_SOON_MINUTES: u32 = 30;
+/// A prayer's arrival is still announced this many minutes after its time,
+/// so a minute's tick that runs late does not miss it.
+const PRAYER_ARRIVAL_MINUTES: u32 = 2;
 /// How long the card stays open after Alt+N.
 const KEY_CARD: Duration = Duration::from_secs(8);
 const HOTKEY_ID: i32 = 1;
@@ -192,6 +207,8 @@ struct App {
     card_until: Option<Instant>,
     bars: [f32; 4],
     bar_phase: f32,
+    /// Running loudness of the song, which the bars are measured against.
+    peak_average: f32,
     pomodoro: Pomodoro,
     /// Months away from the current one on the calendar page.
     month_offset: i32,
@@ -209,18 +226,37 @@ struct App {
     shelf_hover: Option<usize>,
     /// Shelf tile just copied, and when.
     shelf_copied: Option<(usize, Instant)>,
+    /// What the Windows notification center holds.
+    inbox: Inbox,
+    /// A notification came in and its page has not been seen since.
+    unread: bool,
+    /// Notification row under the mouse.
+    inbox_hover: Option<usize>,
     /// A shelf tile pressed and the logical point it was pressed at.
     press: Option<(usize, f32, f32)>,
     /// Which page the open card shows when there is music.
     page: Page,
     /// The page dots have opened into page icons.
     nav_open: bool,
+    /// What the mouse is on that zooms in, see [`render::zoom`].
+    hover_zoom: Option<u16>,
+    /// What is zoomed in and how far, 0..1, easing in and out.
+    zooms: Vec<(u16, f32)>,
+    /// The mouse is on an app notification.
+    banner_hover: bool,
     /// The volume slider is being dragged.
     volume_drag: bool,
     /// The volume slider is open under the mouse.
     volume_open: bool,
     /// The lyrics button on the music card is on.
     show_lyrics: bool,
+    /// The search found no lyrics for this song.
+    lyrics_missing: bool,
+    /// Strip width for this song's longest lyric line.
+    lyric_strip: f32,
+    /// The lyric line sung, and when it took over from the last one.
+    lyric_line: Option<usize>,
+    lyric_moved: Option<Instant>,
     /// Click-to-open mode: the card was clicked open and stays while hovered.
     card_clicked: bool,
     weather_watch: WeatherWatch,
@@ -267,6 +303,7 @@ struct PrayerDay {
     date: (u16, u16, u16),
     times: prayer::Schedule,
     reminded: [bool; 5],
+    arrived: [bool; 5],
 }
 
 impl PrayerDay {
@@ -283,6 +320,7 @@ impl PrayerDay {
             date,
             times,
             reminded: [false; 5],
+            arrived: [false; 5],
         }
     }
 
@@ -369,6 +407,7 @@ fn main() -> Result<()> {
             card_until: None,
             bars: [0.0; 4],
             bar_phase: 0.0,
+            peak_average: 0.0,
             pomodoro: Pomodoro::default(),
             month_offset: 0,
             page_switch: None,
@@ -378,15 +417,25 @@ fn main() -> Result<()> {
             drag_over: false,
             shelf_hover: None,
             shelf_copied: None,
+            inbox: Inbox::default(),
+            unread: false,
+            inbox_hover: None,
             todo: Todo::load(),
             todo_hover: None,
             editing: None,
             press: None,
             page: Page::Music,
             nav_open: false,
+            hover_zoom: None,
+            zooms: Vec::new(),
+            banner_hover: false,
             volume_drag: false,
             volume_open: false,
-            show_lyrics: true,
+            show_lyrics: false,
+            lyrics_missing: false,
+            lyric_strip: 0.0,
+            lyric_line: None,
+            lyric_moved: None,
             card_clicked: false,
             weather_watch: WeatherWatch::start(hwnd),
             ical_watch: IcalWatch::start(hwnd),
@@ -419,6 +468,8 @@ fn main() -> Result<()> {
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // After the app exists: Windows answers right away with the current values.
         system::watch_power(hwnd);
+        system::stay_on_top(hwnd);
+        system::watch_foreground(hwnd);
         screenshots::watch(hwnd);
         notifications::watch(hwnd);
         if has_flag("--settings") {
@@ -474,7 +525,17 @@ impl App {
         if let Some((index, at)) = self.demo {
             if now >= at {
                 self.demo = Some((index + 1, now + DEMO_STEP));
-                self.notify(notices::demo(index));
+                match index % 13 {
+                    10 => self.notify_prayer("Dzuhur 5 menit lagi".to_string()),
+                    11 => self.notify_prayer("Waktunya Dzuhur".to_string()),
+                    12 => self.notch.show_song(
+                        "Judul lagu \u{b7} Nama penyanyi".to_string(),
+                        220.0,
+                        SONG_SHOWN,
+                        now,
+                    ),
+                    _ => self.notify(notices::demo(index)),
+                }
             }
         }
         let clock = current_clock();
@@ -498,14 +559,18 @@ impl App {
         if !switching {
             self.page_switch = None;
         }
-        let moving = self.notch.step(now, dt) || switching;
+        let rolling = self.update_lyric_roll(now);
+        let zooming = self.step_zooms(dt);
+        let moving = self.notch.step(now, dt) || switching || rolling || zooming;
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
         let card_open = self.notch.card_visible.value > 0.01;
         // A running timer counts down every second, in the strip or the card.
         let timer_running = self.pomodoro.running();
 
-        if moving || clock_changed || bars_moving || card_open || timer_running {
+        // In lyric mode the strip's line moves on with the song.
+        let lyric_strip = self.strip() == Strip::Music && self.shown_lyric().is_some();
+        if moving || clock_changed || bars_moving || card_open || timer_running || lyric_strip {
             self.draw();
         }
         // Typing needs the cursor to blink on time.
@@ -513,6 +578,7 @@ impl App {
             || self.battery_check.is_some()
             || self.demo.is_some()
             || self.editing.is_some()
+            || lyric_strip
             // Lyrics move on with the song.
             || (card_open && self.shown_page() == Page::Music && self.shown_lyric().is_some());
         self.schedule(if moving {
@@ -543,18 +609,23 @@ impl App {
             (None, Some(_)) => true,
             _ => false,
         };
-        // A new song opens the card for a moment; the song already playing
-        // when Drop starts does not.
-        if new_song
-            && self.tracks_seen
-            && self.settings.module_music
-            && track.as_ref().is_some_and(|t| t.playing)
-        {
-            self.card_until = Some(now + SONG_CARD);
-            self.page = Page::Music;
+        // A new song is announced for a moment; the song already playing when
+        // Drop starts is not.
+        if let Some(track) = track.as_ref().filter(|track| {
+            new_song && self.tracks_seen && self.settings.module_music && track.playing
+        }) {
+            let song = if track.artist.is_empty() {
+                track.title.clone()
+            } else {
+                format!("{} \u{2014} {}", track.title, track.artist)
+            };
+            let width = self.renderer.song_banner_width(&song);
+            self.notch.show_song(song, width, SONG_SHOWN, now);
         }
         if new_song {
             self.lyrics = None;
+            self.lyrics_missing = false;
+            self.lyric_strip = 0.0;
             if let Some(track) = track.as_ref().filter(|_| self.settings.module_lyrics) {
                 self.lyrics_watch
                     .request(&track.artist, &track.title, track.duration);
@@ -582,33 +653,45 @@ impl App {
             || self.editing.is_some();
         self.notch.set_peek(hovering && by_click && !open);
         if !open {
-            // The next opening starts on the first page, this month.
-            self.page = Page::Music;
+            // The next opening starts on the first page, this month, unless
+            // notifications are waiting to be seen.
+            self.page = self.opening_page();
             self.month_offset = 0;
             self.page_switch = None;
             self.nav_open = false;
             self.volume_open = false;
+        } else if self.notch.card_visible.value >= 0.5 && self.shown_page() == Page::Notifications {
+            self.unread = false;
         }
         self.notch.set_nav(self.nav_open);
         self.notch.set_volume(self.volume_open);
+        let lyric_mode = self.shown_lyric().is_some();
+        let extra = if lyric_mode && self.shown_page() == Page::Music {
+            LYRIC_CARD_EXTRA
+        } else {
+            0.0
+        };
         let card = open.then_some(if self.drag_over {
             DROP_ZONE
         } else if self.nav_open {
-            CARD_NAV
+            (CARD_NAV.0 + extra, CARD_NAV.1)
         } else {
-            CARD
+            (CARD.0 + extra, CARD.1)
         });
         let strip = match self.strip() {
             Strip::Timer => Some(TIMER_STRIP),
+            Strip::Music if lyric_mode => Some((
+                self.lyric_strip.clamp(LYRIC_STRIP.0, LYRIC_STRIP_MAX),
+                LYRIC_STRIP.1,
+            )),
             Strip::Music => Some(MUSIC_STRIP),
-            Strip::Prayer => Some(PRAYER_STRIP),
             Strip::None => None,
         };
         self.notch.set_live(strip, card);
     }
 
     /// What the closed notch shows beside the clock: a running or paused
-    /// timer first, then music that is playing, then a prayer close at hand.
+    /// timer first, then music that is playing.
     fn strip(&self) -> Strip {
         let modules = &self.settings;
         if modules.notch_minimal {
@@ -617,21 +700,9 @@ impl App {
             Strip::Timer
         } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
-        } else if modules.module_prayer && self.prayer_soon().is_some() {
-            Strip::Prayer
         } else {
             Strip::None
         }
-    }
-
-    /// "Maghrib 12 mnt" while the next prayer is less than half an hour away.
-    fn prayer_soon(&self) -> Option<String> {
-        let day = self.prayer.as_ref()?;
-        let now = minutes_now();
-        let next = day.next(now)?;
-        let wait = day.times[next] - now;
-        (wait <= PRAYER_SOON_MINUTES)
-            .then(|| format!("{} {}", prayer::NAMES[next], prayer::format_wait(wait)))
     }
 
     /// The track playing, unless the music module is off.
@@ -648,10 +719,13 @@ impl App {
             pages.push(Page::Music);
         }
         pages.push(Page::Status);
+        if modules.notify_apps {
+            pages.push(Page::Notifications);
+        }
         if modules.module_prayer && self.prayer.is_some() {
             pages.push(Page::Prayer);
         }
-        if modules.module_calendar || !modules.ical_url.is_empty() {
+        if modules.module_calendar || modules.ical_urls.iter().any(|url| !url.is_empty()) {
             pages.push(Page::Calendar);
         }
         if modules.module_calendar {
@@ -699,10 +773,53 @@ impl App {
         self.tick();
     }
 
-    fn on_app_notice(&mut self, notice: notifications::AppNotice) {
-        if self.settings.notify_apps {
-            self.notify(notices::app(&notice));
-            self.tick();
+    /// The notification center changed. What just arrived shows as a notice,
+    /// and stays marked until its page has been seen.
+    fn on_inbox(&mut self, inbox: Inbox) {
+        self.inbox = inbox;
+        self.renderer.sync_logos(&self.inbox.items);
+        if self.inbox.items.is_empty() || !self.settings.notify_apps {
+            self.unread = false;
+        } else if self.inbox.fresh {
+            self.unread = true;
+            if self.settings.sound {
+                chime();
+            }
+            let notice = self.inbox.items[0].clone();
+            self.notch
+                .show_app(notice, APP_BANNER_SHOWN, Instant::now());
+            self.schedule(FRAME_MS);
+        }
+        self.tick();
+    }
+
+    /// Opens the app a notification came from and takes the notification
+    /// away, as clicking a Windows toast does. Windows keeps a toast's own
+    /// action to itself, so this reaches the app, not the message.
+    fn open_notice(&mut self, notice: &AppNotice) {
+        if !notice.app_id.is_empty() {
+            open_file(Path::new(&format!("shell:AppsFolder\\{}", notice.app_id)));
+        }
+        notifications::remove(notice.id);
+    }
+
+    fn inbox_scene(&self) -> InboxScene<'_> {
+        let now = notifications::now_seconds();
+        let rows = self.inbox.items.iter().map(|item| InboxRow {
+            title: &item.title,
+            app_id: &item.app_id,
+            detail: if item.app.is_empty() || item.app == item.title {
+                item.body.clone()
+            } else {
+                format!("{} \u{b7} {}", item.app, item.body)
+            },
+            age: notifications::age_label(now - item.created),
+        });
+        InboxScene {
+            rows: rows.collect(),
+            total: self.inbox.total,
+            unread: self.unread,
+            hover: self.inbox_hover,
         }
     }
 
@@ -796,9 +913,20 @@ impl App {
             Some(TodoHit::Toggle(index) | TodoHit::Remove(index)) => Some(index),
             _ => None,
         };
-        if hover != self.shelf_hover || todo_hover != self.todo_hover {
+        let inbox_hover = self.inbox_row(x, y);
+        let hover_zoom = self.zoom_at(x, y);
+        let banner_hover = self.notch.app_banner().is_some();
+        if hover != self.shelf_hover
+            || todo_hover != self.todo_hover
+            || inbox_hover != self.inbox_hover
+            || hover_zoom != self.hover_zoom
+            || banner_hover != self.banner_hover
+        {
+            self.hover_zoom = hover_zoom;
+            self.banner_hover = banner_hover;
             self.shelf_hover = hover;
             self.todo_hover = todo_hover;
+            self.inbox_hover = inbox_hover;
             self.draw();
         }
         None
@@ -977,6 +1105,9 @@ impl App {
 
     /// Whether (`x`, `y`) is over something clickable on the open card.
     fn clickable_at(&self, x: f32, y: f32) -> bool {
+        if self.notch.app_banner().is_some() {
+            return true;
+        }
         if self.settings.open_on_click && self.notch.card_visible.target == 0.0 {
             return true;
         }
@@ -995,10 +1126,19 @@ impl App {
                     .music_control_at(x, y, width, lyrics)
                     .is_some()
                     || self.renderer.lyrics_button_at(x, y, width, lyrics)
+                    || self.renderer.progress_at(x, y, width, lyrics).is_some()
+                    || (lyrics && self.renderer.lyric_line_at(x, y, width).is_some())
             }
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
             Page::Pomodoro => self.renderer.pomodoro_control_at(x, y, width).is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
+            Page::Notifications => {
+                self.inbox.total > 0 && self.renderer.inbox_clear_at(x, y, width)
+                    || self
+                        .renderer
+                        .inbox_row_at(x, y, width, self.inbox.items.len())
+                        .is_some()
+            }
             Page::Todo => self.todo_hit(x, y).is_some(),
             Page::Status | Page::Prayer => false,
         }
@@ -1053,6 +1193,76 @@ impl App {
         )
     }
 
+    /// What zooms in for the mouse at (`x`, `y`): a page icon, or a media
+    /// control on an app notification, the widened notch or the music card.
+    fn zoom_at(&self, x: f32, y: f32) -> Option<u16> {
+        if let Some(index) = self.nav_item_at(x, y) {
+            return Some(zoom::NAV + index as u16);
+        }
+        self.track.as_ref()?;
+        let width = self.notch.width.value;
+        if self.notch.app_banner().is_some() {
+            self.renderer.peek_zoom_at(x, y, width, 1.0)
+        } else if self.notch.card_visible.value >= 0.5 {
+            if self.shown_page() != Page::Music {
+                return None;
+            }
+            let lyrics = self.shown_lyric().is_some();
+            let open = self.volume_open;
+            if self.renderer.volume_zone_at(x, y, width, lyrics, open) {
+                return Some(zoom::VOLUME);
+            }
+            self.renderer.music_zoom_at(x, y, width, lyrics)
+        } else if self.notch.peek_visible.value >= 0.5 {
+            self.renderer.peek_zoom_at(x, y, width, self.notch.scale)
+        } else {
+            None
+        }
+    }
+
+    /// Eases what is under the mouse in and the rest out. Returns true while
+    /// anything still moves.
+    fn step_zooms(&mut self, dt: f32) -> bool {
+        if let Some(id) = self.hover_zoom {
+            if !self.zooms.iter().any(|(known, _)| *known == id) {
+                self.zooms.push((id, 0.0));
+            }
+        }
+        let share = 1.0 - (-dt * ZOOM_SPEED).exp();
+        let mut moving = false;
+        for (id, zoom) in &mut self.zooms {
+            let target = if self.hover_zoom == Some(*id) {
+                1.0
+            } else {
+                0.0
+            };
+            *zoom += (target - *zoom) * share;
+            if (target - *zoom).abs() < 0.01 {
+                *zoom = target;
+            } else {
+                moving = true;
+            }
+        }
+        self.zooms.retain(|(_, zoom)| *zoom > 0.0);
+        moving
+    }
+
+    fn inbox_row(&self, x: f32, y: f32) -> Option<usize> {
+        if self.shown_page() != Page::Notifications || self.notch.card_visible.value < 0.5 {
+            return None;
+        }
+        let (width, count) = (self.notch.width.value, self.inbox.items.len());
+        self.renderer.inbox_row_at(x, y, width, count)
+    }
+
+    fn opening_page(&self) -> Page {
+        if self.unread {
+            Page::Notifications
+        } else {
+            Page::Music
+        }
+    }
+
     fn shown_page(&self) -> Page {
         let pages = self.pages();
         if pages.contains(&self.page) {
@@ -1074,6 +1284,9 @@ impl App {
             unsafe {
                 let _ = ShowWindow(self.hwnd, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
             }
+            if show {
+                system::stay_on_top(self.hwnd);
+            }
         }
     }
 
@@ -1087,7 +1300,11 @@ impl App {
             .position(|page| *page == self.shown_page())
             .unwrap_or(0);
         if self.notch.card_visible.target == 0.0 {
-            self.page = pages[0];
+            self.page = if self.unread {
+                Page::Notifications
+            } else {
+                pages[0]
+            };
             self.card_until = Some(now + KEY_CARD);
         } else if current + 1 < pages.len() {
             self.page_switch = Some(PageSwitch {
@@ -1167,19 +1384,56 @@ impl App {
             .track
             .as_ref()
             .is_some_and(|track| track.artist == found.artist && track.title == found.title);
-        if let (true, Some(lines)) = (current, found.lyrics) {
-            self.lyrics = Some((found.artist, found.title, lines));
-            self.tick();
+        if !current {
+            return;
         }
+        match found.lyrics {
+            Some(lines) => {
+                self.lyric_strip = self.renderer.lyric_strip_width(lines.lines());
+                self.lyrics = Some((found.artist, found.title, lines));
+            }
+            None => self.lyrics_missing = true,
+        }
+        self.tick();
     }
 
-    /// The lyric line being sung and the next, when the song has lyrics.
-    /// The lyric lines the card shows, unless its button turned them off.
-    fn shown_lyric(&self) -> Option<(&str, &str)> {
-        self.lyric().filter(|_| self.show_lyrics)
+    /// The lines lyric mode shows, or word of the search while there are none.
+    fn shown_lyric(&self) -> Option<(&str, &str, &str)> {
+        if !self.show_lyrics || !self.settings.module_lyrics {
+            return None;
+        }
+        self.music()?;
+        Some(self.lyric().unwrap_or(if self.lyrics_missing {
+            ("", "Lirik tidak tersedia", "")
+        } else {
+            ("", "Memuat lirik\u{2026}", "")
+        }))
     }
 
-    fn lyric(&self) -> Option<(&str, &str)> {
+    /// Notes when a new line begins. Returns true while it rolls into place.
+    fn update_lyric_roll(&mut self, now: Instant) -> bool {
+        let line = self
+            .lyrics
+            .as_ref()
+            .zip(self.music())
+            .filter(|_| self.show_lyrics)
+            .and_then(|((_, _, lines), track)| lines.current(track.position_now()));
+        if line != self.lyric_line {
+            self.lyric_line = line;
+            self.lyric_moved = line.map(|_| now);
+        }
+        self.lyric_scroll(now) < 1.0
+    }
+
+    /// How far the line sung has rolled into place, 0..1.
+    fn lyric_scroll(&self, now: Instant) -> f32 {
+        self.lyric_moved.map_or(1.0, |moved| {
+            (now.duration_since(moved).as_secs_f32() / LYRIC_ROLL.as_secs_f32()).min(1.0)
+        })
+    }
+
+    /// The lines around the one being sung, when the song has lyrics.
+    fn lyric(&self) -> Option<(&str, &str, &str)> {
         let track = self.music()?;
         let (artist, title, lines) = self.lyrics.as_ref()?;
         (self.settings.module_lyrics && track.artist == *artist && track.title == *title)
@@ -1208,10 +1462,20 @@ impl App {
             .collect()
     }
 
-    fn agenda_scene(&self) -> Vec<AgendaItem<'_>> {
+    /// The shown month's first events: from now on in this month, so what is
+    /// over makes way, and from the first day in any other.
+    fn month_events(&self, month: (i32, u32)) -> Vec<&Event> {
+        let after = (self.month_offset == 0)
+            .then(|| (today_number(), minutes_now().saturating_sub(AGENDA_GRACE)));
+        let mut events = ical::in_month(&self.events, month, after);
+        events.truncate(anim::AGENDA_ROWS);
+        events
+    }
+
+    fn agenda_scene<'a>(&self, events: Vec<&'a Event>) -> Vec<AgendaItem<'a>> {
         const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
         let today = today_number();
-        self.upcoming()
+        events
             .into_iter()
             .map(|event| {
                 let (year, month, date) = calendar::civil_from_days(event.day);
@@ -1229,6 +1493,7 @@ impl App {
                         .map_or("Seharian".to_string(), prayer::format_time),
                     summary: &event.summary,
                     today: event.day == today,
+                    source: event.source,
                 }
             })
             .collect()
@@ -1286,15 +1551,21 @@ impl App {
         }
         self.bar_phase += dt;
         let peak = self.audio.as_ref().map_or(0.0, Audio::peak);
-        // Quiet passages still move: loudness follows the root of the peak.
-        let level = (peak.sqrt() * 1.25).min(1.0);
+        // Measured against the song's own recent loudness, so beats stand out
+        // in loud and quiet songs alike rather than holding the bars full.
+        self.peak_average += (peak - self.peak_average) * BAR_AVERAGING;
+        let level = if peak < BAR_SILENCE {
+            0.0
+        } else {
+            (peak / self.peak_average.max(BAR_SILENCE) * BAR_GAIN).min(1.0)
+        };
         for (i, bar) in self.bars.iter_mut().enumerate() {
             // Each bar sways at its own pace so they do not move in lockstep.
             let phase = self.bar_phase * BAR_SPEEDS[i] + i as f32;
             let wave = 0.6 * phase.sin() + 0.4 * (phase * 1.7 + i as f32).sin();
             let target = level * (0.6 + 0.4 * wave);
             // Quick up, slower down, like a level meter.
-            *bar += (target - *bar) * if target > *bar { 0.6 } else { 0.3 };
+            *bar += (target - *bar) * if target > *bar { 0.85 } else { 0.45 };
         }
         true
     }
@@ -1304,6 +1575,11 @@ impl App {
         self.nav_open &= inside;
         self.volume_open &= inside || self.volume_drag;
         self.card_clicked &= inside;
+        if !inside {
+            self.hover_zoom = None;
+            self.banner_hover = false;
+            self.draw();
+        }
         if inside {
             if self.hover_since.is_none() {
                 self.hover_since = Some(now);
@@ -1333,9 +1609,40 @@ impl App {
             }
             return;
         }
-        if self.settings.open_on_click && self.notch.card_visible.target == 0.0 {
-            self.card_clicked = true;
+        if let Some(notice) = self.notch.app_banner().cloned() {
+            let width = self.notch.width.value;
+            let command = self
+                .renderer
+                .peek_control_at(x, y, width, 1.0)
+                .filter(|_| self.track.is_some());
+            if let Some(command) = command {
+                self.send_media(command);
+                return;
+            }
+            if self.renderer.app_close_at(x, y, width) {
+                notifications::remove(notice.id);
+            } else {
+                self.open_notice(&notice);
+            }
+            self.notch.end_banner(Instant::now());
             self.tick();
+            return;
+        }
+        if self.settings.open_on_click && self.notch.card_visible.target == 0.0 {
+            // The widened notch's controls work without opening the card.
+            let command = (self.notch.peek_visible.value >= 0.5 && self.track.is_some())
+                .then(|| {
+                    self.renderer
+                        .peek_control_at(x, y, self.notch.width.value, self.notch.scale)
+                })
+                .flatten();
+            match command {
+                Some(command) => self.send_media(command),
+                None => {
+                    self.card_clicked = true;
+                    self.tick();
+                }
+            }
             return;
         }
         if self.notch.card_visible.value >= 0.5 && !self.drag_over {
@@ -1357,6 +1664,32 @@ impl App {
         }
         if self.shown_page() == Page::Todo {
             self.on_todo_click(x, y);
+            return;
+        }
+        if self.shown_page() == Page::Notifications {
+            let width = self.notch.width.value;
+            if self.inbox.total > 0 && self.renderer.inbox_clear_at(x, y, width) {
+                notifications::clear();
+                self.inbox = Inbox::default();
+                self.renderer.sync_logos(&[]);
+                self.tick();
+            } else if let Some(index) =
+                self.renderer
+                    .inbox_remove_at(x, y, width, self.inbox.items.len())
+            {
+                // The worker's next list brings up the row below it.
+                let notice = self.inbox.items.remove(index);
+                self.inbox.total -= 1;
+                notifications::remove(notice.id);
+                self.inbox_hover = None;
+                self.tick();
+            } else if let Some(notice) = self
+                .renderer
+                .inbox_row_at(x, y, width, self.inbox.items.len())
+                .and_then(|index| self.inbox.items.get(index).cloned())
+            {
+                self.open_notice(&notice);
+            }
             return;
         }
         let width = self.notch.width.value;
@@ -1383,15 +1716,33 @@ impl App {
         }
         let lyrics = self.shown_lyric().is_some();
         if self.renderer.lyrics_button_at(x, y, width, lyrics) {
-            if self.lyric().is_some() {
-                self.show_lyrics = !self.show_lyrics;
-                self.tick();
+            if self.settings.module_lyrics {
+                self.toggle_lyrics();
             }
             return;
         }
-        let Some(command) = self.renderer.music_control_at(x, y, width, lyrics) else {
+        if let Some(fraction) = self.renderer.progress_at(x, y, width, lyrics) {
+            if let Some(duration) = self.music().map(|track| track.duration) {
+                self.seek(duration * f64::from(fraction));
+            }
             return;
-        };
+        }
+        if lyrics {
+            let target = self.renderer.lyric_line_at(x, y, width).and_then(|step| {
+                let (_, _, lines) = self.lyrics.as_ref()?;
+                lines.line_start(self.music()?.position_now(), step)
+            });
+            if let Some(target) = target {
+                self.seek(target);
+                return;
+            }
+        }
+        if let Some(command) = self.renderer.music_control_at(x, y, width, lyrics) {
+            self.send_media(command);
+        }
+    }
+
+    fn send_media(&mut self, command: Command) {
         if let Some(media) = &self.media {
             media.send(command);
         }
@@ -1400,6 +1751,32 @@ impl App {
             track.position = track.position_now();
             track.read_at = Instant::now();
             track.playing = !track.playing;
+        }
+        self.tick();
+    }
+
+    /// Turns lyric mode on or off. A song whose lyrics were not found gets
+    /// another search when it is turned on.
+    fn toggle_lyrics(&mut self) {
+        self.show_lyrics = !self.show_lyrics;
+        if self.show_lyrics && self.lyrics_missing {
+            self.lyrics_missing = false;
+            if let Some(track) = &self.track {
+                self.lyrics_watch
+                    .request(&track.artist, &track.title, track.duration);
+            }
+        }
+        self.tick();
+    }
+
+    /// Jumps within the song, showing the new place before the player says so.
+    fn seek(&mut self, seconds: f64) {
+        if let Some(media) = &self.media {
+            media.send(Command::Seek(seconds));
+        }
+        if let Some(track) = self.track.as_mut() {
+            track.position = seconds;
+            track.read_at = Instant::now();
         }
         self.tick();
     }
@@ -1437,6 +1814,7 @@ impl App {
         self.settings = Settings::load();
         let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
+        self.notch.bounce = self.settings.card_bounce;
         let resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,
             NotchSize::Normal => COMPACT,
@@ -1449,11 +1827,10 @@ impl App {
             self.weather = None;
         }
         self.weather_watch.set_location(weather_place);
-        if self.settings.ical_url.is_empty() {
+        if self.settings.ical_urls.iter().all(String::is_empty) {
             self.events.clear();
         }
-        self.ical_watch
-            .set_url(Some(self.settings.ical_url.clone()));
+        self.ical_watch.set_feeds(self.settings.ical_urls.clone());
         // Lyrics just switched on: look up the song already playing.
         if let (true, None, Some(track)) = (
             self.settings.module_lyrics,
@@ -1513,11 +1890,36 @@ impl App {
         // sleep after the prayer time skips it.
         let due = (0..prayer::NAMES.len())
             .find(|&i| !day.reminded[i] && now + lead >= day.times[i] && now < day.times[i]);
-        if let Some(i) = due {
+        let label = if let Some(i) = due {
             day.reminded[i] = true;
-            let notice = notices::prayer(i, day.times[i] - now, day);
-            self.notify_for(notice, PRAYER_NOTICE_DURATION);
+            let minutes = day.times[i] - now;
+            Some(format!("{} {minutes} menit lagi", prayer::NAMES[i]))
+        } else {
+            let arrived = (0..prayer::NAMES.len()).find(|&i| {
+                !day.arrived[i]
+                    && now >= day.times[i]
+                    && now < day.times[i] + PRAYER_ARRIVAL_MINUTES
+            });
+            arrived.map(|i| {
+                day.arrived[i] = true;
+                format!("Waktunya {}", prayer::NAMES[i])
+            })
+        };
+        if let Some(label) = label {
+            self.notify_prayer(label);
         }
+    }
+
+    /// Widens the notch for a moment with a prayer reminder.
+    fn notify_prayer(&mut self, label: String) {
+        if self.settings.sound {
+            chime();
+        }
+        self.notch
+            .show_prayer(label, PRAYER_NOTICE_DURATION, Instant::now());
+        // A reminder replacing another moves nothing, so nothing would redraw.
+        self.draw();
+        self.schedule(FRAME_MS);
     }
 
     /// The prayer page: the next prayer (tomorrow's Subuh after Isya), how
@@ -1671,7 +2073,6 @@ impl App {
     fn draw(&self) {
         let n = &self.notch;
         let date = date_text();
-        let soon = self.prayer_soon();
         let scene = Scene {
             width: n.width.value,
             height: n.height.value,
@@ -1689,7 +2090,8 @@ impl App {
                 duration: track.duration,
                 bars: self.bars,
                 lyric: self.shown_lyric(),
-                lyrics_ready: self.lyric().is_some(),
+                lyric_scroll: self.lyric_scroll(Instant::now()),
+                lyrics_ready: self.settings.module_lyrics,
                 lyrics_on: self.show_lyrics,
                 volume_visible: n.volume_visible.value,
                 volume: self.audio.as_ref().and_then(Audio::volume).unwrap_or(0.0),
@@ -1704,6 +2106,8 @@ impl App {
                 .unwrap_or(0),
             page_list: self.pages(),
             nav_visible: n.nav_visible.value,
+            zooms: &self.zooms,
+            banner_hover: self.banner_hover,
             peek_visible: n.peek_visible.value,
             closed_scale: n.scale,
             calendar: {
@@ -1717,9 +2121,9 @@ impl App {
                     marked: self
                         .events
                         .iter()
-                        .map(|event| calendar::civil_from_days(event.day))
-                        .filter(|&(y, m, _)| (y, m) == (shown_year, shown_month))
-                        .map(|(_, _, d)| d)
+                        .map(|event| (calendar::civil_from_days(event.day), event.source))
+                        .filter(|&((y, m, _), _)| (y, m) == (shown_year, shown_month))
+                        .map(|((_, _, d), source)| (d, source))
                         .collect(),
                 }
             },
@@ -1732,7 +2136,6 @@ impl App {
                 progress: self.pomodoro.progress(Instant::now()),
             }),
             strip: self.strip(),
-            prayer_soon: soon.as_deref().unwrap_or(""),
             prayer: self.prayer_scene(),
             minimal: self.settings.notch_minimal,
             place: &self.settings.city,
@@ -1744,8 +2147,14 @@ impl App {
                     .filter(|(_, at)| at.elapsed() < COPIED_SHOWN)
                     .map(|(index, _)| index),
             },
+            inbox: self.inbox_scene(),
             todo: self.todo_scene(),
-            agenda: self.agenda_scene(),
+            agenda: self.agenda_scene(self.upcoming()),
+            month_agenda: {
+                let (year, month, _) = prayer::today();
+                let shown = calendar::shift(year as i32, month as u32, self.month_offset);
+                self.agenda_scene(self.month_events(shown))
+            },
             drop_zone: self.drag_over,
             previous_page: self.page_switch.as_ref().map(|switch| switch.from),
             page_mix: self.page_switch.as_ref().map_or(1.0, |switch| {
@@ -1896,14 +2305,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(|app| app.on_wheel(wparam));
             LRESULT(0)
         }
+        system::FOREGROUND_MSG => {
+            system::stay_on_top(hwnd);
+            LRESULT(0)
+        }
         screenshots::SCREENSHOT_MSG => {
             let path = screenshots::take_path(lparam);
             with_app(|app| app.on_screenshot(path));
             LRESULT(0)
         }
-        notifications::APP_NOTICE_MSG => {
-            let notice = notifications::take_notice(lparam);
-            with_app(|app| app.on_app_notice(notice));
+        notifications::INBOX_MSG => {
+            let inbox = notifications::take_inbox(lparam);
+            with_app(|app| app.on_inbox(inbox));
             LRESULT(0)
         }
         lyrics::LYRICS_MSG => {
@@ -2154,34 +2567,9 @@ fn chime() {
 mod notices {
     use crate::anim::{Accent, Notice, Trailing};
     use crate::health::Kind;
-    use crate::notifications::{one_line, AppNotice};
     use crate::prayer::{format_time, NAMES};
     use crate::render::glyph;
     use crate::{minutes_now, PrayerDay};
-
-    /// Characters of a toast that fit a notice.
-    const TITLE_CHARS: usize = 28;
-    const SUBTITLE_CHARS: usize = 38;
-
-    /// A toast from another app: the sender over the app and message.
-    pub fn app(notice: &AppNotice) -> Notice {
-        Notice {
-            icon: glyph::MESSAGE,
-            accent: Accent::Green,
-            progress: 1.0,
-            title: one_line(&notice.title, TITLE_CHARS),
-            subtitle: if notice.app.is_empty() {
-                one_line(&notice.body, SUBTITLE_CHARS)
-            } else {
-                one_line(
-                    &format!("{} \u{b7} {}", notice.app, notice.body),
-                    SUBTITLE_CHARS,
-                )
-            },
-            trailing: Trailing::None,
-            dim: false,
-        }
-    }
 
     /// `copied` says the picture is on the clipboard, so a paste is enough.
     pub fn screenshot(copied: bool) -> Notice {
@@ -2249,32 +2637,6 @@ mod notices {
             title: "Baterai lemah".to_string(),
             subtitle: "Colokkan charger".to_string(),
             trailing: Trailing::Text(format!("{percent}%")),
-            dim: false,
-        }
-    }
-
-    /// "Dzuhur 5 menit lagi", with the prayer time large on the right.
-    pub fn prayer(index: usize, minutes_left: u32, day: &PrayerDay) -> Notice {
-        prayer_reminder(
-            NAMES[index],
-            minutes_left,
-            &format_time(day.times[index]),
-            &day.settings.city,
-        )
-    }
-
-    fn prayer_reminder(name: &str, minutes_left: u32, time: &str, city: &str) -> Notice {
-        Notice {
-            icon: glyph::PRAYER,
-            accent: Accent::Green,
-            progress: 1.0,
-            title: format!("{name} {minutes_left} menit lagi"),
-            subtitle: if city.is_empty() {
-                "Waktu sholat".to_string()
-            } else {
-                format!("Waktu sholat · {city}")
-            },
-            trailing: Trailing::Text(time.to_string()),
             dim: false,
         }
     }
@@ -2348,11 +2710,11 @@ mod notices {
 
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 10 {
+        match index % 12 {
             9 => health(Kind::Stretch, 50),
             8 => health(Kind::Eyes, 20),
             7 => health(Kind::Water, 60),
-            6 => prayer_reminder("Dzuhur", 5, "11:40", "Jakarta"),
+            6 => event("Rapat tim", 10, 14 * 60),
             0 => wifi("Rumah 5G", true),
             1 => bluetooth("Galaxy Buds2 Pro".to_string(), true, true, Some(70)),
             2 => low_battery(20),

@@ -7,7 +7,7 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
-use windows::core::{w, Result, HSTRING};
+use windows::core::{w, Interface, Result, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
@@ -26,14 +26,14 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_FONT_WEIGHT_SEMI_LIGHT, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteTextFormat,
+    IDWriteTextLayout, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_BOLD,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_WEIGHT_SEMI_LIGHT,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -55,12 +55,14 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
-    Accent, Content, LevelKind, Notice, Trailing, AGENDA_ROWS, CARD, CARD_NAV, CARD_SIDE, CARD_TOP,
-    DROP_ZONE, IDLE, LEVEL, NOTICE_HEIGHT, NOTICE_WIDTH, TODO_ROW,
+    Accent, Content, LevelKind, Notice, Trailing, AGENDA_ROWS, APP_BANNER, CARD, CARD_BOUNCE,
+    CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, IDLE, LEVEL, LYRIC_CARD_EXTRA, LYRIC_STRIP_MAX,
+    NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
 use crate::media::Command;
+use crate::notifications::AppNotice;
 use crate::todo::Task;
-use crate::{calendar, prayer, shelf, todo};
+use crate::{calendar, notifications, prayer, shelf, todo};
 
 /// A point on the open card (its `y`, and the card's `width`) as the page
 /// sees it: below the header, between the side arrows.
@@ -97,6 +99,8 @@ fn page_title<'a>(
         Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
         Page::Shelf => ("Rak", "Berkas", Accent::Teal),
+        // Its own heading names it, so the header stays empty.
+        Page::Notifications => ("", "", Accent::Red),
     }
 }
 
@@ -110,6 +114,7 @@ fn page_glyph(page: Page) -> &'static str {
         Page::Pomodoro => glyph::TIMER,
         Page::Todo => glyph::CHECK,
         Page::Shelf => glyph::FILE,
+        Page::Notifications => glyph::BELL,
     }
 }
 
@@ -197,8 +202,24 @@ fn sun_arc(position: f32) -> f32 {
 const EAR: f32 = 10.0;
 /// The canvas fits the largest notch shape; everything outside it is transparent.
 pub const CANVAS: (f32, f32) = (
-    max_of(&[IDLE.0, LEVEL.0, NOTICE_WIDTH.1, CARD_NAV.0, DROP_ZONE.0]) + 2.0 * EAR,
-    max_of(&[IDLE.1, LEVEL.1, NOTICE_HEIGHT, CARD_NAV.1, DROP_ZONE.1]),
+    max_of(&[
+        IDLE.0,
+        LEVEL.0,
+        NOTICE_WIDTH.1,
+        APP_BANNER.0,
+        CARD_NAV.0 + LYRIC_CARD_EXTRA,
+        CARD_NAV.0,
+        DROP_ZONE.0,
+    ]) + 2.0 * EAR
+        + CARD_BOUNCE.0,
+    max_of(&[
+        IDLE.1,
+        LEVEL.1,
+        NOTICE_HEIGHT,
+        APP_BANNER.1,
+        CARD_NAV.1,
+        DROP_ZONE.1,
+    ]) + CARD_BOUNCE.1,
 );
 
 /// Album art is decoded at most this many pixels square.
@@ -224,28 +245,148 @@ impl CardRects {
     fn new(width: f32, lyrics: bool) -> Self {
         let cx = CANVAS.0 / 2.0;
         let (x0, x1) = (cx - width / 2.0, cx + width / 2.0);
-        // Lyrics take the foot; without them the rest sits centered.
-        let shift = if lyrics { -10.0 } else { 8.0 };
-        let (bar, row) = (84.0 + shift, 116.0 + shift);
+        let (bar, row) = (92.0, 124.0);
+        // Lyrics take the right side, with the player narrowed beside them.
+        let (right, center, step) = if lyrics {
+            (x0 + PLAYER_RIGHT, x0 + (18.0 + PLAYER_RIGHT) / 2.0, 36.0)
+        } else {
+            (x1 - 18.0, cx, 44.0)
+        };
+        // Beside the lyrics the slider takes the controls' place while open.
+        let volume = if lyrics {
+            (x0 + 56.0, right - 32.0, row)
+        } else {
+            (x1 - 116.0, x1 - 44.0, row)
+        };
         Self {
-            art: rect(x0 + 18.0, 10.0 + shift, x0 + 74.0, 66.0 + shift),
+            art: rect(x0 + 18.0, 18.0, x0 + 74.0, 74.0),
             text_left: x0 + 86.0,
-            text_right: x1 - 18.0,
-            progress: (x0 + 56.0, x1 - 56.0, bar),
+            text_right: right,
+            progress: (x0 + 56.0, right - 38.0, bar),
             lyrics: (x0 + 30.0, row),
-            previous: (cx - 44.0, row),
-            play: (cx, row),
-            next: (cx + 44.0, row),
-            speaker: (x1 - 28.0, row),
-            volume: (x1 - 116.0, x1 - 44.0, row),
+            previous: (center - step, row),
+            play: (center, row),
+            next: (center + step, row),
+            speaker: (right - 10.0, row),
+            volume,
         }
     }
 }
+
+/// Right edge of the player beside the lyrics, from the page's left.
+const PLAYER_RIGHT: f32 = 216.0;
+/// The lyrics' column starts here, from the page's left.
+const LYRICS_LEFT: f32 = 244.0;
+/// The lyric line in the strip keeps clear of the cover on its left.
+const LYRIC_STRIP_LEFT: f32 = 40.0;
+const LYRIC_STRIP_RIGHT: f32 = 18.0;
+/// Room on each side of the song's name under the clock.
+const SONG_BANNER_SIDE: f32 = 20.0;
+/// The controls in the widened notch: the last one's distance from its right
+/// edge, and the distance between them.
+const PEEK_RIGHT: f32 = 20.0;
+const PEEK_STEP: f32 = 26.0;
+/// Those controls' size against the music card's.
+const PEEK_ICON: f32 = 0.6;
+/// How much larger a control grows under the mouse.
+const ZOOM_GROWTH: f32 = 0.22;
+
+/// A fade that only shows in the second half of `visible`, 0..1, so what it
+/// replaces has gone first.
+fn second_half(visible: f32) -> f32 {
+    ((visible - 0.5) * 2.0).clamp(0.0, 1.0)
+}
+
+/// How far a roll has come, 0..1, slowing down at its end.
+fn eased(progress: f32) -> f32 {
+    1.0 - (1.0 - progress.clamp(0.0, 1.0)).powi(3)
+}
+/// The line being sung is centered on this height.
+const LYRICS_MIDDLE: f32 = 72.0;
+/// Space between lyric lines.
+const LYRICS_GAP: f32 = 10.0;
 
 /// "3:07"
 fn format_duration(seconds: f64) -> String {
     let total = seconds.max(0.0).round() as u64;
     format!("{}:{:02}", total / 60, total % 60)
+}
+
+/// The smallest square within a `width` by `height` BGRA picture that holds
+/// all its visible pixels, as left, top and side; the whole picture's
+/// shorter side when nothing shows.
+fn visible_square(pixels: &[u8], width: usize, height: usize) -> (usize, usize, usize) {
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if pixel[3] > 16 {
+            let (x, y) = (index % width, index / width);
+            (left, top) = (left.min(x), top.min(y));
+            (right, bottom) = (right.max(x + 1), bottom.max(y + 1));
+        }
+    }
+    if right <= left || bottom <= top {
+        return (0, 0, width.min(height));
+    }
+    let side = (right - left).max(bottom - top);
+    let center = |low: usize, high: usize, limit: usize| {
+        ((low + high).saturating_sub(side) / 2).min(limit - side)
+    };
+    (
+        center(left, right, width),
+        center(top, bottom, height),
+        side,
+    )
+}
+
+/// The notch's typeface, carried in the program.
+static FONT: &[u8] = include_bytes!("../assets/fonts/PlusJakartaSans.ttf");
+
+/// Makes the carried typeface available to DirectWrite, from memory.
+unsafe fn bundled_font(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+    let factory: IDWriteFactory5 = dwrite.cast()?;
+    let loader = factory.CreateInMemoryFontFileLoader()?;
+    factory.RegisterFontFileLoader(&loader)?;
+    let file = loader.CreateInMemoryFontFileReference(
+        &factory,
+        FONT.as_ptr().cast(),
+        FONT.len() as u32,
+        None,
+    )?;
+    let builder = factory.CreateFontSetBuilder()?;
+    builder.AddFontFile(&file)?;
+    let set = builder.CreateFontSet()?;
+    factory.CreateFontCollectionFromFontSet(&set)?.cast()
+}
+
+/// What can zoom under the mouse, each with its id in [`Scene::zooms`].
+pub mod zoom {
+    pub const PREVIOUS: u16 = 0;
+    pub const PLAY: u16 = 1;
+    pub const NEXT: u16 = 2;
+    pub const LYRICS: u16 = 3;
+    pub const VOLUME: u16 = 4;
+    /// Page icons count on from here.
+    pub const NAV: u16 = 10;
+}
+
+/// A control's size for its zoom, 0..1.
+fn zoomed(zoom: f32) -> f32 {
+    1.0 + ZOOM_GROWTH * zoom
+}
+
+// Notification card layout.
+const INBOX_TOP: f32 = 38.0;
+const INBOX_ROW: f32 = 36.0;
+
+/// Center of a notification's remove button on a page ending at `x1`.
+fn inbox_remove(x1: f32, index: usize) -> (f32, f32) {
+    (x1 - 24.0, INBOX_TOP + index as f32 * INBOX_ROW + 23.0)
+}
+
+/// Whether the closed notch has room for the bell: it shows only the clock
+/// and its neighbours, with no live strip, eyes, or thin bar.
+fn unread_bell(scene: &Scene) -> bool {
+    !scene.minimal && scene.music_visible < 0.01 && scene.eyes_visible < 0.01
 }
 
 /// Shelf thumbnails are made at most this many pixels square.
@@ -443,6 +584,7 @@ pub mod glyph {
     pub const WALK: &str = "\u{E805}";
     pub const HOME: &str = "\u{E80F}";
     pub const SETTINGS: &str = "\u{E713}";
+    pub const BELL: &str = "\u{EA8F}";
     pub const MESSAGE: &str = "\u{E8BD}";
     pub const CAMERA: &str = "\u{E722}";
     pub const COPY: &str = "\u{E8C8}";
@@ -493,6 +635,10 @@ pub struct Scene<'a> {
     pub page_list: Vec<Page>,
     /// How far the page dots have turned into page icons, 0..1.
     pub nav_visible: f32,
+    /// What is zoomed in under the mouse, and how far, 0..1.
+    pub zooms: &'a [(u16, f32)],
+    /// The mouse is on an app notification.
+    pub banner_hover: bool,
     /// How far the notch has widened to show the date, 0..1.
     pub peek_visible: f32,
     /// The closed notch's size relative to the usual one.
@@ -502,11 +648,13 @@ pub struct Scene<'a> {
     pub timer: Option<TimerScene>,
     /// What the live strip beside the clock shows.
     pub strip: Strip,
-    /// "Maghrib 12 mnt", while a prayer is close.
-    pub prayer_soon: &'a str,
     pub shelf: ShelfScene<'a>,
+    pub inbox: InboxScene<'a>,
     pub todo: TodoScene<'a>,
+    /// The next events, whatever their month.
     pub agenda: Vec<AgendaItem<'a>>,
+    /// The events of the month the calendar shows.
+    pub month_agenda: Vec<AgendaItem<'a>>,
     pub prayer: Option<PrayerScene>,
     /// The prayer location's name.
     pub place: &'a str,
@@ -522,8 +670,38 @@ pub struct Scene<'a> {
     pub status: StatusScene<'a>,
 }
 
+/// The notification page, and whether anything on it is still unseen.
+pub struct InboxScene<'a> {
+    pub rows: Vec<InboxRow<'a>>,
+    /// Notifications in all, more than the rows when there are many.
+    pub total: usize,
+    pub unread: bool,
+    /// The row under the mouse.
+    pub hover: Option<usize>,
+}
+
+pub struct InboxRow<'a> {
+    pub title: &'a str,
+    pub app_id: &'a str,
+    /// The app and the message.
+    pub detail: String,
+    /// How long ago it arrived, such as "5 mnt".
+    pub age: String,
+}
+
+impl Scene<'_> {
+    /// How far the control `id` is zoomed in, 0..1.
+    fn zoom(&self, id: u16) -> f32 {
+        self.zooms
+            .iter()
+            .find(|(known, _)| *known == id)
+            .map_or(0.0, |(_, zoom)| *zoom)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Page {
+    Notifications,
     Music,
     Status,
     Calendar,
@@ -541,6 +719,14 @@ pub struct AgendaItem<'a> {
     pub time: String,
     pub summary: &'a str,
     pub today: bool,
+    /// Which calendar link it came from.
+    pub source: usize,
+}
+
+/// The colour of a calendar link's events.
+fn source_color(source: usize) -> D2D1_COLOR_F {
+    const COLORS: [Accent; 3] = [Accent::Blue, Accent::Green, Accent::Red];
+    accent_color(COLORS[source % COLORS.len()])
 }
 
 /// Live information shown on both sides of the clock in the closed notch.
@@ -549,7 +735,6 @@ pub enum Strip {
     None,
     Music,
     Timer,
-    Prayer,
 }
 
 pub struct PrayerScene {
@@ -621,7 +806,7 @@ pub struct CalendarScene {
     /// Today's day number when the shown month is the current one.
     pub today: Option<u32>,
     /// Days of the shown month with an event on the agenda.
-    pub marked: Vec<u32>,
+    pub marked: Vec<(u32, usize)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -669,8 +854,10 @@ pub struct MusicScene<'a> {
     pub duration: f64,
     /// Level bar heights, 0..1.
     pub bars: [f32; 4],
-    /// The lyric line being sung and the next, when the song has synced lyrics.
-    pub lyric: Option<(&'a str, &'a str)>,
+    /// In lyric mode: the line before the one sung, that line, and the next.
+    pub lyric: Option<(&'a str, &'a str, &'a str)>,
+    /// How far the roll to the line sung has come, 0..1.
+    pub lyric_scroll: f32,
 }
 
 /// A measured line of text, ready to draw.
@@ -711,7 +898,9 @@ pub struct Renderer {
     tiny: IDWriteTextFormat,
     /// Centered single-line file names that end in an ellipsis.
     tile_text: IDWriteTextFormat,
-    /// Centered single-line lyrics: the line being sung, and the next.
+    /// Bold left-aligned line: reminders and the lyric strip.
+    bold_left: IDWriteTextFormat,
+    /// Wrapped lyrics: the line being sung, and those around it.
     lyric_text: IDWriteTextFormat,
     lyric_next: IDWriteTextFormat,
     /// Small icon glyph for the remove buttons.
@@ -720,6 +909,8 @@ pub struct Renderer {
     pill_glyph: IDWriteTextFormat,
     /// Icons in the page navigation pill.
     nav_glyph: IDWriteTextFormat,
+    /// The same, emboldened.
+    nav_bold: IDWriteTextFormat,
     /// Weather symbols (Segoe UI Symbol).
     symbols: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -734,6 +925,8 @@ pub struct Renderer {
     art_tint: Option<[f32; 3]>,
     /// Shelf thumbnails, in shelf order.
     thumbs: Vec<(PathBuf, Option<ID2D1Bitmap>)>,
+    /// Logos of the apps on the notification page, by app identity.
+    logos: Vec<(String, ID2D1Bitmap)>,
     /// Dashed outline of the drop zone.
     dashes: ID2D1StrokeStyle,
     dc: HDC,
@@ -821,11 +1014,17 @@ impl Renderer {
             )?;
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let font = w!("Segoe UI Variable Display");
+            // Falls back to the system's font on a Windows too old to load it.
+            let bundled = bundled_font(&dwrite).ok();
+            let font = if bundled.is_some() {
+                w!("Plus Jakarta Sans")
+            } else {
+                w!("Segoe UI Variable Display")
+            };
             let format = |family, weight: DWRITE_FONT_WEIGHT, size| -> Result<IDWriteTextFormat> {
                 let format = dwrite.CreateTextFormat(
                     family,
-                    None,
+                    bundled.as_ref().filter(|_| family == font),
                     weight,
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
@@ -853,7 +1052,7 @@ impl Renderer {
                 )?;
                 Ok(format)
             };
-            let text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
+            let text = format(font, DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let small_text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0)?;
             let icons = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 15.0)?;
             let title_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5)?;
@@ -861,22 +1060,23 @@ impl Renderer {
             let trailing_text = line(DWRITE_FONT_WEIGHT_SEMI_LIGHT, 25.0)?;
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
             let text_left = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
+            let bold_left = line(DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
             let tiny = format(font, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let tile_text = line(DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
             tile_text.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             tile_text.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            let centered_line = |weight, size| -> Result<IDWriteTextFormat> {
+            let wrapped = |weight, size| -> Result<IDWriteTextFormat> {
                 let format = line(weight, size)?;
-                format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
-                format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
                 Ok(format)
             };
-            let lyric_text = centered_line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0)?;
-            let lyric_next = centered_line(DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
+            let lyric_text = wrapped(DWRITE_FONT_WEIGHT_BOLD, 16.0)?;
+            let lyric_next = wrapped(DWRITE_FONT_WEIGHT_SEMI_BOLD, 15.0)?;
             let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let pill_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
             let nav_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 13.0)?;
+            let nav_bold = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let symbols = format(w!("Segoe UI Symbol"), DWRITE_FONT_WEIGHT_NORMAL, 26.0)?;
             symbols.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
             symbols.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
@@ -895,11 +1095,13 @@ impl Renderer {
                 big_clock,
                 tiny,
                 tile_text,
+                bold_left,
                 lyric_text,
                 lyric_next,
                 close_glyph,
                 pill_glyph,
                 nav_glyph,
+                nav_bold,
                 symbols,
                 icons,
                 black,
@@ -909,6 +1111,7 @@ impl Renderer {
                 art: None,
                 art_tint: None,
                 thumbs: Vec::new(),
+                logos: Vec::new(),
                 dashes,
                 dc,
                 bitmap,
@@ -932,7 +1135,10 @@ impl Renderer {
             self.draw_eyes(scene);
             self.draw_banner(scene);
             self.draw_music(scene);
-            self.with_scale(scene.closed_scale, || self.draw_clock(scene));
+            self.with_scale(scene.closed_scale, || {
+                self.draw_clock(scene);
+                self.draw_unread(scene);
+            });
             t.EndDraw(None, None)?;
 
             let blend = BLENDFUNCTION {
@@ -992,11 +1198,28 @@ impl Renderer {
             (_, Some(Page::Music)) => 1.0 - scene.page_mix,
             _ => 0.0,
         };
-        let opacity = shown * scene.card_visible.clamp(0.0, 1.0);
+        let card = shown * scene.card_visible.clamp(0.0, 1.0);
+        // In lyric mode the strip glows too.
+        let lyric = scene
+            .music
+            .as_ref()
+            .is_some_and(|music| music.lyric.is_some());
+        let strip = if lyric && scene.strip == Strip::Music {
+            scene.music_visible.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let opacity = card.max(strip);
         if let Some([r, g, b]) = self.art_tint.filter(|_| opacity > 0.01 && !scene.drop_zone) {
+            // The strip's glow rises from its foot.
+            let (start, end) = if strip > card {
+                (pt(x0, h), pt(x0, 0.0))
+            } else {
+                (pt(x0, 0.0), pt(x1, h))
+            };
             let glow = self.gradient(
-                pt(x0, 0.0),
-                pt(x1, h),
+                start,
+                end,
                 &[(0.0, color(r, g, b, 1.0)), (0.9, color(0.0, 0.0, 0.0, 0.0))],
             )?;
             glow.SetOpacity(opacity);
@@ -1070,7 +1293,82 @@ impl Renderer {
                 self.draw_level(x0, x1, h, level, *muted, alpha);
             }
             Content::Notice(notice) => self.draw_notice(notice, x0, x1, h, alpha),
+            Content::App(notice) => self.draw_app_banner(scene, notice, x0, x1, h, alpha),
+            Content::Prayer(label) => self.draw_prayer_banner(label, x0, x1, h, alpha),
+            // The cover, date and level bars in a row, the song's name below.
+            Content::Song(song) => {
+                self.target
+                    .PushAxisAlignedClip(&rect(x0, 0.0, x1, h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                let cy = 15.0;
+                self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+                self.draw_date_and_time(scene, cy, alpha);
+                if let Some(music) = &scene.music {
+                    self.accent.SetColor(&self.art_accent());
+                    self.accent.SetOpacity(alpha);
+                    self.draw_bars(music, x1 - 14.0, cy, &self.accent);
+                }
+                let room = x1 - x0 - 2.0 * SONG_BANNER_SIDE;
+                if let Some(text) = self.text_layout(song, &self.bold_left, room) {
+                    let x = (x0 + x1 - text.width) / 2.0;
+                    self.draw_layout(&text.layout, x, 33.0, alpha);
+                }
+                self.target.PopAxisAlignedClip();
+            }
         }
+    }
+
+    /// Keeps a logo for each app among `items`, decoding new ones.
+    pub fn sync_logos(&mut self, items: &[AppNotice]) {
+        self.logos
+            .retain(|(id, _)| items.iter().any(|item| item.app_id == *id));
+        for item in items {
+            if self.logos.iter().any(|(id, _)| *id == item.app_id) {
+                continue;
+            }
+            let decoded = item
+                .logo
+                .as_ref()
+                .and_then(|bytes| unsafe { self.decode_logo(bytes).ok() });
+            if let Some(bitmap) = decoded {
+                self.logos.push((item.app_id.clone(), bitmap));
+            }
+        }
+    }
+
+    /// App logos come with wide transparent margins, which would leave them
+    /// tiny on the card, so they are cut to the square around what is visible.
+    unsafe fn decode_logo(&self, bytes: &[u8]) -> Result<ID2D1Bitmap> {
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let stream = SHCreateMemStream(Some(bytes)).ok_or(windows::core::Error::empty())?;
+        let decoder =
+            wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
+        let frame = decoder.GetFrame(0)?;
+        let (mut width, mut height) = (0, 0);
+        frame.GetSize(&mut width, &mut height)?;
+        let converter = wic.CreateFormatConverter()?;
+        converter.Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeMedianCut,
+        )?;
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        converter.CopyPixels(std::ptr::null(), width * 4, &mut pixels)?;
+        let (x, y, side) = visible_square(&pixels, width as usize, height as usize);
+        let clipper = wic.CreateBitmapClipper()?;
+        clipper.Initialize(
+            &converter,
+            &WICRect {
+                X: x as i32,
+                Y: y as i32,
+                Width: side as i32,
+                Height: side as i32,
+            },
+        )?;
+        self.target.CreateBitmapFromWicBitmap(&clipper, None)
     }
 
     /// Decodes album art for the current track; None clears it.
@@ -1145,12 +1443,12 @@ impl Renderer {
     pub fn volume_zone_at(&self, x: f32, y: f32, width: f32, lyrics: bool, open: bool) -> bool {
         let (y, width) = on_page(y, width);
         let card = CardRects::new(width, lyrics);
-        let left = if open {
-            card.volume.0 - 10.0
-        } else {
-            card.speaker.0 - 14.0
-        };
-        x >= left && x <= card.speaker.0 + 14.0 && (y - card.speaker.1).abs() <= 16.0
+        let (mut left, mut right) = (card.speaker.0 - 14.0, card.speaker.0 + 14.0);
+        if open {
+            left = left.min(card.volume.0 - 10.0);
+            right = right.max(card.volume.1 + 10.0);
+        }
+        x >= left && x <= right && (y - card.speaker.1).abs() <= 16.0
     }
 
     /// Whether the volume slider is at (`x`, `y`) on the open card.
@@ -1158,6 +1456,207 @@ impl Renderer {
         let (y, width) = on_page(y, width);
         let (left, right, row) = CardRects::new(width, lyrics).volume;
         x >= left - 6.0 && x <= right + 6.0 && (y - row).abs() <= 12.0
+    }
+
+    /// How far into the song the progress bar at (`x`, `y`) points, 0..1.
+    pub fn progress_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> Option<f32> {
+        let (y, width) = on_page(y, width);
+        let (left, right, row) = CardRects::new(width, lyrics).progress;
+        (x >= left && x <= right && (y - row).abs() <= 8.0).then(|| (x - left) / (right - left))
+    }
+
+    /// Which lyric line is at (`x`, `y`), counted from the one sung: -1 the
+    /// line before it, 1 the line after it.
+    pub fn lyric_line_at(&self, x: f32, y: f32, width: f32) -> Option<isize> {
+        let (y, width) = on_page(y, width);
+        let left = CANVAS.0 / 2.0 - width / 2.0 + LYRICS_LEFT;
+        (x >= left && (4.0..150.0).contains(&y)).then_some(match y - LYRICS_MIDDLE {
+            offset if offset < -20.0 => -1,
+            offset if offset > 20.0 => 1,
+            _ => 0,
+        })
+    }
+
+    /// The date and time, centered on the notch.
+    unsafe fn draw_date_and_time(&self, scene: &Scene, cy: f32, alpha: f32) {
+        let date = self.text_layout(scene.status.date, &self.small_left, 160.0);
+        let time = self.text_layout(scene.clock, &self.bold_left, 80.0);
+        if let (Some(date), Some(time)) = (date, time) {
+            let x = (CANVAS.0 - date.width - 8.0 - time.width) / 2.0;
+            self.draw_layout(&date.layout, x, cy - date.height / 2.0, 0.7 * alpha);
+            let x = x + date.width + 8.0;
+            self.draw_layout(&time.layout, x, cy - time.height / 2.0, alpha);
+        }
+    }
+
+    /// The cover's colour, bright enough for the dark notch.
+    fn art_accent(&self) -> D2D1_COLOR_F {
+        self.art_tint
+            .map_or(color(1.0, 1.0, 1.0, 1.0), |[r, g, b]| {
+                let high = r.max(g).max(b).max(0.01);
+                color(r / high, g / high, b / high, 1.0)
+            })
+    }
+
+    /// The music level bars, ending at `right`.
+    unsafe fn draw_bars(
+        &self,
+        music: &MusicScene,
+        right: f32,
+        cy: f32,
+        brush: &ID2D1SolidColorBrush,
+    ) {
+        let (bar, gap, tallest) = (3.0, 3.0, 14.0);
+        for (i, level) in music.bars.iter().enumerate() {
+            let left = right - (4 - i) as f32 * (bar + gap) + gap;
+            let half = (3.0 + (tallest - 3.0) * level.clamp(0.0, 1.0)) / 2.0;
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(left, cy - half, left + bar, cy + half),
+                    radiusX: 1.5,
+                    radiusY: 1.5,
+                },
+                brush,
+            );
+        }
+    }
+
+    /// Draws at `scale` around (`cx`, `cy`), on top of the current transform.
+    unsafe fn scaled_at(&self, cx: f32, cy: f32, scale: f32, draw: impl FnOnce()) {
+        let mut current = Matrix3x2::default();
+        self.target.GetTransform(&mut current);
+        self.target.SetTransform(&Matrix3x2 {
+            M11: current.M11 * scale,
+            M22: current.M22 * scale,
+            M31: current.M31 + current.M11 * cx * (1.0 - scale),
+            M32: current.M32 + current.M22 * cy * (1.0 - scale),
+            ..current
+        });
+        draw();
+        self.target.SetTransform(&current);
+    }
+
+    /// The music card's controls, small, in a notch row ending at `x1`.
+    unsafe fn draw_media_row(
+        &self,
+        scene: &Scene,
+        music: &MusicScene,
+        x1: f32,
+        cy: f32,
+        alpha: f32,
+    ) {
+        self.light.SetOpacity(alpha);
+        let right = x1 - PEEK_RIGHT;
+        let small = |id| PEEK_ICON * zoomed(scene.zoom(id));
+        let (previous, play) = (right - 2.0 * PEEK_STEP, right - PEEK_STEP);
+        self.scaled_at(previous, cy, small(zoom::PREVIOUS), || {
+            let _ = self.fill_skip(previous, cy, -1.0, &self.light);
+        });
+        self.scaled_at(play, cy, small(zoom::PLAY), || {
+            if music.playing {
+                self.fill_pause(play, cy, &self.light);
+            } else {
+                let _ = self.fill_play(play, cy, &self.light);
+            }
+        });
+        self.scaled_at(right, cy, small(zoom::NEXT), || {
+            let _ = self.fill_skip(right, cy, 1.0, &self.light);
+        });
+    }
+
+    /// The notch widened in click-to-open mode while music is on. It only
+    /// grows: the clock stays put, the day fades in beside it, and the cover
+    /// and controls ride the edges.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_music_peek(
+        &self,
+        scene: &Scene,
+        music: &MusicScene,
+        x0: f32,
+        x1: f32,
+        cy: f32,
+        alpha: f32,
+        peek: f32,
+    ) {
+        let shown = alpha * peek;
+        self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, shown);
+        if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 120.0) {
+            let x = CANVAS.0 / 2.0 - 32.0 - date.width;
+            let opacity = 0.85 * alpha * peek * peek;
+            self.draw_layout(&date.layout, x, cy - date.height / 2.0, opacity);
+        }
+        self.draw_media_row(scene, music, x1, cy, shown);
+    }
+
+    /// The control of a notch media row at (`x`, `y`). `width` and `scale`
+    /// are the notch's, whose drawing they undo.
+    pub fn peek_control_at(&self, x: f32, y: f32, width: f32, scale: f32) -> Option<Command> {
+        let center = CANVAS.0 / 2.0;
+        let x = center + (x - center) / scale;
+        let right = center + width / 2.0 / scale - PEEK_RIGHT;
+        if y / scale > PEEK.1 + 2.0 {
+            return None;
+        }
+        [
+            (PEEK_STEP * 2.0, Command::Previous),
+            (PEEK_STEP, Command::TogglePlay),
+            (0.0, Command::Next),
+        ]
+        .into_iter()
+        .find(|(step, _)| (x - (right - step)).abs() <= PEEK_STEP / 2.0)
+        .map(|(_, command)| command)
+    }
+
+    /// Which part of a media row zooms for the mouse at (`x`, `y`).
+    pub fn peek_zoom_at(&self, x: f32, y: f32, width: f32, scale: f32) -> Option<u16> {
+        self.peek_control_at(x, y, width, scale)
+            .map(|command| match command {
+                Command::Previous => zoom::PREVIOUS,
+                Command::Next => zoom::NEXT,
+                _ => zoom::PLAY,
+            })
+    }
+
+    /// Which part of the music card zooms for the mouse at (`x`, `y`).
+    pub fn music_zoom_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> Option<u16> {
+        let (y, width) = on_page(y, width);
+        let card = CardRects::new(width, lyrics);
+        [
+            (card.lyrics, zoom::LYRICS),
+            (card.previous, zoom::PREVIOUS),
+            (card.play, zoom::PLAY),
+            (card.next, zoom::NEXT),
+        ]
+        .into_iter()
+        .find(|((cx, cy), _)| (x - cx).powi(2) + (y - cy).powi(2) <= HIT_RADIUS.powi(2))
+        .map(|(_, id)| id)
+    }
+
+    /// Center of the close button on an app notification in a notch ending
+    /// at `x1`, where its age shows otherwise.
+    fn app_close(x1: f32) -> (f32, f32) {
+        (x1 - 30.0, 42.0)
+    }
+
+    /// Whether an app notification's close button is at (`x`, `y`).
+    pub fn app_close_at(&self, x: f32, y: f32, width: f32) -> bool {
+        let (cx, cy) = Self::app_close(CANVAS.0 / 2.0 + width / 2.0);
+        (x - cx).powi(2) + (y - cy).powi(2) <= 121.0
+    }
+
+    /// The notch width that fits `song` under the clock.
+    pub fn song_banner_width(&self, song: &str) -> f32 {
+        let text = unsafe { self.text_layout(song, &self.bold_left, LYRIC_STRIP_MAX) };
+        text.map_or(0.0, |text| text.width) + 2.0 * SONG_BANNER_SIDE
+    }
+
+    /// The strip width that fits the longest of a song's `lines`.
+    pub fn lyric_strip_width<'a>(&self, lines: impl Iterator<Item = &'a str>) -> f32 {
+        let widest = lines
+            .filter_map(|line| unsafe { self.text_layout(line, &self.bold_left, LYRIC_STRIP_MAX) })
+            .map(|text| text.width)
+            .fold(0.0, f32::max);
+        widest + LYRIC_STRIP_LEFT + LYRIC_STRIP_RIGHT
     }
 
     /// The volume the slider gives at `x`, past its ends included.
@@ -1185,9 +1684,6 @@ impl Renderer {
                 }
                 (Strip::Music, _, Some(music)) => {
                     self.draw_music_strip(music, left, right, height, alpha)
-                }
-                (Strip::Prayer, _, _) => {
-                    self.draw_prayer_strip(scene.prayer_soon, left, right, height, alpha)
                 }
                 _ => {}
             });
@@ -1317,14 +1813,18 @@ impl Renderer {
             let eased = t * t * (3.0 - 2.0 * t);
             let (x, y) = nav_item(index, count);
             let y = y + 6.0 * (1.0 - eased);
+            let grown = zoomed(scene.zoom(zoom::NAV + index as u16));
             if index == scene.page_index {
                 let (_, _, accent) = page_title(scene.page, "", "", "");
                 self.accent.SetColor(&accent_color(accent));
                 self.accent.SetOpacity(eased * alpha);
-                self.draw_nav_glyph(icon, x, y, &self.accent);
+                self.scaled_at(x, y, grown, || self.draw_nav_icon(icon, x, y, &self.accent));
             } else {
-                self.light.SetOpacity(0.75 * eased * alpha);
-                self.draw_nav_glyph(icon, x, y, &self.light);
+                self.light.SetOpacity(0.45 * eased * alpha);
+                self.scaled_at(x, y, grown, || self.draw_nav_icon(icon, x, y, &self.light));
+            }
+            if scene.inbox.unread && scene.page_list.get(index) == Some(&Page::Notifications) {
+                self.draw_red_dot(x + 6.0, y - 6.0, 2.5, eased * alpha);
             }
         }
     }
@@ -1423,14 +1923,15 @@ impl Renderer {
             for (i, level) in music.bars.iter().enumerate() {
                 let left = right - (4 - i) as f32 * (bar + gap) + gap;
                 let half = (3.0 + (tallest - 3.0) * level.clamp(0.0, 1.0)) / 2.0;
-                self.light.SetOpacity(0.85 * card_alpha);
+                self.accent.SetColor(&self.art_accent());
+                self.accent.SetOpacity(card_alpha);
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: rect(left, cy - half, left + bar, cy + half),
                         radiusX: bar / 2.0,
                         radiusY: bar / 2.0,
                     },
-                    &self.light,
+                    &self.accent,
                 );
             }
         }
@@ -1452,6 +1953,9 @@ impl Renderer {
         }
         match (page, &scene.music, &scene.timer) {
             (Page::Shelf, _, _) => self.draw_shelf_card(&scene.shelf, x0, x1, alpha),
+            (Page::Notifications, _, _) => {
+                self.draw_notifications_card(&scene.inbox, x0, x1, alpha)
+            }
             (Page::Todo, _, _) => self.draw_todo_card(&scene.todo, x0, x1, alpha),
             (Page::Prayer, _, _) if scene.prayer.is_some() => {
                 if let Some(prayer) = &scene.prayer {
@@ -1459,10 +1963,10 @@ impl Renderer {
                 }
             }
             (Page::Music, Some(music), _) => {
-                self.draw_music_card(music, scene.width - 2.0 * CARD_SIDE, alpha)
+                self.draw_music_card(scene, music, scene.width - 2.0 * CARD_SIDE, alpha)
             }
             (Page::Calendar, _, _) => {
-                self.draw_calendar_card(&scene.calendar, &scene.agenda, x0, x1, alpha)
+                self.draw_calendar_card(&scene.calendar, &scene.month_agenda, x0, x1, alpha)
             }
             (Page::Pomodoro, _, Some(timer)) => self.draw_pomodoro_card(timer, x0, alpha),
             _ => self.draw_status_card(scene, x0, x1, alpha),
@@ -1535,15 +2039,50 @@ impl Renderer {
     }
 
     /// A prayer icon on the left, "Maghrib 12 mnt" on the right.
-    unsafe fn draw_prayer_strip(&self, label: &str, x0: f32, x1: f32, h: f32, alpha: f32) {
+    unsafe fn draw_prayer_banner(&self, label: &str, x0: f32, x1: f32, h: f32, alpha: f32) {
         let cy = h / 2.0;
         self.accent.SetColor(&accent_color(Accent::Green));
         self.accent.SetOpacity(alpha);
-        self.draw_glyph(glyph::PRAYER, x0 + 24.0, cy, &self.accent);
-        if let Some(text) = self.text_layout(label, &self.small_left, 120.0) {
+        self.fill_mosque(x0 + 24.0, cy, &self.accent);
+        if let Some(text) = self.text_layout(label, &self.bold_left, 160.0) {
             let x = x1 - 14.0 - text.width;
-            self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.9 * alpha);
+            self.draw_layout(&text.layout, x, cy - text.height / 2.0, alpha);
         }
+    }
+
+    /// A mosque, which no icon font has: a dome with its spire on a hall with
+    /// a door, between two minarets.
+    unsafe fn fill_mosque(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: 5.5,
+                radiusY: 5.5,
+            },
+            brush,
+        );
+        self.target
+            .FillRectangle(&rect(cx - 0.6, cy - 8.5, cx + 0.6, cy - 4.0), brush);
+        self.target
+            .FillRectangle(&rect(cx - 7.0, cy + 1.0, cx + 7.0, cy + 7.5), brush);
+        for side in [-1.0, 1.0] {
+            let x = cx + side * 9.5;
+            self.target
+                .FillRectangle(&rect(x - 1.1, cy - 3.5, x + 1.1, cy + 7.5), brush);
+            let _ = self.fill_shape(
+                &[(x - 1.1, cy - 3.5), (x, cy - 6.5), (x + 1.1, cy - 3.5)],
+                brush,
+            );
+        }
+        self.black.SetOpacity(1.0);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: rect(cx - 1.7, cy + 3.0, cx + 1.7, cy + 7.5),
+                radiusX: 1.7,
+                radiusY: 1.7,
+            },
+            &self.black,
+        );
     }
 
     /// Month grid on the left, the next events on the right.
@@ -1622,13 +2161,23 @@ impl Renderer {
             } else {
                 self.draw_text(&number, &self.tiny, bounds, 0.9 * alpha);
             }
-            if calendar.marked.contains(&day) {
-                // A dot under days with something on the agenda.
-                self.accent.SetColor(&accent_color(Accent::Blue));
+            // Dots under days with something on the agenda, one per calendar.
+            let mut sources: Vec<usize> = calendar
+                .marked
+                .iter()
+                .filter(|(marked, _)| *marked == day)
+                .map(|(_, source)| *source)
+                .collect();
+            sources.sort_unstable();
+            sources.dedup();
+            let middle = (bounds.left + bounds.right) / 2.0;
+            let first = middle - (sources.len().max(1) - 1) as f32 * 2.5;
+            for (index, source) in sources.into_iter().enumerate() {
+                self.accent.SetColor(&source_color(source));
                 self.accent.SetOpacity(alpha);
                 self.target.FillEllipse(
                     &D2D1_ELLIPSE {
-                        point: pt((bounds.left + bounds.right) / 2.0, bounds.bottom - 1.0),
+                        point: pt(first + index as f32 * 5.0, bounds.bottom - 1.0),
                         radiusX: 1.6,
                         radiusY: 1.6,
                     },
@@ -1657,18 +2206,16 @@ impl Renderer {
             if let Some(text) = self.text_layout(item.summary, &self.subtitle_text, room) {
                 self.draw_layout(&text.layout, left, top + 14.0, 0.95 * alpha);
             }
-            if item.today {
-                self.accent.SetColor(&accent_color(Accent::Blue));
-                self.accent.SetOpacity(alpha);
-                self.target.FillEllipse(
-                    &D2D1_ELLIPSE {
-                        point: pt(left - 8.0, top + 8.0),
-                        radiusX: 2.5,
-                        radiusY: 2.5,
-                    },
-                    &self.accent,
-                );
-            }
+            self.accent.SetColor(&source_color(item.source));
+            self.accent.SetOpacity(alpha);
+            self.target.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: pt(left - 8.0, top + 8.0),
+                    radiusX: 2.5,
+                    radiusY: 2.5,
+                },
+                &self.accent,
+            );
         }
     }
 
@@ -1872,6 +2419,177 @@ impl Renderer {
                 self.draw_tile_button(glyph::CLOSE, layout.remove(index), alpha);
                 self.draw_tile_button(glyph::COPY, layout.copy(index), alpha);
             }
+        }
+    }
+
+    /// The newest notifications, one row each, under a count.
+    unsafe fn draw_notifications_card(&self, inbox: &InboxScene, x0: f32, x1: f32, alpha: f32) {
+        if inbox.total == 0 {
+            let bounds = rect(x0, 40.0, x1, 120.0);
+            self.draw_text("Belum ada notifikasi", &self.tile_text, bounds, 0.5 * alpha);
+            return;
+        }
+        let heading = format!("{} notifikasi", inbox.total);
+        if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
+            self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
+        }
+        let clear = ShelfRects::new(x0, x1).clear;
+        self.draw_pill(clear, glyph::DELETE, "Hapus semua", None, alpha);
+
+        let (left, right) = (x0 + 56.0, x1 - 16.0);
+        for (index, row) in inbox.rows.iter().enumerate() {
+            let top = INBOX_TOP + index as f32 * INBOX_ROW;
+            let logo = rect(x0 + 20.0, top + 2.0, x0 + 48.0, top + 30.0);
+            self.draw_logo(row.app_id, logo, 7.0, alpha);
+
+            let age = self.text_layout(&row.age, &self.small_left, 60.0);
+            let age_width = age.as_ref().map_or(0.0, |text| text.width);
+            if let Some(text) = age {
+                self.draw_layout(&text.layout, right - text.width, top + 1.0, 0.5 * alpha);
+            }
+            let room = right - left - age_width - 8.0;
+            if let Some(text) = self.text_layout(row.title, &self.text_left, room) {
+                self.draw_layout(&text.layout, left, top, alpha);
+            }
+            let hovered = inbox.hover == Some(index);
+            let room = right - left - if hovered { 24.0 } else { 0.0 };
+            if let Some(text) = self.text_layout(&row.detail, &self.small_left, room) {
+                self.draw_layout(&text.layout, left, top + 17.0, 0.6 * alpha);
+            }
+            if hovered {
+                self.draw_tile_button(glyph::CLOSE, inbox_remove(x1, index), alpha);
+            }
+        }
+    }
+
+    /// Which notification's remove button is at (`x`, `y`).
+    pub fn inbox_remove_at(&self, x: f32, y: f32, width: f32, count: usize) -> Option<usize> {
+        let (y, width) = on_page(y, width);
+        let x1 = CANVAS.0 / 2.0 + width / 2.0;
+        (0..count).find(|&index| {
+            let (rx, ry) = inbox_remove(x1, index);
+            (x - rx).powi(2) + (y - ry).powi(2) <= 81.0
+        })
+    }
+
+    /// Which of `count` notification rows is at (`x`, `y`).
+    pub fn inbox_row_at(&self, x: f32, y: f32, width: f32, count: usize) -> Option<usize> {
+        let (y, width) = on_page(y, width);
+        let inside = (x - CANVAS.0 / 2.0).abs() <= width / 2.0;
+        let index = (y - INBOX_TOP).div_euclid(INBOX_ROW);
+        (inside && index >= 0.0 && (index as usize) < count).then_some(index as usize)
+    }
+
+    /// A notification from another app: the date and time, then a card with
+    /// its logo, app, sender, message and age.
+    unsafe fn draw_app_banner(
+        &self,
+        scene: &Scene,
+        notice: &AppNotice,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
+        self.target
+            .PushAxisAlignedClip(&rect(x0, 0.0, x1, h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        let cy = PEEK.1 / 2.0;
+        self.draw_date_and_time(scene, cy, alpha);
+        if let Some(music) = &scene.music {
+            self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+            self.draw_media_row(scene, music, x1, cy, alpha);
+        }
+
+        let card = rect(x0 + 10.0, 28.0, x1 - 10.0, 28.0 + 72.0);
+        self.light.SetOpacity(0.08 * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: card,
+                radiusX: 16.0,
+                radiusY: 16.0,
+            },
+            &self.light,
+        );
+        let logo = rect(
+            card.left + 12.0,
+            card.top + 12.0,
+            card.left + 60.0,
+            card.top + 60.0,
+        );
+        self.draw_logo(&notice.app_id, logo, 12.0, alpha);
+
+        let left = logo.right + 12.0;
+        let right = card.right - 14.0;
+        let small = rect(left, card.top + 9.0, left + 13.0, card.top + 22.0);
+        self.draw_logo(&notice.app_id, small, 3.0, alpha);
+        let age = notifications::age_label(notifications::now_seconds() - notice.created);
+        let age = self.text_layout(&age, &self.small_left, 60.0);
+        let age_width = age.as_ref().map_or(0.0, |text| text.width);
+        if scene.banner_hover {
+            self.draw_tile_button(glyph::CLOSE, Self::app_close(x1), alpha);
+        } else if let Some(text) = age {
+            let x = right - text.width;
+            self.draw_layout(&text.layout, x, card.top + 8.0, 0.55 * alpha);
+        }
+        let room = right - left - 18.0 - age_width - 8.0;
+        if let Some(text) = self.text_layout(&notice.app, &self.small_left, room) {
+            self.draw_layout(&text.layout, left + 18.0, card.top + 8.0, 0.7 * alpha);
+        }
+        let room = right - left;
+        if let Some(text) = self.text_layout(&notice.title, &self.title_text, room) {
+            self.draw_layout(&text.layout, left, card.top + 24.0, alpha);
+        }
+        if let Some(text) = self.text_layout(&notice.body, &self.subtitle_text, room) {
+            self.draw_layout(&text.layout, left, card.top + 45.0, 0.7 * alpha);
+        }
+        self.target.PopAxisAlignedClip();
+    }
+
+    /// Whether the button that clears the notifications is at (`x`, `y`).
+    pub fn inbox_clear_at(&self, x: f32, y: f32, width: f32) -> bool {
+        let (y, width) = on_page(y, width);
+        let cx = CANVAS.0 / 2.0;
+        let clear = ShelfRects::new(cx - width / 2.0, cx + width / 2.0).clear;
+        x >= clear.left && x < clear.right && y >= clear.top && y < clear.bottom
+    }
+
+    /// A red dot, the mark of something unseen.
+    unsafe fn draw_red_dot(&self, cx: f32, cy: f32, radius: f32, alpha: f32) {
+        self.accent.SetColor(&accent_color(Accent::Red));
+        self.accent.SetOpacity(alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: radius,
+                radiusY: radius,
+            },
+            &self.accent,
+        );
+    }
+
+    /// Tells the closed notch there are notifications to see: a bell in the
+    /// temperature's place, or only the dot where the notch shows other things.
+    unsafe fn draw_unread(&self, scene: &Scene) {
+        let alpha = (1.0 - scene.banner_visible.max(scene.card_visible) * 1.6).clamp(0.0, 1.0);
+        if !scene.inbox.unread || alpha <= 0.0 {
+            return;
+        }
+        let cx = CANVAS.0 / 2.0;
+        let (width, height) = (
+            scene.width / scene.closed_scale,
+            scene.height / scene.closed_scale,
+        );
+        let right = cx + width / 2.0;
+        // The widened notch has its controls there; the dot goes by the cover.
+        if scene.peek_visible > 0.01 && scene.music.is_some() {
+            self.draw_red_dot(cx - width / 2.0 + 38.0, height / 2.0, 3.0, alpha);
+        } else if unread_bell(scene) {
+            let (x, y) = (right - 22.0, height / 2.0);
+            self.light.SetOpacity(0.9 * alpha);
+            self.draw_nav_glyph(glyph::BELL, x, y, &self.light);
+            self.draw_red_dot(x + 6.0, y - 6.0, 3.0, alpha);
+        } else {
+            self.draw_red_dot(right - 10.0, height / 2.0, 3.0, alpha);
         }
     }
 
@@ -2472,35 +3190,37 @@ impl Renderer {
     unsafe fn draw_music_strip(&self, music: &MusicScene, x0: f32, x1: f32, h: f32, alpha: f32) {
         let cy = h / 2.0;
         self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
-        let (bar, gap, tallest) = (3.0, 3.0, 14.0);
-        let right = x1 - 14.0;
-        for (i, level) in music.bars.iter().enumerate() {
-            let left = right - (4 - i) as f32 * (bar + gap) + gap;
-            let half = (3.0 + (tallest - 3.0) * level.clamp(0.0, 1.0)) / 2.0;
-            self.light.SetOpacity(0.92 * alpha);
-            self.target.FillRoundedRectangle(
-                &D2D1_ROUNDED_RECT {
-                    rect: rect(left, cy - half, left + bar, cy + half),
-                    radiusX: 1.5,
-                    radiusY: 1.5,
-                },
-                &self.light,
-            );
+        // In lyric mode: the cover and the line, nothing else.
+        if let Some((before, line, _)) = music.lyric {
+            let line = if line.is_empty() { "\u{266A}" } else { line };
+            let (left, right) = (x0 + LYRIC_STRIP_LEFT, x1 - LYRIC_STRIP_RIGHT);
+            // The last line rolls up and out as the new one rolls in below it.
+            let moved = eased(music.lyric_scroll);
+            let alpha = second_half(alpha);
+            let roll = |text: &str, y: f32, opacity: f32| {
+                if let Some(text) = self.text_layout(text, &self.bold_left, right - left) {
+                    let x = (left + right - text.width) / 2.0;
+                    let top = cy - text.height / 2.0 + y;
+                    self.draw_layout(&text.layout, x, top, opacity * alpha);
+                }
+            };
+            if moved < 1.0 && !before.is_empty() {
+                roll(before, -moved * h, 1.0 - moved);
+            }
+            roll(line, (1.0 - moved) * h, moved);
+            return;
         }
+        self.accent.SetColor(&self.art_accent());
+        self.accent.SetOpacity(alpha);
+        self.draw_bars(music, x1 - 14.0, cy, &self.accent);
     }
 
     /// Art beside the title and artist, progress in the cover's colour, the
     /// controls, the volume, and the lyrics when there are any.
-    unsafe fn draw_music_card(&self, music: &MusicScene, width: f32, alpha: f32) {
+    unsafe fn draw_music_card(&self, scene: &Scene, music: &MusicScene, width: f32, alpha: f32) {
         let card = CardRects::new(width, music.lyric.is_some());
         self.draw_art(card.art, 10.0, alpha);
-        // The tint at full strength: bright on the dark card.
-        let accent = self
-            .art_tint
-            .map_or(color(1.0, 1.0, 1.0, 1.0), |[r, g, b]| {
-                let high = r.max(g).max(b).max(0.01);
-                color(r / high, g / high, b / high, 1.0)
-            });
+        let accent = self.art_accent();
 
         let column = card.text_right - card.text_left;
         if let Some(title) = self.text_layout(music.title, &self.title_text, column) {
@@ -2515,13 +3235,13 @@ impl Renderer {
             );
         }
 
-        let slider = |left: f32, right: f32, y: f32, fraction: f32, opacity: f32| {
+        let slider = |left: f32, right: f32, y: f32, half: f32, fraction: f32, opacity: f32| {
             let bar = |end: f32, brush: &ID2D1SolidColorBrush| {
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        rect: rect(left, y - 2.0, end, y + 2.0),
-                        radiusX: 2.0,
-                        radiusY: 2.0,
+                        rect: rect(left, y - half, end, y + half),
+                        radiusX: half,
+                        radiusY: half,
                     },
                     brush,
                 );
@@ -2536,91 +3256,155 @@ impl Renderer {
             );
         };
 
-        // Progress, when the player reports a length. Whole seconds on both
-        // sides, so the two always add up to the song.
+        // Progress, when the player reports a length: how far in on the left,
+        // the song's length on the right.
         if music.duration > 0.0 {
             let (left, right, y) = card.progress;
             slider(
                 left,
                 right,
                 y,
+                2.0,
                 (music.position / music.duration) as f32,
                 alpha,
             );
             let elapsed = music.position.floor();
-            let remaining = (music.duration.round() - elapsed).max(0.0);
             if let Some(text) = self.text_layout(&format_duration(elapsed), &self.small_left, 40.0)
             {
                 let x = card.art.left;
                 self.draw_layout(&text.layout, x, y - text.height / 2.0, 0.6 * alpha);
             }
-            let left_text = format!("-{}", format_duration(remaining));
-            if let Some(text) = self.text_layout(&left_text, &self.small_left, 44.0) {
+            let length = format_duration(music.duration);
+            if let Some(text) = self.text_layout(&length, &self.small_left, 44.0) {
                 let x = card.text_right - text.width;
                 self.draw_layout(&text.layout, x, y - text.height / 2.0, 0.6 * alpha);
             }
         }
 
         // Controls, as solid shapes.
-        self.light.SetOpacity(alpha);
+        let reveal = music.volume_visible.clamp(0.0, 1.0);
+        let controls = if music.lyric.is_some() {
+            alpha * (1.0 - reveal)
+        } else {
+            alpha
+        };
+        self.light.SetOpacity(controls);
         let (px, py) = card.play;
         if music.playing {
-            self.fill_pause(px, py, &self.light);
+            self.scaled_at(px, py, zoomed(scene.zoom(zoom::PLAY)), || {
+                self.fill_pause(px, py, &self.light)
+            });
         } else {
-            let _ = self.fill_play(px, py, &self.light);
+            self.scaled_at(px, py, zoomed(scene.zoom(zoom::PLAY)), || {
+                let _ = self.fill_play(px, py, &self.light);
+            });
         }
-        self.light.SetOpacity(0.9 * alpha);
-        let _ = self.fill_skip(card.previous.0, card.previous.1, -1.0, &self.light);
-        let _ = self.fill_skip(card.next.0, card.next.1, 1.0, &self.light);
+        self.light.SetOpacity(0.9 * controls);
+        for ((cx, cy), direction, id) in [
+            (card.previous, -1.0, zoom::PREVIOUS),
+            (card.next, 1.0, zoom::NEXT),
+        ] {
+            self.scaled_at(cx, cy, zoomed(scene.zoom(id)), || {
+                let _ = self.fill_skip(cx, cy, direction, &self.light);
+            });
+        }
 
         // The lyrics button lights up in the cover's colour.
         let (lx, ly) = card.lyrics;
         if music.lyrics_ready && music.lyrics_on {
             self.accent.SetColor(&accent);
             self.accent.SetOpacity(alpha);
-            let _ = self.fill_lyrics(lx, ly, &self.accent);
+            self.scaled_at(lx, ly, zoomed(scene.zoom(zoom::LYRICS)), || {
+                let _ = self.fill_lyrics(lx, ly, &self.accent);
+            });
         } else {
             let opacity = if music.lyrics_ready { 0.6 } else { 0.25 };
             self.light.SetOpacity(opacity * alpha);
-            let _ = self.fill_lyrics(lx, ly, &self.light);
+            self.scaled_at(lx, ly, zoomed(scene.zoom(zoom::LYRICS)), || {
+                let _ = self.fill_lyrics(lx, ly, &self.light);
+            });
         }
 
         // Volume: the slider slides out of the speaker on hover.
         let (sx, sy) = card.speaker;
         self.light.SetOpacity(0.85 * alpha);
-        let _ = self.fill_speaker(sx, sy, &self.light);
-        let reveal = music.volume_visible.clamp(0.0, 1.0);
+        let volume_zoom = scene.zoom(zoom::VOLUME);
+        self.scaled_at(sx, sy, zoomed(volume_zoom), || {
+            let _ = self.fill_speaker(sx, sy, &self.light);
+        });
         if reveal > 0.01 {
             let (left, right, y) = card.volume;
             let start = right - (right - left) * reveal;
-            slider(start, right, y, music.volume, reveal * alpha);
+            let half = 2.0 + 1.5 * volume_zoom;
+            slider(start, right, y, half, music.volume, reveal * alpha);
         }
 
         // Lyrics: the line being sung, the next one dimmer below it.
-        if let Some((line, next)) = music.lyric {
-            let cx = CANVAS.0 / 2.0;
-            let (x0, x1) = (cx - width / 2.0 + 18.0, cx + width / 2.0 - 18.0);
-            let top = card.play.1 + 16.0;
+        if let Some((before, line, next)) = music.lyric {
+            let x0 = CANVAS.0 / 2.0 - width / 2.0;
+            let left = x0 + LYRICS_LEFT;
+            let room = width - LYRICS_LEFT - 14.0;
             let line = if line.is_empty() { "\u{266A}" } else { line };
-            self.draw_text(line, &self.lyric_text, rect(x0, top, x1, top + 16.0), alpha);
-            self.draw_text(
-                next,
-                &self.lyric_next,
-                rect(x0, top + 16.0, x1, top + 31.0),
-                0.4 * alpha,
+            let Some(sung) = self.text_layout(line, &self.lyric_text, room) else {
+                return;
+            };
+            self.target.PushAxisAlignedClip(
+                &rect(left, 4.0, left + room, 150.0),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             );
+            // The line sung holds the middle; its neighbours sit around it.
+            // On a new line all of them roll up from one line lower.
+            let moved = eased(music.lyric_scroll);
+            let top =
+                LYRICS_MIDDLE - sung.height / 2.0 + (1.0 - moved) * (sung.height + LYRICS_GAP);
+            let dim = 0.3;
+            self.draw_layout(&sung.layout, left, top, (dim + (1.0 - dim) * moved) * alpha);
+            if let Some(past) = self
+                .text_layout(before, &self.lyric_next, room)
+                .filter(|_| !before.is_empty())
+            {
+                let y = top - LYRICS_GAP - past.height;
+                self.draw_layout(&past.layout, left, y, (1.0 - (1.0 - dim) * moved) * alpha);
+            }
+            if let Some(coming) = self
+                .text_layout(next, &self.lyric_next, room)
+                .filter(|_| !next.is_empty())
+            {
+                let y = top + sung.height + LYRICS_GAP;
+                self.draw_layout(&coming.layout, left, y, dim * moved * alpha);
+            }
+            self.target.PopAxisAlignedClip();
         }
     }
 
     /// Album art clipped to a rounded square; a note icon when there is none.
     unsafe fn draw_art(&self, bounds: D2D_RECT_F, radius: f32, alpha: f32) {
+        self.draw_rounded(self.art.as_ref(), glyph::MUSIC, bounds, radius, alpha);
+    }
+
+    /// An app's logo; a message icon when it has none.
+    unsafe fn draw_logo(&self, app_id: &str, bounds: D2D_RECT_F, radius: f32, alpha: f32) {
+        let logo = self.logos.iter().find(|(id, _)| id == app_id);
+        let logo = logo.map(|(_, bitmap)| bitmap);
+        self.draw_rounded(logo, glyph::MESSAGE, bounds, radius, alpha);
+    }
+
+    /// A picture clipped to a rounded square, or `icon` without one.
+    unsafe fn draw_rounded(
+        &self,
+        picture: Option<&ID2D1Bitmap>,
+        icon: &str,
+        bounds: D2D_RECT_F,
+        radius: f32,
+        alpha: f32,
+    ) {
         let rounded = D2D1_ROUNDED_RECT {
             rect: bounds,
             radiusX: radius,
             radiusY: radius,
         };
         let size = bounds.right - bounds.left;
-        let brush = self.art.as_ref().and_then(|art| {
+        let brush = picture.and_then(|art| {
             let brush = self.target.CreateBitmapBrush(art, None, None).ok()?;
             let source = art.GetSize();
             brush.SetTransform(&Matrix3x2 {
@@ -2644,7 +3428,11 @@ impl Renderer {
                     (bounds.left + bounds.right) / 2.0,
                     (bounds.top + bounds.bottom) / 2.0,
                 );
-                self.draw_glyph(glyph::MUSIC, cx, cy, &self.light);
+                if size >= 24.0 {
+                    self.draw_glyph(icon, cx, cy, &self.light);
+                } else {
+                    self.draw_small_glyph_at(icon, cx, cy, &self.light);
+                }
             }
         }
     }
@@ -2805,23 +3593,41 @@ impl Renderer {
     }
 
     /// A speech bubble: a line being sung.
+    /// Two closing quotation marks: a dot with a tail curling down each.
     unsafe fn fill_lyrics(&self, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
-        self.target.FillRoundedRectangle(
-            &D2D1_ROUNDED_RECT {
-                rect: rect(cx - 9.0, cy - 8.0, cx + 9.0, cy + 4.0),
-                radiusX: 3.5,
-                radiusY: 3.5,
-            },
+        for x in [cx - 5.0, cx + 5.0] {
+            self.target.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: pt(x, cy - 2.0),
+                    radiusX: 3.8,
+                    radiusY: 3.8,
+                },
+                brush,
+            );
+            self.fill_shape(
+                &[
+                    (x + 3.0, cy - 2.0),
+                    (x + 1.5, cy + 3.5),
+                    (x - 3.0, cy + 6.5),
+                    (x - 0.5, cy + 1.0),
+                ],
+                brush,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A page icon, emboldened by DirectWrite: the icon font has one weight.
+    unsafe fn draw_nav_icon(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        let wide: Vec<u16> = icon.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.nav_bold,
+            &rect(cx - 11.0, cy - 11.0, cx + 11.0, cy + 11.0),
             brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
         );
-        self.fill_shape(
-            &[
-                (cx - 4.5, cy + 3.0),
-                (cx - 4.5, cy + 8.0),
-                (cx + 1.0, cy + 3.0),
-            ],
-            brush,
-        )
     }
 
     /// An icon in the page navigation pill.
@@ -3151,6 +3957,15 @@ impl Renderer {
         if scene.minimal && peek < 0.01 {
             return;
         }
+        // In lyric mode the line takes the clock's place, until the notch
+        // widens and its strip steps aside.
+        let lyric = scene
+            .music
+            .as_ref()
+            .is_some_and(|music| music.lyric.is_some());
+        if lyric && scene.strip == Strip::Music && peek < 0.01 {
+            return;
+        }
         // The clock steps aside quickly for the eyes, a banner or a card; the
         // live strip keeps it, with its own details on either side.
         let cover = scene
@@ -3160,6 +3975,13 @@ impl Renderer {
         let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
         // The thin bar has no clock until it widens.
         let alpha = if scene.minimal { alpha * peek } else { alpha };
+        // Leaving lyric mode the clock waits for the line to go, so the two
+        // never lie on top of each other.
+        let alpha = if lyric && scene.strip == Strip::Music {
+            alpha * second_half(peek)
+        } else {
+            alpha
+        };
         if alpha <= 0.0 {
             return;
         }
@@ -3170,7 +3992,13 @@ impl Renderer {
             scene.height / scene.closed_scale,
         );
         let bounds = rect(cx - width / 2.0, 0.0, cx + width / 2.0, height);
-        self.draw_text(scene.clock, &self.text, bounds, 0.92 * alpha);
+        self.draw_text(scene.clock, &self.text, bounds, alpha);
+        // Widened with music on, the notch offers the controls.
+        if let Some(music) = scene.music.as_ref().filter(|_| peek > 0.01) {
+            let (x0, x1, cy) = (bounds.left, bounds.right, height / 2.0);
+            self.draw_music_peek(scene, music, x0, x1, cy, alpha, peek);
+            return;
+        }
 
         // With nothing live beside it, the clock sits between the battery and
         // the temperature.
@@ -3182,7 +4010,8 @@ impl Renderer {
         if let Some((percent, charging)) = scene.status.battery {
             self.draw_battery(bounds.left + 18.0, cy, 5.5, percent, charging, alpha);
         }
-        if let Some(weather) = &scene.status.weather {
+        let weather = scene.status.weather.as_ref();
+        if let Some(weather) = weather.filter(|_| !(scene.inbox.unread && unread_bell(scene))) {
             if let Some(text) = self.text_layout(&weather.temperature, &self.small_left, 50.0) {
                 let x = bounds.right - 13.0 - text.width;
                 self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.75 * alpha);
@@ -3291,6 +4120,16 @@ mod tests {
     }
 
     #[test]
+    fn logos_are_cut_to_what_shows() {
+        // Four by four, with only the pixels at (1, 1) and (2, 1) visible.
+        let mut pixels = vec![0u8; 16 * 4];
+        pixels[(4 + 1) * 4 + 3] = 255;
+        pixels[(4 + 2) * 4 + 3] = 255;
+        assert_eq!(visible_square(&pixels, 4, 4), (1, 0, 2));
+        assert_eq!(visible_square(&[0; 16], 2, 2), (0, 0, 2));
+    }
+
+    #[test]
     fn page_icons_center_on_the_card() {
         let (first, _) = nav_item(0, 3);
         let (last, _) = nav_item(2, 3);
@@ -3330,6 +4169,7 @@ mod tests {
             time: "09:00".to_string(),
             summary: "Rapat",
             today,
+            source: 0,
         };
         assert_eq!(next_up(&[], &[]), None);
         assert_eq!(next_up(&[event(false)], &[task("A", true)]), None);
