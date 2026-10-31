@@ -622,6 +622,15 @@ pub struct Scene<'a> {
     pub eyes_visible: f32,
     pub blink: f32,
     pub look: f32,
+    /// How far the eyes have tired, 0..1, opened wide, 0..1, and floated
+    /// their "z", if one shows.
+    pub sleep: f32,
+    pub surprise: f32,
+    pub eyes_z: Option<f32>,
+    /// How far the eyes are lifted by their greeting, and how visible its
+    /// word is, 0..1.
+    pub hop: f32,
+    pub greeting: f32,
     pub clock: &'a str,
     pub banner_visible: f32,
     pub banner: Option<&'a Content>,
@@ -1132,7 +1141,7 @@ impl Renderer {
             t.BeginDraw();
             t.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
             self.draw_shape(scene)?;
-            self.draw_eyes(scene);
+            self.draw_eyes(scene)?;
             self.draw_banner(scene);
             self.draw_music(scene);
             self.with_scale(scene.closed_scale, || {
@@ -1228,40 +1237,81 @@ impl Renderer {
         Ok(())
     }
 
-    unsafe fn draw_eyes(&self, scene: &Scene) {
+    /// Curved eyes: an arch while awake that flattens as they tire and bends
+    /// into a sleeping curve, or round discs when startled.
+    unsafe fn draw_eyes(&self, scene: &Scene) -> Result<()> {
         let visible = scene.eyes_visible.clamp(0.0, 1.0);
         if visible < 0.01 {
-            return;
+            return Ok(());
         }
         // Eyes grow in slightly as they fade in.
         let scale = 0.7 + 0.3 * visible;
-        let eye_w = 9.0 * scale;
-        let eye_h = (18.0 * scale * (1.0 - 0.85 * scene.blink)).max(2.0);
-        let cy = scene.height / 2.0 + 1.0;
+        let half = 9.0 * scale;
+        let rise = 6.5 * scale;
+        let cy = scene.height / 2.0 + 1.0 - scene.hop;
         let offset = scene.look * 4.0;
+        let awake = 1.0 - 2.0 * scene.sleep.clamp(0.0, 1.0);
+        let curve = rise * awake * (1.0 - 0.85 * scene.blink);
+        let wide = scene.surprise.clamp(0.0, 1.0);
 
         for side in [-1.0, 1.0] {
-            let cx = CANVAS.0 / 2.0 + side * 16.0 * scale + offset;
-            // A soft halo first, then the eye itself.
-            for (grow, alpha) in [(4.5, 0.05), (2.0, 0.10), (0.0, 1.0)] {
-                let (hw, hh) = (eye_w / 2.0 + grow, eye_h / 2.0 + grow);
-                let radius = hw.min(hh);
-                self.light.SetOpacity(alpha * visible);
-                self.target.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F {
-                            left: cx - hw,
-                            top: cy - hh,
-                            right: cx + hw,
-                            bottom: cy + hh,
+            let cx = CANVAS.0 / 2.0 + side * 21.0 * scale + offset;
+            if wide < 0.99 {
+                let geometry = self.factory.CreatePathGeometry()?;
+                let sink = geometry.Open()?;
+                sink.BeginFigure(pt(cx - half, cy + curve / 2.0), D2D1_FIGURE_BEGIN_HOLLOW);
+                sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                    point1: pt(cx, cy - curve * 1.5),
+                    point2: pt(cx + half, cy + curve / 2.0),
+                });
+                sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                sink.Close()?;
+                // A soft halo first, then the eye itself.
+                for (width, alpha) in [(10.0, 0.05), (6.5, 0.10), (3.4, 1.0)] {
+                    self.light.SetOpacity(alpha * visible * (1.0 - wide));
+                    self.target
+                        .DrawGeometry(&geometry, &self.light, width, &self.round_caps);
+                }
+            }
+            if wide > 0.01 {
+                for (grow, alpha) in [(4.5, 0.05), (2.0, 0.10), (0.0, 1.0)] {
+                    let radius = 8.5 * wide + grow;
+                    self.light.SetOpacity(alpha * visible);
+                    self.target.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: pt(cx, cy),
+                            radiusX: radius,
+                            radiusY: radius,
                         },
-                        radiusX: radius,
-                        radiusY: radius,
-                    },
-                    &self.light,
-                );
+                        &self.light,
+                    );
+                }
             }
         }
+
+        // Beside the eyes: the sleeper's two z's, the second trailing the
+        // first, and the greeting's word.
+        let beside = CANVAS.0 / 2.0 + 37.0 * scale;
+        if let Some(t) = scene.eyes_z {
+            for (delay, format) in [(0.0, &self.bold_left), (0.45, &self.small_left)] {
+                let t = (t - delay) / (1.0 - delay);
+                if t > 0.0 {
+                    let x = beside + 14.0 * t;
+                    let y = cy + 7.0 - 18.0 * t;
+                    let alpha = (std::f32::consts::PI * t).sin().sqrt() * visible;
+                    self.draw_text("z", format, rect(x, y - 10.0, x + 16.0, y + 10.0), alpha);
+                }
+            }
+        }
+        if scene.greeting > 0.01 {
+            self.draw_text(
+                "Hi!",
+                &self.small_left,
+                rect(beside, cy - 10.0, beside + 34.0, cy + 10.0),
+                scene.greeting * visible,
+            );
+        }
+        Ok(())
     }
 
     /// Banner content, laid out against the notch's current edges so it rides

@@ -139,13 +139,43 @@ impl Rng {
 }
 
 const BLINK_SECS: f32 = 0.16;
+/// A drowsy blink is slow, as if the lids were heavy.
+const DROWSY_BLINK_SECS: f32 = 0.7;
+/// Seconds shown before the eyes turn drowsy, and before they fall asleep.
+const DROWSY_AFTER: f32 = 30.0;
+const ASLEEP_AFTER: f32 = 60.0;
+/// How long a sleeping "z" takes to float away.
+const Z_SECS: f32 = 2.4;
+/// How long sleepy eyes stay wide open after being woken.
+const STARTLE: Duration = Duration::from_millis(800);
+/// How long the eyes then greet the user before the notch closes.
+const GREET: Duration = Duration::from_millis(1800);
+/// How high the eyes hop in their greeting.
+const HOP: f32 = 5.0;
 
-/// Blinking and glancing for the idle eyes.
+/// The idle eyes' moods: glancing and blinking at first, then drowsy, then
+/// asleep. Woken, sleepy eyes are startled, and all of them greet the user.
 pub struct Eyes {
     /// 0 = open, 1 = closed.
     pub blink: f32,
     /// -1 = looking left, 1 = looking right.
     pub look: Spring,
+    /// 0 = awake, 0.5 = drowsy, 1 = asleep.
+    pub sleep: Spring,
+    /// How far the eyes have opened wide from being woken, 0..1.
+    pub surprise: Spring,
+    /// How far the "z" has floated, 0..1, while one shows.
+    pub z: Option<f32>,
+    /// How far the eyes are lifted by their greeting.
+    pub hop: f32,
+    /// How visible the greeting's word is, 0..1.
+    pub greeting: f32,
+    since: Instant,
+    /// When the greeting starts, once the eyes have been woken.
+    greet_at: Option<Instant>,
+    blink_secs: f32,
+    z_start: Option<Instant>,
+    next_z: Instant,
     blink_start: Option<Instant>,
     next_blink: Instant,
     next_glance: Instant,
@@ -157,6 +187,16 @@ impl Eyes {
         Self {
             blink: 0.0,
             look: Spring::new(0.0, 150.0, 17.0, 0.002),
+            sleep: Spring::new(0.0, 10.0, 7.0, 0.002),
+            surprise: Spring::new(0.0, 320.0, 20.0, 0.002),
+            z: None,
+            hop: 0.0,
+            greeting: 0.0,
+            since: now,
+            greet_at: None,
+            blink_secs: BLINK_SECS,
+            z_start: None,
+            next_z: now,
             blink_start: None,
             next_blink: now,
             next_glance: now,
@@ -169,15 +209,79 @@ impl Eyes {
         self.blink = 0.0;
         self.blink_start = None;
         self.look = Spring::new(0.0, 150.0, 17.0, 0.002);
+        self.sleep = Spring::new(0.0, 10.0, 7.0, 0.002);
+        self.surprise = Spring::new(0.0, 320.0, 20.0, 0.002);
+        self.z = None;
+        self.z_start = None;
+        self.hop = 0.0;
+        self.greeting = 0.0;
+        self.since = now;
+        self.greet_at = None;
         self.next_blink = now + self.rng.secs(0.6, 1.2);
         self.next_glance = now + self.rng.secs(1.5, 3.0);
     }
 
+    /// Wakes the eyes: sleepy ones open wide first, then all of them greet.
+    /// Returns how long that takes.
+    fn rouse(&mut self, now: Instant) -> Duration {
+        let startle = if self.sleep.value < 0.3 {
+            Duration::ZERO
+        } else {
+            self.surprise.target = 1.0;
+            STARTLE
+        };
+        self.greet_at = Some(now + startle);
+        self.sleep.value = 0.0;
+        self.sleep.target = 0.0;
+        self.look.target = 0.0;
+        self.blink = 0.0;
+        self.blink_start = None;
+        self.z = None;
+        self.z_start = None;
+        startle + GREET
+    }
+
+    /// Two hops that fade away, with the word showing meanwhile.
+    fn step_greeting(&mut self, now: Instant, start: Instant) {
+        if now < start {
+            return;
+        }
+        self.surprise.target = 0.0;
+        let t = ((now - start).as_secs_f32() / GREET.as_secs_f32()).min(1.0);
+        self.hop = HOP * (std::f32::consts::TAU * t).sin().abs() * (1.0 - t);
+        self.greeting = (t / 0.15).min((1.0 - t) / 0.2).clamp(0.0, 1.0);
+    }
+
+    /// The mood after `shown` seconds on screen: see [`Eyes::sleep`].
+    fn mood(shown: f32) -> f32 {
+        if shown >= ASLEEP_AFTER {
+            1.0
+        } else if shown >= DROWSY_AFTER {
+            0.5
+        } else {
+            0.0
+        }
+    }
+
     fn step(&mut self, now: Instant, dt: f32) -> bool {
-        let mut moving = false;
+        let mut moving = self.sleep.step(dt);
+        moving |= self.surprise.step(dt);
+        if let Some(start) = self.greet_at {
+            self.step_greeting(now, start);
+            return self.look.step(dt) || moving || now >= start;
+        }
+        let mood = Self::mood((now - self.since).as_secs_f32());
+        self.sleep.target = mood;
+        if mood == 1.0 {
+            self.blink = 0.0;
+            self.blink_start = None;
+            self.look.target = 0.0;
+            moving |= self.look.step(dt);
+            return self.step_z(now) || moving;
+        }
 
         if let Some(start) = self.blink_start {
-            let t = (now - start).as_secs_f32() / BLINK_SECS;
+            let t = (now - start).as_secs_f32() / self.blink_secs;
             if t >= 1.0 {
                 self.blink = 0.0;
                 self.blink_start = None;
@@ -189,8 +293,15 @@ impl Eyes {
             moving = true;
         } else if now >= self.next_blink {
             self.blink_start = Some(now);
+            self.blink_secs = if mood > 0.0 {
+                DROWSY_BLINK_SECS
+            } else {
+                BLINK_SECS
+            };
             // Occasionally blink twice in a row, like people do.
-            self.next_blink = if self.rng.next_f32() < 0.2 {
+            self.next_blink = if mood > 0.0 {
+                now + self.rng.secs(2.5, 4.0)
+            } else if self.rng.next_f32() < 0.2 {
                 now + Duration::from_millis(260)
             } else {
                 now + self.rng.secs(2.5, 6.0)
@@ -198,7 +309,9 @@ impl Eyes {
             moving = true;
         }
 
-        if now >= self.next_glance {
+        if mood > 0.0 {
+            self.look.target = 0.0;
+        } else if now >= self.next_glance {
             if self.look.target != 0.0 {
                 self.look.target = 0.0;
                 self.next_glance = now + self.rng.secs(2.0, 5.0);
@@ -210,6 +323,27 @@ impl Eyes {
         }
         moving |= self.look.step(dt);
         moving
+    }
+
+    /// Floats a "z" up every few seconds while asleep.
+    fn step_z(&mut self, now: Instant) -> bool {
+        let Some(start) = self.z_start else {
+            if self.sleep.value > 0.95 && now >= self.next_z {
+                self.z_start = Some(now);
+                self.z = Some(0.0);
+                return true;
+            }
+            return false;
+        };
+        let t = (now - start).as_secs_f32() / Z_SECS;
+        if t >= 1.0 {
+            self.z = None;
+            self.z_start = None;
+            self.next_z = now + self.rng.secs(1.0, 2.0);
+        } else {
+            self.z = Some(t);
+        }
+        true
     }
 }
 
@@ -301,6 +435,8 @@ pub struct Notch {
     /// How far the music card's volume slider has opened, 0..1.
     pub volume_visible: Spring,
     idle: bool,
+    /// The eyes stay until this moment after being woken.
+    waking: Option<Instant>,
     banner_active: bool,
     /// Size of the live strip (music or timer), if one shows.
     strip_size: Option<(f32, f32)>,
@@ -331,6 +467,7 @@ impl Notch {
             peek_visible: Spring::new(0.0, 130.0, 24.0, 0.002),
             volume_visible: Spring::new(0.0, 200.0, 28.0, 0.002),
             idle: false,
+            waking: None,
             banner_active: false,
             strip_size: None,
             card_size: None,
@@ -346,7 +483,10 @@ impl Notch {
         }
         self.idle = idle;
         if idle {
+            self.waking = None;
             self.eyes.wake(now);
+        } else if self.eyes_visible.value > 0.5 {
+            self.waking = Some(now + self.eyes.rouse(now));
         }
         self.retarget();
     }
@@ -481,6 +621,10 @@ impl Notch {
             self.banner_active = false;
             self.retarget();
         }
+        if self.waking.is_some_and(|until| now >= until) {
+            self.waking = None;
+            self.retarget();
+        }
 
         let mut moving = self.width.step(dt);
         moving |= self.height.step(dt);
@@ -517,7 +661,11 @@ impl Notch {
         let strip = self
             .strip_size
             .filter(|_| !banner && card.is_none() && !peek);
-        let eyes = self.idle && !banner && card.is_none() && strip.is_none() && !peek;
+        let eyes = (self.idle || self.waking.is_some())
+            && !banner
+            && card.is_none()
+            && strip.is_none()
+            && !peek;
         let grown = |(w, h): (f32, f32)| (w * self.scale, h * self.scale);
         let (w, h) = match (&self.banner, card, strip) {
             (Some(shown), _, _) if banner => shown.size,
@@ -578,5 +726,54 @@ impl Notch {
             self.card_size = card;
             self.retarget();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eyes_tire_with_time() {
+        assert_eq!(Eyes::mood(0.0), 0.0);
+        assert_eq!(Eyes::mood(DROWSY_AFTER), 0.5);
+        assert_eq!(Eyes::mood(ASLEEP_AFTER), 1.0);
+    }
+
+    #[test]
+    fn only_sleepy_eyes_are_startled() {
+        let now = Instant::now();
+        let mut eyes = Eyes::new(now, 7);
+        assert_eq!(eyes.rouse(now), GREET);
+        assert_eq!(eyes.surprise.target, 0.0);
+        eyes.sleep.value = 0.6;
+        assert_eq!(eyes.rouse(now), STARTLE + GREET);
+        assert_eq!(eyes.sleep.value, 0.0);
+        assert_eq!(eyes.surprise.target, 1.0);
+    }
+
+    #[test]
+    fn the_greeting_hops_and_ends_still() {
+        let now = Instant::now();
+        let mut eyes = Eyes::new(now, 7);
+        eyes.step_greeting(now + GREET / 4, now);
+        assert!(eyes.hop > 2.0);
+        assert!(eyes.greeting > 0.9);
+        eyes.step_greeting(now + GREET, now);
+        assert!(eyes.hop.abs() < 0.01);
+        assert_eq!(eyes.greeting, 0.0);
+    }
+
+    #[test]
+    fn a_woken_notch_keeps_its_eyes_a_moment() {
+        let now = Instant::now();
+        let mut notch = Notch::new(now, 7);
+        notch.set_idle(true, now);
+        notch.eyes_visible.value = 1.0;
+        notch.eyes.sleep.value = 1.0;
+        notch.set_idle(false, now);
+        assert_eq!(notch.eyes_visible.target, 1.0);
+        notch.step(now + STARTLE + GREET, 0.016);
+        assert_eq!(notch.eyes_visible.target, 0.0);
     }
 }
