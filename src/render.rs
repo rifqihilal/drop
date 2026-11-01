@@ -76,6 +76,14 @@ fn on_page(y: f32, width: f32) -> (f32, f32) {
     (y - CARD_TOP, width - 2.0 * CARD_SIDE)
 }
 
+/// The cover's corners run alongside the notch's rounded foot.
+const STRIP_ART_RADIUS: f32 = 7.0;
+
+/// The small cover on a closed or widened notch whose left edge is `x0`.
+fn strip_art(x0: f32, cy: f32) -> D2D_RECT_F {
+    rect(x0 + 7.0, cy - 10.0, x0 + 27.0, cy + 10.0)
+}
+
 /// Size of the side arrows on the open card.
 const ARROW_RADIUS: f32 = 11.0;
 
@@ -1454,7 +1462,7 @@ impl Renderer {
                 self.target
                     .PushAxisAlignedClip(&rect(x0, 0.0, x1, h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 let cy = 15.0;
-                self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+                self.draw_art(strip_art(x0, cy), STRIP_ART_RADIUS, alpha);
                 self.draw_date_and_time(scene, cy, alpha);
                 if let Some(music) = &scene.music {
                     self.accent.SetColor(&self.art_accent());
@@ -1771,7 +1779,7 @@ impl Renderer {
         peek: f32,
     ) {
         let shown = alpha * peek;
-        self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, shown);
+        self.draw_art(strip_art(x0, cy), STRIP_ART_RADIUS, shown);
         if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 120.0) {
             let x = CANVAS.0 / 2.0 - 32.0 - date.width;
             let opacity = 0.85 * alpha * peek * peek;
@@ -2806,7 +2814,7 @@ impl Renderer {
         let cy = PEEK.1 / 2.0;
         self.draw_date_and_time(scene, cy, alpha);
         if let Some(music) = &scene.music {
-            self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+            self.draw_art(strip_art(x0, cy), STRIP_ART_RADIUS, alpha);
             self.draw_media_row(scene, music, x1, cy, alpha);
         }
 
@@ -3691,7 +3699,7 @@ impl Renderer {
     /// Small art on the left, level bars on the right.
     unsafe fn draw_music_strip(&self, music: &MusicScene, x0: f32, x1: f32, h: f32, alpha: f32) {
         let cy = h / 2.0;
-        self.draw_art(rect(x0 + 12.0, cy - 10.0, x0 + 32.0, cy + 10.0), 5.0, alpha);
+        self.draw_art(strip_art(x0, cy), STRIP_ART_RADIUS, alpha);
         // In lyric mode: the cover and the line, nothing else.
         if let Some((before, line, _)) = music.lyric {
             let line = if line.is_empty() { "\u{266A}" } else { line };
