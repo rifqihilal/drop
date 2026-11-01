@@ -4,8 +4,7 @@ Notch ringan untuk Windows 10 dan 11. Duduk di tepi atas layar, mengecil saat
 komputer dipakai, dan melebar saat ada yang perlu dilihat.
 
 Ditulis dalam Rust langsung di atas Win32, Direct2D, dan DirectWrite, tanpa
-webview. Memakai sekitar 9 MB RAM saat diam dan sekitar 14 MB saat musik dan
-lirik tampil.
+webview. Memakai sekitar 20 MB memori privat.
 
 ## Fitur
 
@@ -47,6 +46,13 @@ cargo build --release
 ```
 
 Hasilnya ada di `target/release/drop.exe`.
+
+Installer dibuat dengan [Inno Setup 6](https://jrsoftware.org/isinfo.php) dari
+hasil build itu, dan muncul di `target/installer`:
+
+```bash
+ISCC.exe installer/drop.iss
+```
 
 Pilihan baris perintah:
 

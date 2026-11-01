@@ -7,6 +7,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 - `cargo build --release` — the running `drop.exe` locks the file, so close Drop first
 - `cargo fmt`, `cargo clippy --release --all-targets`, `cargo test --release` — all must pass before committing. CI runs clippy, tests and a format check on `windows-latest`
 - `target/release/drop.exe --demo` previews notices, `--settings` opens Settings, `--idle-secs N` overrides the idle delay
+- `ISCC.exe installer/drop.iss` builds the installer from the release build into `target/installer`. It needs Inno Setup 6; `build.rs` embeds the icon and the name Task Manager shows
 
 ## Architecture
 
