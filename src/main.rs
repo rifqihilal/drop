@@ -26,12 +26,14 @@ mod net;
 mod notifications;
 mod osd;
 mod prayer;
+mod privacy;
 mod render;
 mod screenshots;
 mod settings;
 mod shelf;
 mod sound;
 mod system;
+mod timers;
 mod todo;
 mod tray;
 mod usage;
@@ -78,7 +80,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use anim::{
     Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
     COMPACT_LARGE, COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX,
-    MUSIC_STRIP, TIMER_STRIP,
+    MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -91,11 +93,12 @@ use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
 use render::{
     glyph, zoom, AgendaItem, CalendarControl, CalendarScene, InboxRow, InboxScene, MusicScene,
-    Page, PomodoroControl, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
-    TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
+    Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerControl,
+    TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
+use timers::{Countdown, Stopwatch};
 use todo::Todo;
 use usage::Usage;
 use weather::{Weather, WeatherWatch};
@@ -147,6 +150,8 @@ const SHELF_SHOWN: Duration = Duration::from_secs(3);
 /// A picture copied this close to a screenshot is the same capture.
 const SHOT_WINDOW: Duration = Duration::from_secs(5);
 /// How long a shelf tile says its file was copied.
+/// The quick timer's length until another is chosen.
+const QUICK_DEFAULT: u64 = 5;
 const COPIED_SHOWN: Duration = Duration::from_millis(1500);
 /// How long a notification from another app stays up.
 const APP_BANNER_SHOWN: Duration = Duration::from_secs(4);
@@ -218,6 +223,10 @@ struct App {
     /// Running loudness of the song, which the bars are measured against.
     peak_average: f32,
     pomodoro: Pomodoro,
+    quick: Countdown,
+    stopwatch: Stopwatch,
+    /// The timer the card shows.
+    timer_view: TimerKind,
     /// Months away from the current one on the calendar page.
     month_offset: i32,
     /// The notch is showing (it hides while another app is full screen).
@@ -234,6 +243,10 @@ struct App {
     shelf_hover: Option<usize>,
     /// Shelf tile just copied, and when.
     shelf_copied: Option<(usize, Instant)>,
+    /// The camera and microphone bits in use, see `privacy`.
+    privacy: usize,
+    /// Whether the default microphone is muted; None without one.
+    mic_muted: Option<bool>,
     /// When a picture was last copied, and a screenshot last saved: one
     /// capture brings both.
     clip_at: Option<Instant>,
@@ -425,6 +438,9 @@ fn main() -> Result<()> {
             bar_phase: 0.0,
             peak_average: 0.0,
             pomodoro: Pomodoro::default(),
+            quick: Countdown::new(QUICK_DEFAULT),
+            stopwatch: Stopwatch::default(),
+            timer_view: TimerKind::Pomodoro,
             month_offset: 0,
             page_switch: None,
             shown: true,
@@ -433,6 +449,8 @@ fn main() -> Result<()> {
             drag_over: false,
             shelf_hover: None,
             shelf_copied: None,
+            privacy: 0,
+            mic_muted: None,
             clip_at: None,
             shot_at: None,
             inbox: Inbox::default(),
@@ -472,6 +490,7 @@ fn main() -> Result<()> {
         app.config_stamp = config::modified();
         app.apply_settings(false);
         app.usage_switch.value = app.usage_switch.target;
+        app.mic_muted = app.audio.as_ref().and_then(Audio::mic_muted);
         app.update_usage();
         app.sync_usage_icons();
         app.renderer.sync_thumbnails(app.shelf.items());
@@ -498,6 +517,7 @@ fn main() -> Result<()> {
         system::watch_foreground(hwnd);
         screenshots::watch(hwnd);
         notifications::watch(hwnd);
+        privacy::watch(hwnd);
         if has_flag("--settings") {
             settings::open(hwnd);
         }
@@ -577,6 +597,10 @@ impl App {
         if let Some(finished) = self.pomodoro.advance(now) {
             self.on_phase_end(finished);
         }
+        let minutes = self.quick.minutes();
+        if self.quick.finish(now) {
+            self.on_quick_end(minutes);
+        }
         self.update_music(now);
         self.step_aside_for_fullscreen();
         let switching = self
@@ -595,7 +619,8 @@ impl App {
         // The open card shows a running progress bar.
         let card_open = self.notch.card_visible.value > 0.01;
         // A running timer counts down every second, in the strip or the card.
-        let timer_running = self.pomodoro.running();
+        let timer_running =
+            self.pomodoro.running() || self.quick.running() || self.stopwatch.running();
 
         // In lyric mode the strip's line moves on with the song.
         let lyric_strip = self.strip() == Strip::Music && self.shown_lyric().is_some();
@@ -710,6 +735,7 @@ impl App {
             (CARD.0 + extra, CARD.1)
         });
         let strip = match self.strip() {
+            Strip::Timer if self.song_playing() => Some(TIMER_MUSIC_STRIP),
             Strip::Timer => Some(TIMER_STRIP),
             Strip::Music if lyric_mode => Some((
                 self.lyric_strip.clamp(LYRIC_STRIP.0, LYRIC_STRIP_MAX),
@@ -727,13 +753,17 @@ impl App {
         let modules = &self.settings;
         if modules.notch_minimal {
             Strip::None
-        } else if modules.module_calendar && !self.pomodoro.idle() {
+        } else if modules.module_calendar && self.live_timer().is_some() {
             Strip::Timer
         } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
         } else {
             Strip::None
         }
+    }
+
+    fn song_playing(&self) -> bool {
+        self.music().is_some_and(|track| track.playing)
     }
 
     /// The track playing, unless the music module is off.
@@ -1214,7 +1244,10 @@ impl App {
                     || (lyrics && self.renderer.lyric_line_at(x, y, width).is_some())
             }
             Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
-            Page::Pomodoro => self.renderer.pomodoro_control_at(x, y, width).is_some(),
+            Page::Pomodoro => self
+                .renderer
+                .timer_control_at(x, y, width, self.picking_minutes())
+                .is_some(),
             Page::Shelf => self.shelf_hit(x, y).is_some(),
             Page::Notifications => {
                 self.inbox.total > 0 && self.renderer.inbox_clear_at(x, y, width)
@@ -1460,6 +1493,112 @@ impl App {
         }
         self.page = pages[next];
         self.tick();
+    }
+
+    /// Whether the timer of `kind` has started and not been reset.
+    fn timer_live(&self, kind: TimerKind) -> bool {
+        match kind {
+            TimerKind::Pomodoro => !self.pomodoro.idle(),
+            TimerKind::Quick(_) => !self.quick.idle(),
+            TimerKind::Stopwatch => !self.stopwatch.idle(),
+        }
+    }
+
+    /// The timer the live strip shows: the one on the card when it has
+    /// started, else the first that has.
+    fn live_timer(&self) -> Option<TimerKind> {
+        let all = [
+            TimerKind::Pomodoro,
+            TimerKind::Quick(self.quick.minutes()),
+            TimerKind::Stopwatch,
+        ];
+        std::iter::once(self.timer_view)
+            .chain(all)
+            .find(|&kind| self.timer_live(kind))
+    }
+
+    fn timer_scene(&self, kind: TimerKind) -> TimerScene {
+        let now = Instant::now();
+        let with_music = self.song_playing();
+        // "Berjalan" or "Dijeda", once a timer has started.
+        let state = |running: bool| if running { "Berjalan" } else { "Dijeda" };
+        match kind {
+            TimerKind::Pomodoro => TimerScene {
+                kind,
+                label: self.pomodoro.label(),
+                left: calendar::format_left(self.pomodoro.left(now)),
+                running: self.pomodoro.running(),
+                on_break: self.pomodoro.phase == Phase::Break,
+                detail: format!("Sesi {}", self.pomodoro.session),
+                picking: false,
+                with_music,
+                progress: self.pomodoro.progress(now),
+            },
+            TimerKind::Quick(_) => TimerScene {
+                kind: TimerKind::Quick(self.quick.minutes()),
+                label: state(self.quick.running()),
+                left: timers::format_clock(self.quick.left(now), true),
+                running: self.quick.running(),
+                on_break: false,
+                detail: format!("{} menit", self.quick.minutes()),
+                picking: self.quick.idle(),
+                with_music,
+                progress: self.quick.progress(now),
+            },
+            TimerKind::Stopwatch => TimerScene {
+                kind,
+                label: if self.stopwatch.idle() {
+                    "Siap"
+                } else {
+                    state(self.stopwatch.running())
+                },
+                left: timers::format_clock(self.stopwatch.elapsed(now), false),
+                running: self.stopwatch.running(),
+                on_break: false,
+                detail: "Hitung naik".to_string(),
+                picking: false,
+                with_music,
+                progress: self.stopwatch.progress(now),
+            },
+        }
+    }
+
+    /// The card shows the lengths of the quick timer, to choose from.
+    fn picking_minutes(&self) -> bool {
+        matches!(self.timer_view, TimerKind::Quick(_)) && self.quick.idle()
+    }
+
+    /// Acts on a press of the timer card's controls.
+    fn on_timer_control(&mut self, control: TimerControl) {
+        let now = Instant::now();
+        match control {
+            TimerControl::StartPause => match self.timer_view {
+                TimerKind::Pomodoro => self.pomodoro.toggle(now),
+                TimerKind::Quick(_) => self.quick.toggle(now),
+                TimerKind::Stopwatch => self.stopwatch.toggle(now),
+            },
+            TimerControl::Reset => match self.timer_view {
+                TimerKind::Pomodoro => self.pomodoro.reset(),
+                TimerKind::Quick(_) => self.quick.reset(),
+                TimerKind::Stopwatch => self.stopwatch.reset(),
+            },
+            TimerControl::Tab(kind) => self.timer_view = kind,
+            TimerControl::Minutes(minutes) => self.quick.set(minutes),
+        }
+    }
+
+    fn on_quick_end(&mut self, minutes: u64) {
+        let notice = Notice {
+            icon: glyph::TIMER,
+            motion: Motion::Shake,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: "Timer selesai".to_string(),
+            subtitle: format!("{minutes} menit sudah lewat"),
+            trailing: Trailing::None,
+            dim: false,
+        };
+        self.notify_for(notice, PRAYER_NOTICE_DURATION);
     }
 
     /// Announces the end of a Pomodoro phase.
@@ -1821,9 +1960,11 @@ impl App {
             return;
         }
         if self.shown_page() == Page::Pomodoro {
-            match self.renderer.pomodoro_control_at(x, y, width) {
-                Some(PomodoroControl::StartPause) => self.pomodoro.toggle(Instant::now()),
-                Some(PomodoroControl::Reset) => self.pomodoro.reset(),
+            match self
+                .renderer
+                .timer_control_at(x, y, width, self.picking_minutes())
+            {
+                Some(control) => self.on_timer_control(control),
                 None => return,
             }
             self.tick();
@@ -2161,6 +2302,20 @@ impl App {
         self.show_level(LevelKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
     }
 
+    /// The camera or microphone started or stopped being used.
+    fn on_privacy(&mut self, state: usize) {
+        self.privacy = state;
+        self.tick();
+    }
+
+    /// The microphone was muted or unmuted; a change is announced.
+    fn on_mic(&mut self, muted: bool) {
+        let before = self.mic_muted.replace(muted);
+        if before.is_some_and(|before| before != muted) && self.settings.notify_mic {
+            self.notify(notices::mic(muted));
+        }
+    }
+
     fn on_volume_key(&mut self, vk: u16) {
         let result = self.audio.as_ref().and_then(|audio| audio.press(vk));
         if let Some((level, muted)) = result {
@@ -2295,6 +2450,11 @@ impl App {
             nav_visible: n.nav_visible.value,
             zooms: &self.zooms,
             banner_hover: self.banner_hover,
+            privacy: if self.settings.privacy_dots {
+                self.privacy
+            } else {
+                0
+            },
             peek_visible: n.peek_visible.value,
             closed_scale: n.scale,
             calendar: {
@@ -2314,14 +2474,11 @@ impl App {
                         .collect(),
                 }
             },
-            timer: Some(TimerScene {
-                label: self.pomodoro.label(),
-                left: calendar::format_left(self.pomodoro.left(Instant::now())),
-                running: self.pomodoro.running(),
-                on_break: self.pomodoro.phase == Phase::Break,
-                session: self.pomodoro.session,
-                progress: self.pomodoro.progress(Instant::now()),
-            }),
+            timer: Some(self.timer_scene(if self.shown_page() == Page::Pomodoro {
+                self.timer_view
+            } else {
+                self.live_timer().unwrap_or(self.timer_view)
+            })),
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
@@ -2582,7 +2739,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(audio) = app.audio.as_mut() {
                     audio.rebind();
                 }
+                // A new microphone's state is a starting value, not a change.
+                app.mic_muted = app.audio.as_ref().and_then(Audio::mic_muted);
             });
+            LRESULT(0)
+        }
+        system::MIC_MSG => {
+            with_app(|app| app.on_mic(wparam.0 != 0));
+            LRESULT(0)
+        }
+        privacy::PRIVACY_MSG => {
+            with_app(|app| app.on_privacy(wparam.0));
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
@@ -2849,6 +3016,30 @@ mod notices {
         }
     }
 
+    /// The microphone was muted or unmuted.
+    pub fn mic(muted: bool) -> Notice {
+        Notice {
+            icon: if muted { glyph::MIC_OFF } else { glyph::MIC },
+            motion: Motion::Pulse,
+            accent: if muted { Accent::Red } else { Accent::Green },
+            progress: 1.0,
+            title: if muted {
+                "Mic dimatikan"
+            } else {
+                "Mic menyala"
+            }
+            .to_string(),
+            subtitle: if muted {
+                "Suaramu tidak terdengar"
+            } else {
+                "Suaramu terdengar lagi"
+            }
+            .to_string(),
+            trailing: Trailing::None,
+            dim: muted,
+        }
+    }
+
     /// The charger was plugged in or out, with the charge on its ring.
     pub fn charger(plugged: bool, percent: u32) -> Notice {
         Notice {
@@ -2957,7 +3148,9 @@ mod notices {
 
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 12 {
+        match index % 14 {
+            12 => mic(true),
+            13 => mic(false),
             10 => charger(true, 62),
             11 => charger(false, 62),
             9 => health(Kind::Stretch, 50),

@@ -130,7 +130,7 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 26;
+const TOGGLE_COUNT: usize = 28;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -285,6 +285,16 @@ static PAGES: [Page; 11] = [
                     toggle: 2,
                     title: "Battery",
                     note: "Kabarin saat dicas, dilepas, dan baterai hampir habis",
+                },
+                Row::Switch {
+                    toggle: 26,
+                    title: "Mic mute dan unmute",
+                    note: "Kabarin saat mikrofon dimatikan atau dinyalakan",
+                },
+                Row::Switch {
+                    toggle: 27,
+                    title: "Titik kamera dan mic",
+                    note: "Titik hijau saat kamera dipakai, oranye saat mic dipakai",
                 },
                 Row::Switch {
                     toggle: 19,
@@ -921,6 +931,8 @@ impl Window {
                 settings.module_usage,
                 settings.card_arrows,
                 settings.follow_dnd,
+                settings.notify_mic,
+                settings.privacy_dots,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1169,6 +1181,8 @@ impl Window {
             card_bounce: self.toggles[21],
             card_arrows: self.toggles[24],
             follow_dnd: self.toggles[25],
+            notify_mic: self.toggles[26],
+            privacy_dots: self.toggles[27],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),

@@ -45,6 +45,8 @@ pub struct Settings {
     pub notify_wifi: bool,
     pub notify_bluetooth: bool,
     pub notify_battery: bool,
+    /// Say when the microphone is muted or unmuted.
+    pub notify_mic: bool,
     pub notify_prayer: bool,
     /// Show toasts from other apps in the notch.
     pub notify_apps: bool,
@@ -56,6 +58,8 @@ pub struct Settings {
     pub follow_dnd: bool,
     /// Play the notification sound with notices.
     pub sound: bool,
+    /// Dots beside the notch while the camera or microphone is in use.
+    pub privacy_dots: bool,
     /// Minutes without input before the eyes appear.
     pub idle_minutes: u32,
     /// Fetch the weather for the prayer location.
@@ -107,12 +111,14 @@ impl Default for Settings {
             notify_wifi: true,
             notify_bluetooth: true,
             notify_battery: true,
+            notify_mic: true,
             notify_prayer: true,
             notify_apps: true,
             shelf_screenshots: true,
             shelf_clipboard: true,
             follow_dnd: true,
             sound: true,
+            privacy_dots: true,
             idle_minutes: 2,
             weather: true,
             module_music: true,
@@ -208,6 +214,8 @@ impl Settings {
              wifi = {}\n\
              bluetooth = {}\n\
              baterai = {}\n\
+             ; Notifikasi saat mikrofon di-mute atau dinyalakan.\n\
+             mic = {}\n\
              sholat = {}\n\
              ; Notifikasi aplikasi lain, seperti WhatsApp.\n\
              aplikasi = {}\n\
@@ -216,6 +224,8 @@ impl Settings {
              bunyi = {}\n\
              \n\
              [umum]\n\
+             ; Titik hijau saat kamera dipakai, oranye saat mikrofon dipakai.\n\
+             titik_privasi = {}\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
              mata_setelah_menit = {}\n\
              \n\
@@ -277,10 +287,12 @@ impl Settings {
             flag(self.notify_wifi),
             flag(self.notify_bluetooth),
             flag(self.notify_battery),
+            flag(self.notify_mic),
             flag(self.notify_prayer),
             flag(self.notify_apps),
             flag(self.follow_dnd),
             flag(self.sound),
+            flag(self.privacy_dots),
             self.idle_minutes,
             flag(self.weather),
             flag(self.module_music),
@@ -380,6 +392,8 @@ fn parse(text: &str) -> Settings {
             "wifi" => s.notify_wifi = flag(true),
             "bluetooth" => s.notify_bluetooth = flag(true),
             "baterai" => s.notify_battery = flag(true),
+            "mic" => s.notify_mic = flag(true),
+            "titik_privasi" => s.privacy_dots = flag(true),
             "sholat" => s.notify_prayer = flag(true),
             "aplikasi" => s.notify_apps = flag(true),
             "ikuti_dnd" => s.follow_dnd = flag(true),
@@ -449,12 +463,14 @@ mod tests {
             notify_wifi: false,
             notify_bluetooth: true,
             notify_battery: false,
+            notify_mic: false,
             notify_prayer: true,
             notify_apps: false,
             shelf_screenshots: false,
             shelf_clipboard: false,
             follow_dnd: false,
             sound: false,
+            privacy_dots: false,
             idle_minutes: 5,
             weather: false,
             module_music: false,

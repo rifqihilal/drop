@@ -27,7 +27,7 @@ use windows::Win32::Media::Audio::Endpoints::{
     IAudioMeterInformation,
 };
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
+    eCapture, eConsole, eRender, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
     IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, CLSCTX_INPROC_SERVER};
@@ -62,6 +62,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub const VOLUME_MSG: u32 = WM_APP + 2;
 /// The default output device changed; the volume watch has to move to it.
 pub const DEVICE_MSG: u32 = WM_APP + 3;
+/// The microphone was muted or unmuted. WPARAM: 1 when muted.
+pub const MIC_MSG: u32 = WM_APP + 19;
 
 #[implement(IAudioEndpointVolumeCallback)]
 struct VolumeCallback {
@@ -79,6 +81,20 @@ impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
     }
 }
 
+#[implement(IAudioEndpointVolumeCallback)]
+struct MicCallback {
+    hwnd: isize,
+}
+
+impl IAudioEndpointVolumeCallback_Impl for MicCallback_Impl {
+    fn OnNotify(&self, data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
+        if let Some(data) = unsafe { data.as_ref() } {
+            post(self.hwnd, MIC_MSG, data.bMuted.as_bool() as usize, 0);
+        }
+        Ok(())
+    }
+}
+
 #[implement(IMMNotificationClient)]
 struct DeviceWatcher {
     hwnd: isize,
@@ -86,7 +102,7 @@ struct DeviceWatcher {
 
 impl IMMNotificationClient_Impl for DeviceWatcher_Impl {
     fn OnDefaultDeviceChanged(&self, flow: EDataFlow, role: ERole, _id: &PCWSTR) -> Result<()> {
-        if flow == eRender && role == eConsole {
+        if (flow == eRender || flow == eCapture) && role == eConsole {
             post(self.hwnd, DEVICE_MSG, 0, 0);
         }
         Ok(())
@@ -120,7 +136,8 @@ fn post(hwnd: isize, msg: u32, wparam: usize, lparam: isize) {
     }
 }
 
-/// Watches the master volume of the default output device.
+/// Watches the master volume of the default output device, and whether the
+/// default microphone is muted.
 pub struct Audio {
     hwnd: isize,
     enumerator: IMMDeviceEnumerator,
@@ -128,6 +145,7 @@ pub struct Audio {
     endpoint: Option<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
     /// Output level of the same device, for the music bars.
     meter: Option<IAudioMeterInformation>,
+    mic: Option<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
 }
 
 impl Audio {
@@ -145,6 +163,7 @@ impl Audio {
                 watcher,
                 endpoint: None,
                 meter: None,
+                mic: None,
             };
             audio.rebind();
             Ok(audio)
@@ -155,6 +174,15 @@ impl Audio {
     pub fn rebind(&mut self) {
         self.unbind();
         unsafe {
+            if let Ok(device) = self.enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
+                if let Ok(volume) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) {
+                    let callback: IAudioEndpointVolumeCallback =
+                        MicCallback { hwnd: self.hwnd }.into();
+                    if volume.RegisterControlChangeNotify(&callback).is_ok() {
+                        self.mic = Some((volume, callback));
+                    }
+                }
+            }
             let Ok(device) = self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole) else {
                 return;
             };
@@ -178,6 +206,14 @@ impl Audio {
             .as_ref()
             .and_then(|meter| unsafe { meter.GetPeakValue() }.ok())
             .unwrap_or(0.0)
+    }
+
+    /// Whether the default microphone is muted; None without one.
+    pub fn mic_muted(&self) -> Option<bool> {
+        let (volume, _) = self.mic.as_ref()?;
+        unsafe { volume.GetMute() }
+            .ok()
+            .map(|muted| muted.as_bool())
     }
 
     /// Master volume of the default device, 0..1.
@@ -219,6 +255,11 @@ impl Audio {
     }
 
     fn unbind(&mut self) {
+        if let Some((volume, callback)) = self.mic.take() {
+            unsafe {
+                let _ = volume.UnregisterControlChangeNotify(&callback);
+            }
+        }
         if let Some((volume, callback)) = self.endpoint.take() {
             unsafe {
                 let _ = volume.UnregisterControlChangeNotify(&callback);

@@ -68,7 +68,7 @@ use crate::media::Command;
 use crate::notifications::AppNotice;
 use crate::todo::Task;
 use crate::usage::{self, AppTime};
-use crate::{calendar, notifications, prayer, shelf, todo};
+use crate::{calendar, notifications, prayer, shelf, timers, todo};
 
 /// A point on the open card (its `y`, and the card's `width`) as the page
 /// sees it: below the header, between the side arrows.
@@ -109,7 +109,7 @@ fn page_title<'a>(
         Page::Prayer if !place.is_empty() => ("Sholat", place, Accent::Green),
         Page::Prayer => ("Waktu", "Sholat", Accent::Green),
         Page::Calendar => (month, year, Accent::Red),
-        Page::Pomodoro => ("Fokus", "Pomodoro", Accent::Red),
+        Page::Pomodoro => ("Fokus", "Timer", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
         Page::Usage => ("Screen", "Time", Accent::Teal),
         Page::Shelf => ("Shelf", "Berkas", Accent::Teal),
@@ -561,7 +561,29 @@ const AGENDA_ROW: f32 = 34.0;
 const POMODORO_RING: (f32, f32) = (112.0, 78.0);
 const POMODORO_LEFT: f32 = 214.0;
 
+/// Width of the column beside the ring.
+const TIMER_COLUMN: f32 = 176.0;
+const TIMER_TABS: [(&str, TimerKind); 3] = [
+    ("Fokus", TimerKind::Pomodoro),
+    ("Timer", TimerKind::Quick(0)),
+    ("Stopwatch", TimerKind::Stopwatch),
+];
+/// Stopwatch is the longest word, so its tab is the widest.
+const TIMER_TAB_WIDTHS: [f32; TIMER_TABS.len()] = [50.0, 50.0, 76.0];
+const MINUTE_GAP: f32 = 7.0;
+
+/// Where the tab of `kind` sits in [`TIMER_TABS`].
+fn tab_index(kind: TimerKind) -> usize {
+    match kind {
+        TimerKind::Pomodoro => 0,
+        TimerKind::Quick(_) => 1,
+        TimerKind::Stopwatch => 2,
+    }
+}
+
 struct PomodoroRects {
+    tabs: [D2D_RECT_F; TIMER_TABS.len()],
+    minutes: [D2D_RECT_F; timers::QUICK_MINUTES.len()],
     start_pause: D2D_RECT_F,
     reset: (f32, f32),
 }
@@ -569,9 +591,19 @@ struct PomodoroRects {
 impl PomodoroRects {
     fn new(x0: f32) -> Self {
         let left = x0 + POMODORO_LEFT;
+        let count = timers::QUICK_MINUTES.len() as f32;
+        let minute = (TIMER_COLUMN - (count - 1.0) * MINUTE_GAP) / count;
         Self {
-            start_pause: rect(left, 82.0, left + 92.0, 110.0),
-            reset: (left + 114.0, 96.0),
+            tabs: std::array::from_fn(|index| {
+                let x = left + TIMER_TAB_WIDTHS[..index].iter().sum::<f32>();
+                rect(x, 10.0, x + TIMER_TAB_WIDTHS[index], 36.0)
+            }),
+            minutes: std::array::from_fn(|index| {
+                let x = left + index as f32 * (minute + MINUTE_GAP);
+                rect(x, 54.0, x + minute, 82.0)
+            }),
+            start_pause: rect(left, 100.0, left + 92.0, 128.0),
+            reset: (left + 114.0, 114.0),
         }
     }
 }
@@ -638,6 +670,8 @@ pub mod glyph {
     pub const BELL: &str = "\u{EA8F}";
     pub const MESSAGE: &str = "\u{E8BD}";
     pub const CAMERA: &str = "\u{E722}";
+    pub const MIC: &str = "\u{E720}";
+    pub const MIC_OFF: &str = "\u{E1D6}";
     pub const COPY: &str = "\u{E8C8}";
     pub const BOLT: &str = "\u{E945}";
     pub const SCREEN: &str = "\u{E7F4}";
@@ -701,6 +735,8 @@ pub struct Scene<'a> {
     pub zooms: &'a [(u16, f32)],
     /// The mouse is on an app notification.
     pub banner_hover: bool,
+    /// The camera and microphone bits in use, see `privacy`; 0 hides the dots.
+    pub privacy: usize,
     /// How far the notch has widened to show the date, 0..1.
     pub peek_visible: f32,
     /// The closed notch's size relative to the usual one.
@@ -883,15 +919,41 @@ pub enum TodoHit {
     Remove(usize),
 }
 
+/// Which timer the card and the strip show.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TimerKind {
+    Pomodoro,
+    /// A countdown of this many minutes.
+    Quick(u64),
+    Stopwatch,
+}
+
 pub struct TimerScene {
+    pub kind: TimerKind,
     pub label: &'static str,
     /// "24:12"
     pub left: String,
     pub running: bool,
     pub on_break: bool,
-    pub session: u32,
+    /// "Sesi 1", "5 menit"
+    pub detail: String,
+    /// The quick timer waits for its length to be chosen.
+    pub picking: bool,
+    /// A song plays, whose cover and bars share the strip.
+    pub with_music: bool,
     /// How much of the phase has gone, 0..1.
     pub progress: f32,
+}
+
+impl TimerScene {
+    fn accent(&self) -> Accent {
+        match self.kind {
+            TimerKind::Pomodoro if self.on_break => Accent::Teal,
+            TimerKind::Pomodoro => Accent::Red,
+            TimerKind::Quick(_) => Accent::Blue,
+            TimerKind::Stopwatch => Accent::Green,
+        }
+    }
 }
 
 /// The month shown on the calendar page.
@@ -911,9 +973,13 @@ pub enum CalendarControl {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum PomodoroControl {
+pub enum TimerControl {
     StartPause,
     Reset,
+    /// A tab, which shows that timer.
+    Tab(TimerKind),
+    /// A length for the quick timer, which waits for its start.
+    Minutes(u64),
 }
 
 pub struct StatusScene<'a> {
@@ -1232,6 +1298,7 @@ impl Renderer {
             self.draw_music(scene);
             self.with_scale(scene.closed_scale, || {
                 self.draw_clock(scene);
+                self.draw_privacy(scene);
                 self.draw_unread(scene);
             });
             t.EndDraw(None, None)?;
@@ -1342,6 +1409,55 @@ impl Renderer {
             self.target.FillGeometry(&geometry, &glow, None);
         }
         Ok(())
+    }
+
+    /// Small dots inside the closed notch, on either side of the clock: green
+    /// on the left for a camera in use, orange on the right for a microphone.
+    unsafe fn draw_privacy(&self, scene: &Scene) {
+        const RADIUS: f32 = 2.5;
+        const FROM_CLOCK: f32 = 29.0;
+        let cover = scene
+            .eyes_visible
+            .max(scene.banner_visible)
+            .max(scene.card_visible);
+        let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
+        if scene.privacy == 0 || alpha <= 0.0 {
+            return;
+        }
+        let cx = CANVAS.0 / 2.0;
+        let (width, height) = (
+            scene.width / scene.closed_scale,
+            scene.height / scene.closed_scale,
+        );
+        // A lyric line fills the clock's place, so the dots go beside it.
+        let lyric = scene.strip == Strip::Music
+            && scene
+                .music
+                .as_ref()
+                .is_some_and(|music| music.lyric.is_some());
+        let (left, right) = if lyric {
+            (cx - width / 2.0 + 33.5, cx + width / 2.0 - 10.0)
+        } else {
+            let reach = FROM_CLOCK.min(width / 2.0 - 8.0);
+            (cx - reach, cx + reach)
+        };
+        for (bit, x, rgb) in [
+            (crate::privacy::CAMERA, left, color(0.19, 0.82, 0.35, 1.0)),
+            (crate::privacy::MIC, right, color(1.0, 0.62, 0.04, 1.0)),
+        ] {
+            if scene.privacy & bit != 0 {
+                self.accent.SetColor(&rgb);
+                self.accent.SetOpacity(alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x, height / 2.0),
+                        radiusX: RADIUS,
+                        radiusY: RADIUS,
+                    },
+                    &self.accent,
+                );
+            }
+        }
     }
 
     /// Curved eyes: an arch while awake that flattens as they tire and bends
@@ -1879,8 +1995,9 @@ impl Renderer {
             let (left, right) = (cx - scene.width / 2.0 / k, cx + scene.width / 2.0 / k);
             let height = scene.height / k;
             self.with_scale(k, || match (scene.strip, &scene.timer, &scene.music) {
-                (Strip::Timer, Some(timer), _) => {
-                    self.draw_timer_strip(timer, left, right, height, alpha)
+                (Strip::Timer, Some(timer), music) => {
+                    let music = music.as_ref().filter(|_| timer.with_music);
+                    self.draw_timer_strip(timer, music, left, right, height, alpha)
                 }
                 (Strip::Music, _, Some(music)) => {
                     self.draw_music_strip(music, left, right, height, alpha)
@@ -2218,21 +2335,34 @@ impl Renderer {
         });
     }
 
-    /// The phase's progress as a small ring, and the time left. Both change
-    /// once a second, so a running timer costs next to nothing.
-    unsafe fn draw_timer_strip(&self, timer: &TimerScene, x0: f32, x1: f32, h: f32, alpha: f32) {
+    /// The phase's progress as a small ring and the time left. With a song
+    /// playing its cover and bars take the ring's place.
+    /// Both change once a second, so a running timer costs next to nothing.
+    unsafe fn draw_timer_strip(
+        &self,
+        timer: &TimerScene,
+        music: Option<&MusicScene>,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
         let cy = h / 2.0;
-        let color = accent_color(if timer.on_break {
-            Accent::Teal
+        let color = accent_color(timer.accent());
+        // The song or the ring on the left, the countdown on the right; the
+        // clock stays in the middle.
+        if let Some(music) = music {
+            self.draw_art(strip_art(x0, cy), STRIP_ART_RADIUS, alpha);
+            self.accent.SetColor(&self.art_accent());
+            self.accent.SetOpacity(alpha);
+            self.draw_bars(music, x0 + 56.0, cy, &self.accent);
         } else {
-            Accent::Red
-        });
-        // Ring on the left, the countdown on the right; the clock stays in
-        // the middle.
-        let ring = if timer.running { 1.0 } else { 0.45 };
-        let _ = self.draw_ring(x0 + 20.0, cy, 6.5, timer.progress, color, ring * alpha);
+            let ring = if timer.running { 1.0 } else { 0.45 };
+            let _ = self.draw_ring(x0 + 20.0, cy, 6.5, timer.progress, color, ring * alpha);
+        }
         if let Some(text) = self.text_layout(&timer.left, &self.text_left, 80.0) {
             let x = x1 - 14.0 - text.width;
+            self.accent.SetColor(&color);
             self.accent
                 .SetOpacity(if timer.running { 1.0 } else { 0.6 } * alpha);
             self.target.DrawTextLayout(
@@ -2429,11 +2559,7 @@ impl Renderer {
     unsafe fn draw_pomodoro_card(&self, timer: &TimerScene, x0: f32, alpha: f32) {
         let layout = PomodoroRects::new(x0);
         let (cx, cy) = (x0 + POMODORO_RING.0, POMODORO_RING.1);
-        let accent = if timer.on_break {
-            Accent::Teal
-        } else {
-            Accent::Red
-        };
+        let accent = timer.accent();
         let _ = self.draw_ring(cx, cy, 56.0, timer.progress, accent_color(accent), alpha);
         if let Some(text) = self.text_layout(&timer.left, &self.big_clock, 120.0) {
             self.draw_layout(
@@ -2444,12 +2570,34 @@ impl Renderer {
             );
         }
         let left = x0 + POMODORO_LEFT;
-        if let Some(text) = self.text_layout(timer.label, &self.title_text, 150.0) {
-            self.draw_layout(&text.layout, left, 32.0, alpha);
-        }
-        let session = format!("Sesi {}", timer.session);
-        if let Some(text) = self.text_layout(&session, &self.subtitle_text, 150.0) {
-            self.draw_layout(&text.layout, left, 54.0, 0.6 * alpha);
+        self.draw_timer_tabs(&layout, tab_index(timer.kind), alpha);
+        if timer.picking {
+            for (minutes, bounds) in timers::QUICK_MINUTES.iter().zip(layout.minutes) {
+                let chosen = timer.kind == TimerKind::Quick(*minutes);
+                let shape = D2D1_ROUNDED_RECT {
+                    rect: bounds,
+                    radiusX: 14.0,
+                    radiusY: 14.0,
+                };
+                if chosen {
+                    self.accent.SetColor(&accent_color(accent));
+                    self.accent.SetOpacity(0.9 * alpha);
+                    self.target.FillRoundedRectangle(&shape, &self.accent);
+                } else {
+                    self.light.SetOpacity(0.12 * alpha);
+                    self.target.FillRoundedRectangle(&shape, &self.light);
+                }
+                let label = format!("{minutes} mnt");
+                let opacity = if chosen { 1.0 } else { 0.8 };
+                self.draw_text(&label, &self.tile_text, bounds, opacity * alpha);
+            }
+        } else {
+            if let Some(text) = self.text_layout(timer.label, &self.title_text, TIMER_COLUMN) {
+                self.draw_layout(&text.layout, left, 50.0, alpha);
+            }
+            if let Some(text) = self.text_layout(&timer.detail, &self.subtitle_text, TIMER_COLUMN) {
+                self.draw_layout(&text.layout, left, 72.0, 0.6 * alpha);
+            }
         }
         let (icon, label) = if timer.running {
             (glyph::PAUSE, "Pause")
@@ -2469,6 +2617,35 @@ impl Renderer {
         );
         self.light.SetOpacity(0.85 * alpha);
         self.draw_small_glyph_at(glyph::RESET, rx, ry, &self.light);
+    }
+
+    /// The timers' tabs in one track, the shown one under a thumb.
+    unsafe fn draw_timer_tabs(&self, layout: &PomodoroRects, shown: usize, alpha: f32) {
+        const INSET: f32 = 2.0;
+        let pill = |bounds: D2D_RECT_F| D2D1_ROUNDED_RECT {
+            rect: bounds,
+            radiusX: (bounds.bottom - bounds.top) / 2.0,
+            radiusY: (bounds.bottom - bounds.top) / 2.0,
+        };
+        let (first, last) = (layout.tabs[0], layout.tabs[TIMER_TABS.len() - 1]);
+        let track = rect(first.left, first.top, last.right, last.bottom);
+        self.light.SetOpacity(0.1 * alpha);
+        self.target.FillRoundedRectangle(&pill(track), &self.light);
+        let tab = layout.tabs[shown];
+        self.light.SetOpacity(0.2 * alpha);
+        self.target.FillRoundedRectangle(
+            &pill(rect(
+                tab.left + INSET,
+                tab.top + INSET,
+                tab.right - INSET,
+                tab.bottom - INSET,
+            )),
+            &self.light,
+        );
+        for (index, ((label, _), bounds)) in TIMER_TABS.iter().zip(layout.tabs).enumerate() {
+            let opacity = if index == shown { 1.0 } else { 0.55 };
+            self.draw_text(label, &self.tiny, bounds, opacity * alpha);
+        }
     }
 
     /// Keeps a thumbnail for each shelf file, making new ones as files arrive.
@@ -3536,17 +3713,34 @@ impl Renderer {
         .map(|(_, control)| control)
     }
 
-    /// Which timer control sits at (`x`, `y`) on the open card.
-    pub fn pomodoro_control_at(&self, x: f32, y: f32, width: f32) -> Option<PomodoroControl> {
+    /// Which timer control sits at (`x`, `y`) on the open card. `picking`
+    /// says the lengths of the quick timer are showing.
+    pub fn timer_control_at(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        picking: bool,
+    ) -> Option<TimerControl> {
         let (y, width) = on_page(y, width);
         let layout = PomodoroRects::new(CANVAS.0 / 2.0 - width / 2.0);
-        let pill = layout.start_pause;
-        if x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom {
-            return Some(PomodoroControl::StartPause);
+        let inside = |r: &D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        if inside(&layout.start_pause) {
+            return Some(TimerControl::StartPause);
         }
         let (rx, ry) = layout.reset;
-        ((x - rx).powi(2) + (y - ry).powi(2) <= HIT_RADIUS.powi(2))
-            .then_some(PomodoroControl::Reset)
+        if (x - rx).powi(2) + (y - ry).powi(2) <= HIT_RADIUS.powi(2) {
+            return Some(TimerControl::Reset);
+        }
+        if let Some(index) = layout.tabs.iter().position(inside) {
+            return Some(TimerControl::Tab(TIMER_TABS[index].1));
+        }
+        layout
+            .minutes
+            .iter()
+            .position(inside)
+            .filter(|_| picking)
+            .map(|index| TimerControl::Minutes(timers::QUICK_MINUTES[index]))
     }
 
     /// Home: the time in a panel coloured like the sky, then the weather, the
