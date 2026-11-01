@@ -131,7 +131,7 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 25;
+const TOGGLE_COUNT: usize = 26;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -291,6 +291,11 @@ static PAGES: [Page; 11] = [
                     toggle: 19,
                     title: "Notifikasi app",
                     note: "Pesan dari app lain, kayak WhatsApp",
+                },
+                Row::Switch {
+                    toggle: 25,
+                    title: "Ikuti Do Not Disturb",
+                    note: "Notifikasi app dan suara diam saat Do Not Disturb Windows nyala",
                 },
                 Row::Switch {
                     toggle: 4,
@@ -919,6 +924,7 @@ impl Window {
                 settings.shelf_clipboard,
                 settings.module_usage,
                 settings.card_arrows,
+                settings.follow_dnd,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1167,6 +1173,7 @@ impl Window {
             shelf_clipboard: self.toggles[22],
             card_bounce: self.toggles[21],
             card_arrows: self.toggles[24],
+            follow_dnd: self.toggles[25],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),

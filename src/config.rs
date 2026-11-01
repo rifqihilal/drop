@@ -52,6 +52,8 @@ pub struct Settings {
     pub shelf_screenshots: bool,
     /// Put copied text and pictures on the shelf.
     pub shelf_clipboard: bool,
+    /// Stay quiet while Windows' Do Not Disturb is on.
+    pub follow_dnd: bool,
     /// Play the notification sound with notices.
     pub sound: bool,
     /// Minutes without input before the eyes appear.
@@ -109,6 +111,7 @@ impl Default for Settings {
             notify_apps: true,
             shelf_screenshots: true,
             shelf_clipboard: true,
+            follow_dnd: true,
             sound: true,
             idle_minutes: 2,
             weather: true,
@@ -208,6 +211,8 @@ impl Settings {
              sholat = {}\n\
              ; Notifikasi aplikasi lain, seperti WhatsApp.\n\
              aplikasi = {}\n\
+             ; Notifikasi aplikasi dan bunyi diam saat Do Not Disturb Windows aktif.\n\
+             ikuti_dnd = {}\n\
              bunyi = {}\n\
              \n\
              [umum]\n\
@@ -274,6 +279,7 @@ impl Settings {
             flag(self.notify_battery),
             flag(self.notify_prayer),
             flag(self.notify_apps),
+            flag(self.follow_dnd),
             flag(self.sound),
             self.idle_minutes,
             flag(self.weather),
@@ -376,6 +382,7 @@ fn parse(text: &str) -> Settings {
             "baterai" => s.notify_battery = flag(true),
             "sholat" => s.notify_prayer = flag(true),
             "aplikasi" => s.notify_apps = flag(true),
+            "ikuti_dnd" => s.follow_dnd = flag(true),
             "bunyi" => s.sound = flag(true),
             "mata_setelah_menit" => {
                 s.idle_minutes = number().map_or(2, |v| v.clamp(1.0, 120.0) as u32)
@@ -446,6 +453,7 @@ mod tests {
             notify_apps: false,
             shelf_screenshots: false,
             shelf_clipboard: false,
+            follow_dnd: false,
             sound: false,
             idle_minutes: 5,
             weather: false,

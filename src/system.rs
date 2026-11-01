@@ -396,6 +396,39 @@ pub fn fullscreen_app(own: HWND) -> bool {
     }
 }
 
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQueryWnfStateData(
+        name: *const u64,
+        type_id: *const c_void,
+        scope: *const c_void,
+        stamp: *mut u32,
+        buffer: *mut c_void,
+        size: *mut u32,
+    ) -> i32;
+}
+
+/// The Windows state that holds the active quiet-hours profile. No public API
+/// tells Do Not Disturb from a merely busy session.
+const WNF_QUIET_HOURS: u64 = 0x0D83_063E_A3BF_1C75;
+
+/// Whether Windows' Do Not Disturb is on, by hand or by an automatic rule.
+pub fn do_not_disturb() -> bool {
+    let (mut stamp, mut profile) = (0u32, 0u32);
+    let mut size = size_of::<u32>() as u32;
+    let status = unsafe {
+        NtQueryWnfStateData(
+            &WNF_QUIET_HOURS,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut stamp,
+            (&raw mut profile).cast(),
+            &mut size,
+        )
+    };
+    status >= 0 && profile != 0
+}
+
 /// Pictures larger than this are copied as a file only: their pixels would
 /// sit in this process for as long as they stay on the clipboard.
 const CLIPBOARD_PIXELS: u64 = 16_000_000;

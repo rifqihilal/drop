@@ -864,7 +864,7 @@ impl App {
         self.renderer.sync_logos(&self.inbox.items);
         if self.inbox.items.is_empty() || !self.settings.notify_apps {
             self.unread = false;
-        } else if self.inbox.fresh {
+        } else if self.inbox.fresh && !self.quiet() {
             self.unread = true;
             if self.settings.sound {
                 sound::play_app();
@@ -1914,8 +1914,13 @@ impl App {
         self.notify_for(notice, anim::NOTICE_DURATION);
     }
 
+    /// Windows' Do Not Disturb is on and the settings follow it.
+    fn quiet(&self) -> bool {
+        self.settings.follow_dnd && system::do_not_disturb()
+    }
+
     fn notify_for(&mut self, notice: Notice, duration: Duration) {
-        if self.settings.sound {
+        if self.settings.sound && !self.quiet() {
             sound::play_notice();
         }
         let width = self.renderer.notice_width(&notice);
@@ -2087,7 +2092,7 @@ impl App {
 
     /// Widens the notch for a moment with a prayer reminder.
     fn notify_prayer(&mut self, label: String) {
-        if self.settings.sound {
+        if self.settings.sound && !self.quiet() {
             sound::play_notice();
         }
         self.notch
