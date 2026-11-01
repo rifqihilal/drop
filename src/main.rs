@@ -2316,6 +2316,19 @@ impl App {
         }
     }
 
+    /// Caps Lock was pressed, and has just flipped.
+    fn on_caps(&mut self) {
+        let on = system::caps_lock_on();
+        // Nothing to suppress: Windows draws no flyout of its own for this.
+        self.notch.show_level(
+            LevelKind::Caps { on },
+            if on { 1.0 } else { 0.0 },
+            false,
+            Instant::now(),
+        );
+        self.tick();
+    }
+
     fn on_volume_key(&mut self, vk: u16) {
         let result = self.audio.as_ref().and_then(|audio| audio.press(vk));
         if let Some((level, muted)) = result {
@@ -2725,6 +2738,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         keys::VOLUME_KEY_MSG => {
             with_app(|app| app.on_volume_key(wparam.0 as u16));
+            LRESULT(0)
+        }
+        keys::CAPS_MSG => {
+            with_app(App::on_caps);
             LRESULT(0)
         }
         settings::SAVED_MSG => {

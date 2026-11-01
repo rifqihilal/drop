@@ -644,6 +644,7 @@ pub mod glyph {
     pub const VOLUME_MID: &str = "\u{E994}";
     pub const VOLUME_HIGH: &str = "\u{E995}";
     pub const BRIGHTNESS: &str = "\u{E706}";
+    pub const KEYBOARD: &str = "\u{E765}";
     pub const WIFI: &str = "\u{E701}";
     pub const BLUETOOTH: &str = "\u{E702}";
     pub const HEADPHONES: &str = "\u{E7F6}";
@@ -1560,7 +1561,23 @@ impl Renderer {
         match content {
             Content::Level { kind, level, muted } => {
                 let level = level.value.clamp(0.0, 1.0);
+                if let LevelKind::Caps { on } = kind {
+                    self.draw_text(glyph::KEYBOARD, &self.icons, icon_box, alpha);
+                    let label = if *on {
+                        "Caps Lock nyala"
+                    } else {
+                        "Caps Lock mati"
+                    };
+                    self.draw_text(
+                        label,
+                        &self.subtitle_text,
+                        rect(x0 + 42.0, 0.0, x1 - 14.0, h),
+                        alpha,
+                    );
+                    return;
+                }
                 let glyph = match kind {
+                    LevelKind::Caps { .. } => glyph::KEYBOARD,
                     LevelKind::Brightness => glyph::BRIGHTNESS,
                     LevelKind::Volume if *muted || level < 0.005 => glyph::MUTE,
                     LevelKind::Volume if level < 0.34 => glyph::VOLUME_LOW,

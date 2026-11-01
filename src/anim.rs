@@ -421,6 +421,10 @@ fn ripple_ring(age: f32) -> (f32, f32) {
 pub enum LevelKind {
     Volume,
     Brightness,
+    /// Caps Lock was turned on or off; no bar, just the word.
+    Caps {
+        on: bool,
+    },
 }
 
 /// What a banner shows.
