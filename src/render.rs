@@ -1438,17 +1438,24 @@ impl Renderer {
         };
         let opacity = card.max(strip);
         if let Some([r, g, b]) = self.art_tint.filter(|_| opacity > 0.01 && !scene.drop_zone) {
-            // The strip's glow rises from its foot.
+            // The strip rises through the cover's own colour, nearly black at
+            // the top where the notch meets the screen's edge.
             let (start, end) = if strip > card {
                 (pt(x0, h), pt(x0, 0.0))
             } else {
                 (pt(x0, 0.0), pt(x1, h))
             };
-            let glow = self.gradient(
-                start,
-                end,
-                &[(0.0, color(r, g, b, 1.0)), (0.9, color(0.0, 0.0, 0.0, 0.0))],
-            )?;
+            let clear = color(0.0, 0.0, 0.0, 0.0);
+            let glow = if strip > card {
+                let shade = |k: f32| color(r * k, g * k, b * k, 1.0);
+                self.gradient(
+                    start,
+                    end,
+                    &[(0.0, shade(1.0)), (0.55, shade(0.45)), (1.0, shade(0.12))],
+                )?
+            } else {
+                self.gradient(start, end, &[(0.0, color(r, g, b, 1.0)), (0.9, clear)])?
+            };
             glow.SetOpacity(opacity);
             self.target.FillGeometry(&geometry, &glow, None);
         }
