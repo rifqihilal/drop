@@ -756,7 +756,7 @@ pub struct Scene<'a> {
     pub month_agenda: Vec<AgendaItem<'a>>,
     pub prayer: Option<PrayerScene>,
     /// The prayer close at hand and the wait for it, which take the
-    /// temperature's place in the closed notch.
+    /// temperature's place in the widened notch.
     pub prayer_soon: Option<(&'static str, String)>,
     /// How far a notice's ring has filled, 0..1, and its beat while that runs.
     pub notice_meter: f32,
@@ -1411,11 +1411,13 @@ impl Renderer {
         Ok(())
     }
 
-    /// Small dots inside the closed notch, on either side of the clock: green
-    /// on the left for a camera in use, orange on the right for a microphone.
+    /// Small dots inside the closed notch, green for a camera in use and
+    /// orange for a microphone. They sit left of the clock, as the right can
+    /// fill up to it with a prayer's wait; widened, the date takes that side.
     unsafe fn draw_privacy(&self, scene: &Scene) {
         const RADIUS: f32 = 2.5;
         const FROM_CLOCK: f32 = 29.0;
+        const GAP: f32 = 10.0;
         let cover = scene
             .eyes_visible
             .max(scene.banner_visible)
@@ -1435,15 +1437,16 @@ impl Renderer {
                 .music
                 .as_ref()
                 .is_some_and(|music| music.lyric.is_some());
-        let (left, right) = if lyric {
+        let (camera, mic) = if lyric {
             (cx - width / 2.0 + 33.5, cx + width / 2.0 - 10.0)
         } else {
-            let reach = FROM_CLOCK.min(width / 2.0 - 8.0);
-            (cx - reach, cx + reach)
+            let side = if scene.peek_visible >= 0.5 { 1.0 } else { -1.0 };
+            let reach = FROM_CLOCK.min(width / 2.0 - 8.0 - GAP);
+            (cx + side * (reach + GAP), cx + side * reach)
         };
         for (bit, x, rgb) in [
-            (crate::privacy::CAMERA, left, color(0.19, 0.82, 0.35, 1.0)),
-            (crate::privacy::MIC, right, color(1.0, 0.62, 0.04, 1.0)),
+            (crate::privacy::CAMERA, camera, color(0.19, 0.82, 0.35, 1.0)),
+            (crate::privacy::MIC, mic, color(1.0, 0.62, 0.04, 1.0)),
         ] {
             if scene.privacy & bit != 0 {
                 self.accent.SetColor(&rgb);
@@ -1572,7 +1575,9 @@ impl Renderer {
             }
             Content::Notice(notice) => self.draw_notice(scene, notice, x0, x1, h, alpha),
             Content::App(notice) => self.draw_app_banner(scene, notice, x0, x1, h, alpha),
-            Content::Prayer(label) => self.draw_prayer_banner(label, x0, x1, h, alpha),
+            Content::Prayer { title, wait } => {
+                self.draw_prayer_banner(title, wait, x0, x1, h, alpha)
+            }
             // The cover, date and level bars in a row, the song's name below.
             Content::Song(song) => {
                 self.target
@@ -2374,15 +2379,41 @@ impl Renderer {
         }
     }
 
-    /// A prayer icon on the left, "Maghrib 12 mnt" on the right.
-    unsafe fn draw_prayer_banner(&self, label: &str, x0: f32, x1: f32, h: f32, alpha: f32) {
-        let cy = h / 2.0;
+    /// A prayer icon in a faint green circle and "Maghrib 18:07" on the left,
+    /// "5 Menit lagi" in green on the right.
+    unsafe fn draw_prayer_banner(
+        &self,
+        title: &str,
+        wait: &str,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
+        let (cx, cy) = (x0 + 24.0, h / 2.0);
         self.accent.SetColor(&accent_color(Accent::Green));
+        self.accent.SetOpacity(0.2 * alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: 12.0,
+                radiusY: 12.0,
+            },
+            &self.accent,
+        );
         self.accent.SetOpacity(alpha);
-        self.fill_mosque(x0 + 24.0, cy, &self.accent);
-        if let Some(text) = self.text_layout(label, &self.bold_left, 160.0) {
-            let x = x1 - 14.0 - text.width;
-            self.draw_layout(&text.layout, x, cy - text.height / 2.0, alpha);
+        self.scaled_at(cx, cy, 0.72, || self.fill_mosque(cx, cy, &self.accent));
+        if let Some(text) = self.text_layout(title, &self.bold_left, 130.0) {
+            self.draw_layout(&text.layout, cx + 19.0, cy - text.height / 2.0, alpha);
+        }
+        if let Some(text) = self.text_layout(wait, &self.bold_left, 110.0) {
+            self.accent.SetOpacity(alpha);
+            self.target.DrawTextLayout(
+                pt(x1 - 16.0 - text.width, cy - text.height / 2.0),
+                &text.layout,
+                &self.accent,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
         }
     }
 
@@ -4729,8 +4760,8 @@ impl Renderer {
         if let Some((percent, charging)) = scene.status.battery {
             self.draw_battery(bounds.left + 21.0, cy, 6.5, percent, charging, alpha);
         }
-        // On the right the temperature, or the wait for a prayer close at
-        // hand. Widened, the weather or the prayer's name joins it.
+        // On the right the temperature. Widened, the weather joins it, or a
+        // prayer close at hand takes its place with its name and wait.
         let weather = scene
             .status
             .weather
@@ -4740,15 +4771,25 @@ impl Renderer {
             .prayer_soon
             .as_ref()
             .map(|(name, wait)| (wait.as_str(), *name));
-        let right = prayer.or(weather);
+        let right = if peek >= 0.5 {
+            prayer.or(weather)
+        } else {
+            weather
+        };
+        // The temperature fades out as the prayer fades in.
+        let fade = if prayer.is_some() {
+            (2.0 * peek - 1.0).abs()
+        } else {
+            1.0
+        };
         if let Some((value, label)) = right.filter(|_| !(scene.inbox.unread && unread_bell(scene)))
         {
             if let Some(text) = self.text_layout(value, &self.bold_left, 56.0) {
                 let x = bounds.right - 14.0 - text.width;
-                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha);
+                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha * fade);
                 if let Some(sky) = self.text_layout(label, &self.small_left, 90.0) {
                     let x = x - 7.0 - sky.width;
-                    let opacity = 0.75 * alpha * peek * peek;
+                    let opacity = 0.75 * alpha * peek * peek * fade;
                     self.draw_layout(&sky.layout, x, cy - sky.height / 2.0, opacity);
                 }
             }

@@ -571,9 +571,14 @@ impl App {
         if let Some((index, at)) = self.demo {
             if now >= at {
                 self.demo = Some((index + 1, now + DEMO_STEP));
-                match index % 15 {
-                    12 => self.notify_prayer("Dzuhur 5 menit lagi".to_string()),
-                    13 => self.notify_prayer("Waktunya Dzuhur".to_string()),
+                match index % 17 {
+                    12 => {
+                        self.notify_prayer("Dzuhur 12:02".to_string(), "5 Menit lagi".to_string())
+                    }
+                    13 => self
+                        .notify_prayer("Dzuhur 12:02".to_string(), "Waktunya sholat".to_string()),
+                    15 => self.notify(notices::mic(true)),
+                    16 => self.notify(notices::mic(false)),
                     14 => self.notch.show_song(
                         "Judul lagu \u{b7} Nama penyanyi".to_string(),
                         220.0,
@@ -2211,10 +2216,12 @@ impl App {
         // sleep after the prayer time skips it.
         let due = (0..prayer::NAMES.len())
             .find(|&i| !day.reminded[i] && now + lead >= day.times[i] && now < day.times[i]);
-        let label = if let Some(i) = due {
+        let title =
+            |i: usize| format!("{} {}", prayer::NAMES[i], prayer::format_time(day.times[i]));
+        let reminder = if let Some(i) = due {
             day.reminded[i] = true;
             let minutes = day.times[i] - now;
-            Some(format!("{} {minutes} menit lagi", prayer::NAMES[i]))
+            Some((title(i), format!("{minutes} Menit lagi")))
         } else {
             let arrived = (0..prayer::NAMES.len()).find(|&i| {
                 !day.arrived[i]
@@ -2223,21 +2230,21 @@ impl App {
             });
             arrived.map(|i| {
                 day.arrived[i] = true;
-                format!("Waktunya {}", prayer::NAMES[i])
+                (title(i), "Waktunya sholat".to_string())
             })
         };
-        if let Some(label) = label {
-            self.notify_prayer(label);
+        if let Some((title, wait)) = reminder {
+            self.notify_prayer(title, wait);
         }
     }
 
     /// Widens the notch for a moment with a prayer reminder.
-    fn notify_prayer(&mut self, label: String) {
+    fn notify_prayer(&mut self, title: String, wait: String) {
         if self.settings.sound && !self.quiet() {
             sound::play_notice();
         }
         self.notch
-            .show_prayer(label, PRAYER_NOTICE_DURATION, Instant::now());
+            .show_prayer(title, wait, PRAYER_NOTICE_DURATION, Instant::now());
         // A reminder replacing another moves nothing, so nothing would redraw.
         self.draw();
         self.schedule(FRAME_MS);
@@ -3148,9 +3155,7 @@ mod notices {
 
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 14 {
-            12 => mic(true),
-            13 => mic(false),
+        match index % 12 {
             10 => charger(true, 62),
             11 => charger(false, 62),
             9 => health(Kind::Stretch, 50),

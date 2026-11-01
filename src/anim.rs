@@ -436,7 +436,11 @@ pub enum Content {
     /// A notification from another app, which a click opens.
     App(AppNotice),
     /// A prayer reminder: the icon on the left, this text on the right.
-    Prayer(String),
+    /// The prayer with its time, and how long until it.
+    Prayer {
+        title: String,
+        wait: String,
+    },
     /// A new song: its title and artist under the clock.
     Song(String),
 }
@@ -725,9 +729,9 @@ impl Notch {
     }
 
     /// Shows a prayer reminder.
-    pub fn show_prayer(&mut self, label: String, duration: Duration, now: Instant) {
+    pub fn show_prayer(&mut self, title: String, wait: String, duration: Duration, now: Instant) {
         self.banner = Some(Banner {
-            content: Content::Prayer(label),
+            content: Content::Prayer { title, wait },
             size: (PRAYER_BANNER.0 * self.scale, PRAYER_BANNER.1 * self.scale),
             until: now + duration,
         });
