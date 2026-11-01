@@ -23,7 +23,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 
 ## Conventions
 
-- Stay light. The budget is 30 MB of RAM, and idle CPU should stay near zero: event-driven where Windows allows, timers only as slow as they can be
+- Stay light. The budget is 30 MB of private memory, and idle CPU should stay near zero: event-driven where Windows allows, timers only as slow as they can be
 - Every open card is `anim::CARD`, so a page must fit 150 px, with the foot left to the page dots. Pages draw at their own origin. The card frame places them under `CARD_TOP`, between `CARD_SIDE` margins; hit tests convert with `on_page`
 - A new card page needs: a `Page` variant, a title in `page_title`, an icon in `page_glyph`, its place in `App::pages`, and a switch on its page in `PAGES` in `settings.rs`
 - A new setting needs: a field in `Settings` and its default, a line in `to_ini`, a key in `parse` (keys are global, sections are only for reading), and the round-trip test
