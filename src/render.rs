@@ -3071,6 +3071,17 @@ impl Renderer {
         let (left, right) = (x0 + 56.0, x1 - 16.0);
         for (index, row) in inbox.rows.iter().enumerate() {
             let top = INBOX_TOP + index as f32 * INBOX_ROW;
+            if inbox.hover == Some(index) {
+                self.light.SetOpacity(0.08 * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: rect(x0 + 10.0, top - 2.0, x1 - 8.0, top + 33.0),
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.light,
+                );
+            }
             let logo = rect(x0 + 20.0, top + 2.0, x0 + 48.0, top + 30.0);
             self.draw_logo(row.app_id, logo, 7.0, alpha);
 

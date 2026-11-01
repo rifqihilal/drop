@@ -2152,7 +2152,11 @@ impl App {
     /// a new prayer location with a notice.
     fn apply_settings(&mut self, announce: bool) {
         let before = self.settings.prayer();
+        let flyout_hidden = self.settings.hide_asus_flyout;
         self.settings = Settings::load();
+        if self.settings.hide_asus_flyout && !flyout_hidden {
+            system::close_asus_flyout();
+        }
         let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
         self.notch.bounce = self.settings.card_bounce;

@@ -130,7 +130,7 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 28;
+const TOGGLE_COUNT: usize = 29;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
@@ -295,6 +295,11 @@ static PAGES: [Page; 11] = [
                     toggle: 27,
                     title: "Indikator kamera dan mic",
                     note: "Notch kecil di kanan saat kamera atau mic dipakai",
+                },
+                Row::Switch {
+                    toggle: 28,
+                    title: "Sembunyikan flyout ASUS",
+                    note: "Tutup AsusOSD, flyout tombol ASUS lain ikut hilang",
                 },
                 Row::Switch {
                     toggle: 19,
@@ -933,6 +938,7 @@ impl Window {
                 settings.follow_dnd,
                 settings.notify_mic,
                 settings.privacy_dots,
+                settings.hide_asus_flyout,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1183,6 +1189,7 @@ impl Window {
             follow_dnd: self.toggles[25],
             notify_mic: self.toggles[26],
             privacy_dots: self.toggles[27],
+            hide_asus_flyout: self.toggles[28],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),

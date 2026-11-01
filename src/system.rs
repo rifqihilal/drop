@@ -13,7 +13,7 @@ use windows::core::{implement, Result, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Foundation::{
-    GlobalFree, GENERIC_READ, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM,
+    CloseHandle, GlobalFree, GENERIC_READ, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, BITMAPINFOHEADER, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -35,6 +35,9 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     SetClipboardData,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
@@ -47,6 +50,7 @@ use windows::Win32::System::SystemServices::{
     GUID_ACDC_POWER_SOURCE, GUID_BATTERY_PERCENTAGE_REMAINING,
     GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
 };
+use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, VK_CAPITAL, VK_CONTROL, VK_VOLUME_DOWN, VK_VOLUME_MUTE,
@@ -483,6 +487,9 @@ pub fn ctrl_down() -> bool {
     unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 }
 }
 
+/// How long after Drop starts ASUS's flyout is closed a second time.
+const ASUS_FLYOUT_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Pictures larger than this are copied as a file only: their pixels would
 /// sit in this process for as long as they stay on the clipboard.
 const CLIPBOARD_PIXELS: u64 = 16_000_000;
@@ -506,6 +513,43 @@ pub fn copy_file(owner: HWND, path: &Path) -> bool {
         }
         let _ = CloseClipboard();
         copied
+    }
+}
+
+/// Closes ASUS's on-screen flyout: now, and once more after a while in case
+/// it starts later than Drop. It can come back with Windows; its keys work
+/// without it.
+pub fn close_asus_flyout() {
+    std::thread::spawn(|| {
+        close_process("asusosd.exe");
+        std::thread::sleep(ASUS_FLYOUT_RETRY);
+        close_process("asusosd.exe");
+    });
+}
+
+/// Ends every process whose file is called `name`, in lower case.
+fn close_process(name: &str) {
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = Process32FirstW(snapshot, &mut entry).is_ok();
+        while found {
+            let length = entry.szExeFile.iter().position(|&c| c == 0);
+            let file = String::from_utf16_lossy(&entry.szExeFile[..length.unwrap_or(0)]);
+            if file.to_lowercase() == name {
+                if let Ok(process) = OpenProcess(PROCESS_TERMINATE, false, entry.th32ProcessID) {
+                    let _ = TerminateProcess(process, 0);
+                    let _ = CloseHandle(process);
+                }
+            }
+            found = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
     }
 }
 

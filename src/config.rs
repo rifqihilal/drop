@@ -60,6 +60,8 @@ pub struct Settings {
     pub sound: bool,
     /// A small notch beside the main one while the camera or microphone is in use.
     pub privacy_dots: bool,
+    /// Close ASUS's on-screen flyout, whose text can be wrong.
+    pub hide_asus_flyout: bool,
     /// Minutes without input before the eyes appear.
     pub idle_minutes: u32,
     /// Fetch the weather for the prayer location.
@@ -119,6 +121,7 @@ impl Default for Settings {
             follow_dnd: true,
             sound: true,
             privacy_dots: true,
+            hide_asus_flyout: false,
             idle_minutes: 2,
             weather: true,
             module_music: true,
@@ -226,6 +229,8 @@ impl Settings {
              [umum]\n\
              ; Notch kecil di kanan saat kamera atau mikrofon dipakai.\n\
              titik_privasi = {}\n\
+             ; Tutup flyout ASUS (AsusOSD); tombolnya tetap jalan, flyout tombol lain ikut hilang.\n\
+             sembunyikan_flyout_asus = {}\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
              mata_setelah_menit = {}\n\
              \n\
@@ -293,6 +298,7 @@ impl Settings {
             flag(self.follow_dnd),
             flag(self.sound),
             flag(self.privacy_dots),
+            flag(self.hide_asus_flyout),
             self.idle_minutes,
             flag(self.weather),
             flag(self.module_music),
@@ -394,6 +400,7 @@ fn parse(text: &str) -> Settings {
             "baterai" => s.notify_battery = flag(true),
             "mic" => s.notify_mic = flag(true),
             "titik_privasi" => s.privacy_dots = flag(true),
+            "sembunyikan_flyout_asus" => s.hide_asus_flyout = flag(false),
             "sholat" => s.notify_prayer = flag(true),
             "aplikasi" => s.notify_apps = flag(true),
             "ikuti_dnd" => s.follow_dnd = flag(true),
@@ -471,6 +478,7 @@ mod tests {
             follow_dnd: false,
             sound: false,
             privacy_dots: false,
+            hide_asus_flyout: true,
             idle_minutes: 5,
             weather: false,
             module_music: false,
