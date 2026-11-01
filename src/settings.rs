@@ -293,8 +293,8 @@ static PAGES: [Page; 11] = [
                 },
                 Row::Switch {
                     toggle: 27,
-                    title: "Titik kamera dan mic",
-                    note: "Titik hijau saat kamera dipakai, oranye saat mic dipakai",
+                    title: "Indikator kamera dan mic",
+                    note: "Notch kecil di kanan saat kamera atau mic dipakai",
                 },
                 Row::Switch {
                     toggle: 19,

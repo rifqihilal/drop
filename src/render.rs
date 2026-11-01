@@ -70,11 +70,9 @@ use crate::todo::Task;
 use crate::usage::{self, AppTime};
 use crate::{calendar, notifications, prayer, shelf, timers, todo};
 
-/// A point on the open card (its `y`, and the card's `width`) as the page
-/// sees it: below the header, between the side arrows.
-fn on_page(y: f32, width: f32) -> (f32, f32) {
-    (y - CARD_TOP, width - 2.0 * CARD_SIDE)
-}
+/// The page's margin on each side when the card has no arrows to leave room
+/// for.
+const CARD_SIDE_BARE: f32 = 6.0;
 
 /// The cover's corners run alongside the notch's rounded foot.
 const STRIP_ART_RADIUS: f32 = 7.0;
@@ -83,6 +81,9 @@ const STRIP_ART_RADIUS: f32 = 7.0;
 fn strip_art(x0: f32, cy: f32) -> D2D_RECT_F {
     rect(x0 + 7.0, cy - 10.0, x0 + 27.0, cy + 10.0)
 }
+
+/// Height of the camera and microphone's small notch.
+const PRIVACY_HEIGHT: f32 = 28.0;
 
 /// Size of the side arrows on the open card.
 const ARROW_RADIUS: f32 = 11.0;
@@ -545,8 +546,8 @@ impl CalendarRects {
         Self {
             grid_left: x0 + 20.0,
             // In the header row, right of the date.
-            previous_month: (x1 - 66.0, CARD_TOP_ROW),
-            next_month: (x1 - 38.0, CARD_TOP_ROW),
+            previous_month: (x1 - 74.0, CARD_TOP_ROW),
+            next_month: (x1 - 46.0, CARD_TOP_ROW),
             agenda_left: x0 + 232.0,
             agenda_right: x1 - 14.0,
         }
@@ -558,8 +559,9 @@ const AGENDA_TOP: f32 = 36.0;
 const AGENDA_ROW: f32 = 34.0;
 
 // Pomodoro card layout: the ring on the left, its controls on the right.
-const POMODORO_RING: (f32, f32) = (112.0, 78.0);
-const POMODORO_LEFT: f32 = 214.0;
+/// The ring's height, and where the controls start from the page's right.
+const POMODORO_RING_Y: f32 = 78.0;
+const POMODORO_RIGHT: f32 = 186.0;
 
 /// Width of the column beside the ring.
 const TIMER_COLUMN: f32 = 176.0;
@@ -589,8 +591,8 @@ struct PomodoroRects {
 }
 
 impl PomodoroRects {
-    fn new(x0: f32) -> Self {
-        let left = x0 + POMODORO_LEFT;
+    fn new(x1: f32) -> Self {
+        let left = x1 - POMODORO_RIGHT;
         let count = timers::QUICK_MINUTES.len() as f32;
         let minute = (TIMER_COLUMN - (count - 1.0) * MINUTE_GAP) / count;
         Self {
@@ -672,7 +674,7 @@ pub mod glyph {
     pub const MESSAGE: &str = "\u{E8BD}";
     pub const CAMERA: &str = "\u{E722}";
     pub const MIC: &str = "\u{E720}";
-    pub const MIC_OFF: &str = "\u{E1D6}";
+    pub const MIC_OFF: &str = "\u{F781}";
     pub const COPY: &str = "\u{E8C8}";
     pub const BOLT: &str = "\u{E945}";
     pub const SCREEN: &str = "\u{E7F4}";
@@ -736,8 +738,10 @@ pub struct Scene<'a> {
     pub zooms: &'a [(u16, f32)],
     /// The mouse is on an app notification.
     pub banner_hover: bool,
-    /// The camera and microphone bits in use, see `privacy`; 0 hides the dots.
+    /// The camera and microphone bits to show, see `privacy`, and how far
+    /// their small notch has come out, 0..1.
     pub privacy: usize,
+    pub privacy_visible: f32,
     /// How far the notch has widened to show the date, 0..1.
     pub peek_visible: f32,
     /// The closed notch's size relative to the usual one.
@@ -1094,6 +1098,8 @@ pub struct Renderer {
     /// Recolored per notice.
     accent: ID2D1SolidColorBrush,
     round_caps: ID2D1StrokeStyle,
+    /// The page's margin on each side of the open card.
+    card_side: f32,
     /// Album art of the current track, decoded once per song.
     art: Option<ID2D1Bitmap>,
     /// The art's main colour, for the music card's background.
@@ -1283,6 +1289,7 @@ impl Renderer {
                 light,
                 accent,
                 round_caps,
+                card_side: CARD_SIDE,
                 art: None,
                 art_tint: None,
                 thumbs: Vec::new(),
@@ -1295,6 +1302,17 @@ impl Renderer {
                 size,
             })
         }
+    }
+
+    /// Whether the open card keeps room for its side arrows.
+    pub fn set_arrows(&mut self, arrows: bool) {
+        self.card_side = if arrows { CARD_SIDE } else { CARD_SIDE_BARE };
+    }
+
+    /// A point on the open card (its `y`, and the card's `width`) as the page
+    /// sees it: below the header, between the side margins.
+    fn on_page(&self, y: f32, width: f32) -> (f32, f32) {
+        (y - CARD_TOP, width - 2.0 * self.card_side)
     }
 
     /// Size of the window in physical pixels.
@@ -1311,9 +1329,9 @@ impl Renderer {
             self.draw_eyes(scene)?;
             self.draw_banner(scene);
             self.draw_music(scene);
+            self.draw_privacy(scene);
             self.with_scale(scene.closed_scale, || {
                 self.draw_clock(scene);
-                self.draw_privacy(scene);
                 self.draw_unread(scene);
             });
             t.EndDraw(None, None)?;
@@ -1426,55 +1444,52 @@ impl Renderer {
         Ok(())
     }
 
-    /// Small dots inside the closed notch, green for a camera in use and
-    /// orange for a microphone. They sit left of the clock, as the right can
-    /// fill up to it with a prayer's wait; widened, the date takes that side.
+    /// A small notch of its own right of the main one, with an icon for each
+    /// of the camera and microphone in use.
     unsafe fn draw_privacy(&self, scene: &Scene) {
-        const RADIUS: f32 = 2.5;
-        const FROM_CLOCK: f32 = 29.0;
-        const GAP: f32 = 10.0;
-        let cover = scene
-            .eyes_visible
-            .max(scene.banner_visible)
-            .max(scene.card_visible);
-        let alpha = (1.0 - cover * 1.6).clamp(0.0, 1.0);
-        if scene.privacy == 0 || alpha <= 0.0 {
+        const SIDE: f32 = 17.0;
+        const STEP: f32 = 20.0;
+        const GAP: f32 = 8.0;
+        let alpha = scene.privacy_visible.clamp(0.0, 1.0)
+            * (1.0 - scene.card_visible * 1.6).clamp(0.0, 1.0);
+        let icons: Vec<(&str, D2D1_COLOR_F)> = [
+            (
+                crate::privacy::CAMERA,
+                glyph::CAMERA,
+                accent_color(Accent::Green),
+            ),
+            (crate::privacy::MIC, glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
+        ]
+        .into_iter()
+        .filter(|(bit, _, _)| scene.privacy & bit != 0)
+        .map(|(_, icon, tint)| (icon, tint))
+        .collect();
+        if icons.is_empty() || alpha <= 0.01 {
             return;
         }
-        let cx = CANVAS.0 / 2.0;
-        let (width, height) = (
-            scene.width / scene.closed_scale,
-            scene.height / scene.closed_scale,
+        let h = PRIVACY_HEIGHT * scene.closed_scale;
+        let ear = if scene.floating { 0.0 } else { EAR };
+        // It slides out from behind the main notch.
+        let left = CANVAS.0 / 2.0 + scene.width / 2.0 + ear + GAP
+            - 14.0 * (1.0 - scene.privacy_visible.clamp(0.0, 1.0));
+        let width = 2.0 * SIDE + (icons.len() - 1) as f32 * STEP;
+        // Against the top edge only the lower corners show, as on the notch.
+        let top = if scene.floating { 0.0 } else { -h };
+        self.black.SetOpacity(scene.notch_opacity * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: rect(left, top, left + width, h),
+                radiusX: h / 2.0,
+                radiusY: h / 2.0,
+            },
+            &self.black,
         );
-        // A lyric line fills the clock's place, so the dots go beside it.
-        let lyric = scene.strip == Strip::Music
-            && scene
-                .music
-                .as_ref()
-                .is_some_and(|music| music.lyric.is_some());
-        let (camera, mic) = if lyric {
-            (cx - width / 2.0 + 33.5, cx + width / 2.0 - 10.0)
-        } else {
-            let side = if scene.peek_visible >= 0.5 { 1.0 } else { -1.0 };
-            let reach = FROM_CLOCK.min(width / 2.0 - 8.0 - GAP);
-            (cx + side * (reach + GAP), cx + side * reach)
-        };
-        for (bit, x, rgb) in [
-            (crate::privacy::CAMERA, camera, color(0.19, 0.82, 0.35, 1.0)),
-            (crate::privacy::MIC, mic, color(1.0, 0.62, 0.04, 1.0)),
-        ] {
-            if scene.privacy & bit != 0 {
-                self.accent.SetColor(&rgb);
-                self.accent.SetOpacity(alpha);
-                self.target.FillEllipse(
-                    &D2D1_ELLIPSE {
-                        point: pt(x, height / 2.0),
-                        radiusX: RADIUS,
-                        radiusY: RADIUS,
-                    },
-                    &self.accent,
-                );
-            }
+        self.black.SetOpacity(1.0);
+        for (index, (icon, tint)) in icons.iter().enumerate() {
+            self.accent.SetColor(tint);
+            self.accent.SetOpacity(alpha);
+            let cx = left + SIDE + index as f32 * STEP;
+            self.draw_small_glyph_at(icon, cx, h / 2.0, &self.accent);
         }
     }
 
@@ -1578,23 +1593,7 @@ impl Renderer {
         match content {
             Content::Level { kind, level, muted } => {
                 let level = level.value.clamp(0.0, 1.0);
-                if let LevelKind::Caps { on } = kind {
-                    self.draw_text(glyph::KEYBOARD, &self.icons, icon_box, alpha);
-                    let label = if *on {
-                        "Caps Lock nyala"
-                    } else {
-                        "Caps Lock mati"
-                    };
-                    self.draw_text(
-                        label,
-                        &self.subtitle_text,
-                        rect(x0 + 42.0, 0.0, x1 - 14.0, h),
-                        alpha,
-                    );
-                    return;
-                }
                 let glyph = match kind {
-                    LevelKind::Caps { .. } => glyph::KEYBOARD,
                     LevelKind::Brightness => glyph::BRIGHTNESS,
                     LevelKind::Volume if *muted || level < 0.005 => glyph::MUTE,
                     LevelKind::Volume if level < 0.34 => glyph::VOLUME_LOW,
@@ -1733,7 +1732,7 @@ impl Renderer {
 
     /// Which music control sits at (`x`, `y`) on the open card.
     pub fn music_control_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> Option<Command> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let card = CardRects::new(width, lyrics);
         [
             (card.previous, Command::Previous),
@@ -1747,7 +1746,7 @@ impl Renderer {
 
     /// Whether the lyrics button is at (`x`, `y`) on the open card.
     pub fn lyrics_button_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> bool {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let (bx, by) = CardRects::new(width, lyrics).lyrics;
         (x - bx).powi(2) + (y - by).powi(2) <= HIT_RADIUS.powi(2)
     }
@@ -1755,7 +1754,7 @@ impl Renderer {
     /// Whether the mouse at (`x`, `y`) opens the volume slider: on the
     /// speaker, or while `open`, anywhere along the slider too.
     pub fn volume_zone_at(&self, x: f32, y: f32, width: f32, lyrics: bool, open: bool) -> bool {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let card = CardRects::new(width, lyrics);
         let (mut left, mut right) = (card.speaker.0 - 14.0, card.speaker.0 + 14.0);
         if open {
@@ -1767,14 +1766,14 @@ impl Renderer {
 
     /// Whether the volume slider is at (`x`, `y`) on the open card.
     pub fn volume_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> bool {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let (left, right, row) = CardRects::new(width, lyrics).volume;
         x >= left - 6.0 && x <= right + 6.0 && (y - row).abs() <= 12.0
     }
 
     /// How far into the song the progress bar at (`x`, `y`) points, 0..1.
     pub fn progress_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> Option<f32> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let (left, right, row) = CardRects::new(width, lyrics).progress;
         (x >= left && x <= right && (y - row).abs() <= 8.0).then(|| (x - left) / (right - left))
     }
@@ -1782,7 +1781,7 @@ impl Renderer {
     /// Which lyric line is at (`x`, `y`), counted from the one sung: -1 the
     /// line before it, 1 the line after it.
     pub fn lyric_line_at(&self, x: f32, y: f32, width: f32) -> Option<isize> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let left = CANVAS.0 / 2.0 - width / 2.0 + LYRICS_LEFT;
         (x >= left && (4.0..150.0).contains(&y)).then_some(match y - LYRICS_MIDDLE {
             offset if offset < -20.0 => -1,
@@ -1971,7 +1970,7 @@ impl Renderer {
 
     /// Which part of the music card zooms for the mouse at (`x`, `y`).
     pub fn music_zoom_at(&self, x: f32, y: f32, width: f32, lyrics: bool) -> Option<u16> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let card = CardRects::new(width, lyrics);
         [
             (card.lyrics, zoom::LYRICS),
@@ -2013,7 +2012,7 @@ impl Renderer {
 
     /// The volume the slider gives at `x`, past its ends included.
     pub fn volume_level(&self, x: f32, width: f32, lyrics: bool) -> f32 {
-        let (left, right, _) = CardRects::new(width - 2.0 * CARD_SIDE, lyrics).volume;
+        let (left, right, _) = CardRects::new(width - 2.0 * self.card_side, lyrics).volume;
         ((x - left) / (right - left)).clamp(0.0, 1.0)
     }
 
@@ -2059,7 +2058,7 @@ impl Renderer {
             return;
         }
         // The page sits between the side arrows, under the header row.
-        let (inner0, inner1) = (x0 + CARD_SIDE, x1 - CARD_SIDE);
+        let (inner0, inner1) = (x0 + self.card_side, x1 - self.card_side);
         match scene.previous_page {
             // Switching pages: the old one fades out sliding away, the new one
             // fades in from the side the wheel moved toward.
@@ -2327,12 +2326,12 @@ impl Renderer {
                 }
             }
             (Page::Music, Some(music), _) => {
-                self.draw_music_card(scene, music, scene.width - 2.0 * CARD_SIDE, alpha)
+                self.draw_music_card(scene, music, scene.width - 2.0 * self.card_side, alpha)
             }
             (Page::Calendar, _, _) => {
                 self.draw_calendar_card(&scene.calendar, &scene.month_agenda, x0, x1, alpha)
             }
-            (Page::Pomodoro, _, Some(timer)) => self.draw_pomodoro_card(timer, x0, alpha),
+            (Page::Pomodoro, _, Some(timer)) => self.draw_pomodoro_card(timer, x0, x1, alpha),
             _ => self.draw_status_card(scene, x0, x1, alpha),
         }
     }
@@ -2646,9 +2645,11 @@ impl Renderer {
     }
 
     /// The time left in a ring, with the phase and controls beside it.
-    unsafe fn draw_pomodoro_card(&self, timer: &TimerScene, x0: f32, alpha: f32) {
-        let layout = PomodoroRects::new(x0);
-        let (cx, cy) = (x0 + POMODORO_RING.0, POMODORO_RING.1);
+    unsafe fn draw_pomodoro_card(&self, timer: &TimerScene, x0: f32, x1: f32, alpha: f32) {
+        let layout = PomodoroRects::new(x1);
+        let left = x1 - POMODORO_RIGHT;
+        // The ring sits in the middle of what the controls leave free.
+        let (cx, cy) = ((x0 + left) / 2.0 + 5.0, POMODORO_RING_Y);
         let accent = timer.accent();
         let _ = self.draw_ring(cx, cy, 56.0, timer.progress, accent_color(accent), alpha);
         if let Some(text) = self.text_layout(&timer.left, &self.big_clock, 120.0) {
@@ -2659,7 +2660,6 @@ impl Renderer {
                 alpha,
             );
         }
-        let left = x0 + POMODORO_LEFT;
         self.draw_timer_tabs(&layout, tab_index(timer.kind), alpha);
         if timer.picking {
             for (minutes, bounds) in timers::QUICK_MINUTES.iter().zip(layout.minutes) {
@@ -3096,7 +3096,7 @@ impl Renderer {
 
     /// Which notification's remove button is at (`x`, `y`).
     pub fn inbox_remove_at(&self, x: f32, y: f32, width: f32, count: usize) -> Option<usize> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let x1 = CANVAS.0 / 2.0 + width / 2.0;
         (0..count).find(|&index| {
             let (rx, ry) = inbox_remove(x1, index);
@@ -3106,7 +3106,7 @@ impl Renderer {
 
     /// Which of `count` notification rows is at (`x`, `y`).
     pub fn inbox_row_at(&self, x: f32, y: f32, width: f32, count: usize) -> Option<usize> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let inside = (x - CANVAS.0 / 2.0).abs() <= width / 2.0;
         let index = (y - INBOX_TOP).div_euclid(INBOX_ROW);
         (inside && index >= 0.0 && (index as usize) < count).then_some(index as usize)
@@ -3179,7 +3179,7 @@ impl Renderer {
 
     /// Whether the button that clears the notifications is at (`x`, `y`).
     pub fn inbox_clear_at(&self, x: f32, y: f32, width: f32) -> bool {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let clear = ShelfRects::new(cx - width / 2.0, cx + width / 2.0).clear;
         x >= clear.left && x < clear.right && y >= clear.top && y < clear.bottom
@@ -3319,7 +3319,7 @@ impl Renderer {
 
     /// What sits at (`x`, `y`) on the shelf card holding `count` files.
     pub fn shelf_hit(&self, x: f32, y: f32, width: f32, count: usize) -> Option<ShelfHit> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let layout = ShelfRects::new(cx - width / 2.0, cx + width / 2.0);
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
@@ -3343,7 +3343,7 @@ impl Renderer {
 
     /// The side of the Screen Time switch at (`x`, `y`): true for the week.
     pub fn usage_switch_at(&self, x: f32, y: f32, width: f32) -> Option<bool> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let track = usage_switch(CANVAS.0 / 2.0 - width / 2.0);
         let inside = x >= track.left && x < track.right && y >= track.top && y < track.bottom;
         inside.then_some(x >= (track.left + track.right) / 2.0)
@@ -3673,7 +3673,7 @@ impl Renderer {
 
     /// What sits at (`x`, `y`) on the task card.
     pub fn todo_hit(&self, x: f32, y: f32, width: f32, todo: &TodoScene) -> Option<TodoHit> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let layout = TodoRects {
             x0: cx - width / 2.0,
@@ -3867,7 +3867,7 @@ impl Renderer {
 
     /// Which calendar control sits at (`x`, `y`) on the open card.
     pub fn calendar_control_at(&self, x: f32, y: f32, width: f32) -> Option<CalendarControl> {
-        let (y, width) = on_page(y, width);
+        let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let layout = CalendarRects::new(cx - width / 2.0, cx + width / 2.0);
         [
@@ -3888,8 +3888,8 @@ impl Renderer {
         width: f32,
         picking: bool,
     ) -> Option<TimerControl> {
-        let (y, width) = on_page(y, width);
-        let layout = PomodoroRects::new(CANVAS.0 / 2.0 - width / 2.0);
+        let (y, width) = self.on_page(y, width);
+        let layout = PomodoroRects::new(CANVAS.0 / 2.0 + width / 2.0);
         let inside = |r: &D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
         if inside(&layout.start_pause) {
             return Some(TimerControl::StartPause);

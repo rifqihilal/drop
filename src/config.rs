@@ -58,7 +58,7 @@ pub struct Settings {
     pub follow_dnd: bool,
     /// Play the notification sound with notices.
     pub sound: bool,
-    /// Dots beside the notch while the camera or microphone is in use.
+    /// A small notch beside the main one while the camera or microphone is in use.
     pub privacy_dots: bool,
     /// Minutes without input before the eyes appear.
     pub idle_minutes: u32,
@@ -224,7 +224,7 @@ impl Settings {
              bunyi = {}\n\
              \n\
              [umum]\n\
-             ; Titik hijau saat kamera dipakai, oranye saat mikrofon dipakai.\n\
+             ; Notch kecil di kanan saat kamera atau mikrofon dipakai.\n\
              titik_privasi = {}\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
              mata_setelah_menit = {}\n\

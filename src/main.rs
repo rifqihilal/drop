@@ -153,6 +153,8 @@ const SHOT_WINDOW: Duration = Duration::from_secs(5);
 /// How long a shelf tile says its file was copied.
 /// The quick timer's length until another is chosen.
 const QUICK_DEFAULT: u64 = 5;
+/// How long the Caps Lock notice stays.
+const CAPS_SHOWN: Duration = Duration::from_millis(1800);
 const COPIED_SHOWN: Duration = Duration::from_millis(1500);
 /// How long a notification from another app stays up.
 const APP_BANNER_SHOWN: Duration = Duration::from_secs(4);
@@ -248,6 +250,10 @@ struct App {
     shelf_picked: Vec<PathBuf>,
     /// The camera and microphone bits in use, see `privacy`.
     privacy: usize,
+    /// What the small notch shows, kept while it slides away, and how far out
+    /// it is.
+    privacy_shown: usize,
+    privacy_slide: Spring,
     /// Files still arriving in the Downloads folder: name and bytes so far.
     downloads: Vec<(String, u64)>,
     /// Whether the default microphone is muted; None without one.
@@ -456,6 +462,8 @@ fn main() -> Result<()> {
             shelf_copied: None,
             shelf_picked: Vec::new(),
             privacy: 0,
+            privacy_shown: 0,
+            privacy_slide: Spring::new(0.0, 260.0, 32.0, 0.002),
             downloads: Vec::new(),
             mic_muted: None,
             clip_at: None,
@@ -634,7 +642,7 @@ impl App {
         }
         let rolling = self.update_lyric_roll(now);
         let zooming = self.step_zooms(dt);
-        let sliding = self.usage_switch.step(dt);
+        let sliding = self.usage_switch.step(dt) | self.step_privacy(dt);
         let moving = self.notch.step(now, dt) || switching || rolling || zooming || sliding;
         let moving = self.step_bell(now) || moving;
         let bars_moving = self.step_bars(dt);
@@ -2148,6 +2156,7 @@ impl App {
         let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
         self.notch.bounce = self.settings.card_bounce;
+        self.renderer.set_arrows(self.settings.card_arrows);
         self.aim_usage_switch();
         let resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,
@@ -2373,6 +2382,20 @@ impl App {
         self.show_level(LevelKind::Volume, wparam.0 as f32 / 1000.0, lparam.0 != 0);
     }
 
+    /// Slides the camera and microphone's small notch in or out.
+    fn step_privacy(&mut self, dt: f32) -> bool {
+        let live = if self.settings.privacy_dots {
+            self.privacy
+        } else {
+            0
+        };
+        if live != 0 {
+            self.privacy_shown = live;
+        }
+        self.privacy_slide.target = if live != 0 { 1.0 } else { 0.0 };
+        self.privacy_slide.step(dt)
+    }
+
     /// The camera or microphone started or stopped being used.
     fn on_privacy(&mut self, state: usize) {
         self.privacy = state;
@@ -2383,7 +2406,7 @@ impl App {
     fn on_mic(&mut self, muted: bool) {
         let before = self.mic_muted.replace(muted);
         if before.is_some_and(|before| before != muted) && self.settings.notify_mic {
-            self.notify(notices::mic(muted));
+            self.notify_silently(notices::mic(muted), anim::NOTICE_DURATION);
         }
     }
 
@@ -2394,20 +2417,26 @@ impl App {
         for name in update.done {
             self.notify(notices::download(&name));
         }
+        for name in update.cancelled {
+            self.notify(notices::download_cancelled(&name));
+        }
+        for name in update.stalled {
+            self.notify(notices::download_stalled(&name));
+        }
         self.tick();
         self.draw();
     }
 
     /// Caps Lock was released, and has flipped.
     fn on_caps(&mut self) {
-        let on = system::caps_lock_on();
-        // Nothing to suppress: Windows draws no flyout of its own for this.
-        self.notch.show_level(
-            LevelKind::Caps { on },
-            if on { 1.0 } else { 0.0 },
-            false,
-            Instant::now(),
-        );
+        self.notify_silently(notices::caps(system::caps_lock_on()), CAPS_SHOWN);
+    }
+
+    /// Shows a notice for what the user just did, which needs no sound.
+    fn notify_silently(&mut self, notice: Notice, duration: Duration) {
+        let width = self.renderer.notice_width(&notice);
+        self.notch
+            .show_notice(notice, width, duration, Instant::now());
         self.tick();
         self.draw();
     }
@@ -2546,11 +2575,8 @@ impl App {
             nav_visible: n.nav_visible.value,
             zooms: &self.zooms,
             banner_hover: self.banner_hover,
-            privacy: if self.settings.privacy_dots {
-                self.privacy
-            } else {
-                0
-            },
+            privacy: self.privacy_shown,
+            privacy_visible: self.privacy_slide.value,
             peek_visible: n.peek_visible.value,
             closed_scale: n.scale,
             calendar: {
@@ -3090,6 +3116,53 @@ mod notices {
         }
     }
 
+    /// The temporary file went without a finished one, which is all a
+    /// cancelled and a failed download have to tell them apart.
+    pub fn download_cancelled(name: &str) -> Notice {
+        Notice {
+            icon: glyph::CLOSE,
+            motion: Motion::Pulse,
+            accent: Accent::Red,
+            progress: 1.0,
+            title: "Unduhan dibatalkan".to_string(),
+            subtitle: name.to_string(),
+            trailing: Trailing::None,
+            dim: true,
+        }
+    }
+
+    /// Paused, or the connection dropped: the file only stopped growing.
+    pub fn download_stalled(name: &str) -> Notice {
+        Notice {
+            icon: glyph::PAUSE,
+            motion: Motion::Pulse,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: "Unduhan terhenti".to_string(),
+            subtitle: name.to_string(),
+            trailing: Trailing::None,
+            dim: true,
+        }
+    }
+
+    pub fn caps(on: bool) -> Notice {
+        Notice {
+            icon: glyph::KEYBOARD,
+            motion: Motion::Pulse,
+            accent: Accent::Teal,
+            progress: 1.0,
+            title: if on {
+                "Caps Lock nyala"
+            } else {
+                "Caps Lock mati"
+            }
+            .to_string(),
+            subtitle: if on { "Huruf besar" } else { "Huruf kecil" }.to_string(),
+            trailing: Trailing::None,
+            dim: !on,
+        }
+    }
+
     pub fn wifi(ssid: &str, connected: bool) -> Notice {
         Notice {
             icon: glyph::WIFI,
@@ -3157,7 +3230,7 @@ mod notices {
             }
             .to_string(),
             trailing: Trailing::None,
-            dim: muted,
+            dim: false,
         }
     }
 

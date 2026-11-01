@@ -18,7 +18,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 - Worker threads post results to the notch window as `WM_APP + n` messages with a boxed payload: `weather.rs`, `ical.rs`, `lyrics.rs`, `media.rs`, `geo.rs`, `screenshots.rs`, `notifications.rs`, `clipboard.rs`, `downloads.rs`. Check for free numbers before adding one
 - `watch.rs` blocks a worker on folder changes. `screenshots.rs` uses it on the Screenshots folder, `downloads.rs` on the Downloads folder, `notifications.rs` on the notification database folder, because the listener's change event needs a packaged app
 - System events: `system.rs` (audio, power, battery, full-screen, clipboard), `wifi.rs`, `bluetooth.rs`, `keys.rs` (volume keys, Caps Lock), `osd.rs`, `tray.rs`, `dragdrop.rs`, `frames.rs` (display-paced animation)
-- `privacy.rs` blocks a worker on a registry notification for the capability consent store, to tell when the camera or microphone is in use
+- `privacy.rs` tells when the camera or microphone is in use: Media Foundation's sensor activity monitor and Core Audio capture sessions call back to a sleeping worker. The registry's consent store is not reliable, its entries go stale
 - Pure logic with tests: `prayer.rs`, `calendar.rs`, `timers.rs`, `health.rs`, `todo.rs`, `shelf.rs`, `sound.rs` (notification sounds made from sine waves), `usage.rs` (Screen Time per app over seven days, fed by the foreground hook and the minute tick), and the parsers in `ical.rs` and `lyrics.rs`
 
 ## Conventions

@@ -1,14 +1,17 @@
 //! Files arriving in the Windows Downloads folder. Browsers write a temporary
 //! file while receiving and rename it when done, so the notch can show the
-//! name and the bytes so far, then say when it lands. A folder notification
-//! wakes the worker, which reads sizes only while a download is running.
+//! name and the bytes so far, then say when it lands, went away or stopped
+//! growing. Only the file is seen, so a pause cannot be told from a lost
+//! connection, nor a cancelled download from a failed one. A folder
+//! notification wakes the worker, which reads sizes only while one is running.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::Storage::FileSystem::FILE_NOTIFY_CHANGE_FILE_NAME;
+use windows::Win32::Storage::FileSystem::{FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_SIZE};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{FOLDERID_Downloads, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
@@ -19,6 +22,8 @@ use crate::watch::Folder;
 pub const DOWNLOAD_MSG: u32 = WM_APP + 22;
 /// How often the bytes of a running download are read.
 const STEP: Duration = Duration::from_millis(700);
+/// A download whose file does not grow for this long counts as stopped.
+const STALL: Duration = Duration::from_secs(30);
 
 /// Browsers' extensions for a file still being written.
 const TEMP: [&str; 6] = [
@@ -37,6 +42,79 @@ pub struct Update {
     pub active: Vec<(String, u64)>,
     /// Names that were being written and are now in place.
     pub done: Vec<String>,
+    /// Names whose temporary file went without leaving a finished one.
+    pub cancelled: Vec<String>,
+    /// Names that just stopped growing.
+    pub stalled: Vec<String>,
+}
+
+struct Tracked {
+    bytes: u64,
+    changed: Instant,
+    /// Not growing, so left out of what is showing.
+    stalled: bool,
+}
+
+/// The temporary files in the folder, and whether each is still growing.
+#[derive(Default)]
+struct Tracker {
+    files: HashMap<String, Tracked>,
+    /// One look was had: files found by the first are leftovers until they
+    /// grow, and say nothing when they stop.
+    started: bool,
+}
+
+/// What one look at the folder found.
+#[derive(Default, PartialEq, Debug)]
+struct Look {
+    active: Vec<(String, u64)>,
+    gone: Vec<String>,
+    stalled: Vec<String>,
+}
+
+impl Tracker {
+    fn look(&mut self, scanned: Vec<(String, u64)>, now: Instant) -> Look {
+        let mut look = Look {
+            gone: self
+                .files
+                .keys()
+                .filter(|name| !scanned.iter().any(|(still, _)| still == *name))
+                .cloned()
+                .collect(),
+            ..Look::default()
+        };
+        look.gone.sort();
+        for name in &look.gone {
+            self.files.remove(name);
+        }
+        for (name, bytes) in scanned {
+            let leftover = !self.started;
+            let file = self.files.entry(name.clone()).or_insert(Tracked {
+                bytes,
+                changed: now,
+                stalled: leftover,
+            });
+            if file.bytes != bytes {
+                file.bytes = bytes;
+                file.changed = now;
+                file.stalled = false;
+            }
+            if !file.stalled && now.duration_since(file.changed) >= STALL {
+                file.stalled = true;
+                look.stalled.push(name.clone());
+            }
+            if !file.stalled {
+                look.active.push((name, bytes));
+            }
+        }
+        self.started = true;
+        look
+    }
+
+    /// Whether any file is still growing, which is worth reading again soon.
+    fn has_active(&self) -> bool {
+        self.files.values().any(|file| !file.stalled)
+    }
 }
 
 /// The name a temporary `name` will have once its download finishes.
@@ -69,15 +147,6 @@ fn scan(folder: &Path) -> Vec<(String, u64)> {
     active
 }
 
-/// Names in `before` that are gone from `active`.
-fn gone(before: &[(String, u64)], active: &[(String, u64)]) -> Vec<String> {
-    before
-        .iter()
-        .filter(|(name, _)| !active.iter().any(|(still, _)| still == name))
-        .map(|(name, _)| name.clone())
-        .collect()
-}
-
 /// Bytes as a short label, such as "1.4 MB".
 pub fn size_label(bytes: u64) -> String {
     const K: f64 = 1024.0;
@@ -108,19 +177,24 @@ pub fn watch(hwnd: HWND) {
         let Ok(watched) = Folder::open(&folder) else {
             return;
         };
+        let mut tracker = Tracker::default();
         let mut posted: Vec<(String, u64)> = Vec::new();
         loop {
-            let active = scan(&folder);
-            let mut done = Vec::new();
-            for name in gone(&posted, &active) {
-                // A cancelled download leaves no file behind.
-                if folder.join(&name).is_file() {
-                    done.push(name);
-                }
-            }
-            if active != posted || !done.is_empty() {
-                posted = active.clone();
-                let update = Box::into_raw(Box::new(Update { active, done }));
+            let look = tracker.look(scan(&folder), Instant::now());
+            // A download that went either landed or left nothing behind.
+            let (done, cancelled): (Vec<String>, Vec<String>) = look
+                .gone
+                .into_iter()
+                .partition(|name| folder.join(name).is_file());
+            let quiet = done.is_empty() && cancelled.is_empty() && look.stalled.is_empty();
+            if look.active != posted || !quiet {
+                posted = look.active.clone();
+                let update = Box::into_raw(Box::new(Update {
+                    active: look.active,
+                    done,
+                    cancelled,
+                    stalled: look.stalled,
+                }));
                 unsafe {
                     let _ = PostMessageW(
                         Some(HWND(target as *mut c_void)),
@@ -130,12 +204,13 @@ pub fn watch(hwnd: HWND) {
                     );
                 }
             }
-            if posted.is_empty() {
-                if watched.wait(FILE_NOTIFY_CHANGE_FILE_NAME).is_err() {
-                    return;
-                }
-            } else {
+            if tracker.has_active() {
                 std::thread::sleep(STEP);
+            } else if watched
+                .wait(FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE)
+                .is_err()
+            {
+                return;
             }
         }
     });
@@ -165,11 +240,56 @@ mod tests {
         assert_eq!(landed_name("tanpa ekstensi"), None);
     }
 
+    fn file(name: &str, bytes: u64) -> (String, u64) {
+        (name.to_string(), bytes)
+    }
+
     #[test]
-    fn a_finished_download_is_the_one_that_left() {
-        let before = vec![("a.zip".to_string(), 10), ("b.mp4".to_string(), 20)];
-        let active = vec![("b.mp4".to_string(), 30)];
-        assert_eq!(gone(&before, &active), ["a.zip"]);
+    fn a_download_that_left_is_gone() {
+        let now = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.look(Vec::new(), now);
+        tracker.look(vec![file("a.zip", 10), file("b.mp4", 20)], now);
+        let look = tracker.look(vec![file("b.mp4", 30)], now);
+        assert_eq!(look.gone, ["a.zip"]);
+        assert_eq!(look.active, [file("b.mp4", 30)]);
+    }
+
+    #[test]
+    fn a_download_that_stops_growing_is_told_once() {
+        let now = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.look(Vec::new(), now);
+        tracker.look(vec![file("a.zip", 10)], now);
+        let later = now + STALL;
+        let look = tracker.look(vec![file("a.zip", 10)], later);
+        assert_eq!(look.stalled, ["a.zip"]);
+        assert!(look.active.is_empty());
+        assert!(!tracker.has_active());
+        let look = tracker.look(vec![file("a.zip", 10)], later + STALL);
+        assert!(look.stalled.is_empty());
+    }
+
+    #[test]
+    fn a_stopped_download_comes_back_when_it_grows() {
+        let now = Instant::now();
+        let mut tracker = Tracker::default();
+        tracker.look(Vec::new(), now);
+        tracker.look(vec![file("a.zip", 10)], now);
+        tracker.look(vec![file("a.zip", 10)], now + STALL);
+        let look = tracker.look(vec![file("a.zip", 11)], now + 2 * STALL);
+        assert_eq!(look.active, [file("a.zip", 11)]);
+        assert!(tracker.has_active());
+    }
+
+    #[test]
+    fn leftovers_stay_quiet() {
+        let now = Instant::now();
+        let mut tracker = Tracker::default();
+        let look = tracker.look(vec![file("lama.zip", 10)], now);
+        assert_eq!(look, Look::default());
+        let look = tracker.look(vec![file("lama.zip", 10)], now + 2 * STALL);
+        assert_eq!(look, Look::default());
     }
 
     #[test]
