@@ -208,6 +208,15 @@ fn art_tint(pixels: &[u8]) -> Option<[f32; 3]> {
     (high > 0.0).then(|| sum.map(|value| value / high * 0.6))
 }
 
+/// How much of the cover's colour reaches the strip's foot: a grey cover stays
+/// dim, so the notch still reads as black, and a vivid one shows more.
+fn strip_foot(tint: [f32; 3]) -> f32 {
+    let high = tint[0].max(tint[1]).max(tint[2]);
+    let low = tint[0].min(tint[1]).min(tint[2]);
+    let vivid = if high > 0.0 { 1.0 - low / high } else { 0.0 };
+    0.4 + 0.4 * vivid
+}
+
 /// Height of the sun's path at `position` (0 at Subuh, 4 at Isya), 0..1. The
 /// peak leans toward the morning prayers, as the columns are evenly spaced.
 fn sun_arc(position: f32) -> f32 {
@@ -1438,8 +1447,8 @@ impl Renderer {
         };
         let opacity = card.max(strip);
         if let Some([r, g, b]) = self.art_tint.filter(|_| opacity > 0.01 && !scene.drop_zone) {
-            // The strip rises through the cover's own colour, nearly black at
-            // the top where the notch meets the screen's edge.
+            // The strip rises through the cover's own colour, gone to nearly
+            // black by the clock's middle so the white text stays clear.
             let (start, end) = if strip > card {
                 (pt(x0, h), pt(x0, 0.0))
             } else {
@@ -1447,11 +1456,16 @@ impl Renderer {
             };
             let clear = color(0.0, 0.0, 0.0, 0.0);
             let glow = if strip > card {
+                let foot = strip_foot([r, g, b]);
                 let shade = |k: f32| color(r * k, g * k, b * k, 1.0);
                 self.gradient(
                     start,
                     end,
-                    &[(0.0, shade(1.0)), (0.55, shade(0.45)), (1.0, shade(0.12))],
+                    &[
+                        (0.0, shade(foot)),
+                        (0.45, shade(foot * 0.3)),
+                        (1.0, shade(0.06)),
+                    ],
                 )?
             } else {
                 self.gradient(start, end, &[(0.0, color(r, g, b, 1.0)), (0.9, clear)])?
@@ -5094,6 +5108,12 @@ mod tests {
         assert!(r > g && r > b, "{r} {g} {b}");
         assert!((r - 0.6).abs() < 0.001);
         assert_eq!(art_tint(&[0, 0, 0, 255]), None);
+    }
+
+    #[test]
+    fn grey_covers_stay_dim_at_the_foot() {
+        assert!((strip_foot([0.6, 0.6, 0.6]) - 0.4).abs() < 0.001);
+        assert!((strip_foot([0.6, 0.0, 0.0]) - 0.8).abs() < 0.001);
     }
 
     #[test]
