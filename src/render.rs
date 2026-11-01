@@ -644,6 +644,7 @@ pub mod glyph {
     pub const VOLUME_MID: &str = "\u{E994}";
     pub const VOLUME_HIGH: &str = "\u{E995}";
     pub const BRIGHTNESS: &str = "\u{E706}";
+    pub const KEYBOARD: &str = "\u{E765}";
     pub const WIFI: &str = "\u{E701}";
     pub const BLUETOOTH: &str = "\u{E702}";
     pub const HEADPHONES: &str = "\u{E7F6}";
@@ -744,6 +745,8 @@ pub struct Scene<'a> {
     pub calendar: CalendarScene,
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
+    /// What is downloading, when `strip` is `Strip::Download`.
+    pub download: Option<DownloadScene>,
     /// What the live strip beside the clock shows.
     pub strip: Strip,
     pub shelf: ShelfScene<'a>,
@@ -854,6 +857,8 @@ pub enum Strip {
     None,
     Music,
     Timer,
+    /// Files arriving in the Downloads folder.
+    Download,
 }
 
 pub struct PrayerScene {
@@ -878,6 +883,8 @@ pub struct ShelfScene<'a> {
     pub hover: Option<usize>,
     /// The tile whose file was just copied.
     pub copied: Option<usize>,
+    /// Tiles picked out for removal together.
+    pub selected: &'a [PathBuf],
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -943,6 +950,14 @@ pub struct TimerScene {
     pub with_music: bool,
     /// How much of the phase has gone, 0..1.
     pub progress: f32,
+}
+
+/// A file arriving in the Downloads folder.
+pub struct DownloadScene {
+    /// Its final name, or "N unduhan" when several arrive.
+    pub label: String,
+    /// "1.4 MB" so far.
+    pub size: String,
 }
 
 impl TimerScene {
@@ -1563,7 +1578,23 @@ impl Renderer {
         match content {
             Content::Level { kind, level, muted } => {
                 let level = level.value.clamp(0.0, 1.0);
+                if let LevelKind::Caps { on } = kind {
+                    self.draw_text(glyph::KEYBOARD, &self.icons, icon_box, alpha);
+                    let label = if *on {
+                        "Caps Lock nyala"
+                    } else {
+                        "Caps Lock mati"
+                    };
+                    self.draw_text(
+                        label,
+                        &self.subtitle_text,
+                        rect(x0 + 42.0, 0.0, x1 - 14.0, h),
+                        alpha,
+                    );
+                    return;
+                }
                 let glyph = match kind {
+                    LevelKind::Caps { .. } => glyph::KEYBOARD,
                     LevelKind::Brightness => glyph::BRIGHTNESS,
                     LevelKind::Volume if *muted || level < 0.005 => glyph::MUTE,
                     LevelKind::Volume if level < 0.34 => glyph::VOLUME_LOW,
@@ -2007,6 +2038,11 @@ impl Renderer {
                 (Strip::Music, _, Some(music)) => {
                     self.draw_music_strip(music, left, right, height, alpha)
                 }
+                (Strip::Download, _, _) => {
+                    if let Some(download) = scene.download.as_ref() {
+                        self.draw_download_strip(download, left, right, height, alpha);
+                    }
+                }
                 _ => {}
             });
             self.target.PopAxisAlignedClip();
@@ -2377,6 +2413,29 @@ impl Renderer {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
+    }
+
+    /// A download glyph on the left, its name, and the bytes so far on the
+    /// right. Browsers do not say how large a file will be, so there is no
+    /// percentage to give.
+    unsafe fn draw_download_strip(
+        &self,
+        download: &DownloadScene,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
+        let cy = h / 2.0;
+        self.light.SetOpacity(0.9 * alpha);
+        self.draw_glyph(glyph::DOWNLOAD, x0 + 21.0, cy, &self.light);
+        if let Some(text) = self.text_layout(&download.size, &self.text_left, 80.0) {
+            let x = x1 - 14.0 - text.width;
+            self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha);
+        }
+        // The clock keeps the middle, so the name stays to its left.
+        let name = rect(x0 + 36.0, 0.0, (x0 + x1) / 2.0 - 36.0, h);
+        self.draw_text(&download.label, &self.tile_text, name, 0.9 * alpha);
     }
 
     /// A prayer icon in a faint green circle and "Maghrib 18:07" on the left,
@@ -2861,7 +2920,18 @@ impl Renderer {
     unsafe fn draw_shelf_card(&self, shelf: &ShelfScene, x0: f32, x1: f32, alpha: f32) {
         let layout = ShelfRects::new(x0, x1);
         if shelf.items.is_empty() {
-            let bounds = rect(x0, 40.0, x1, 120.0);
+            let bounds = rect(x0 + 14.0, 8.0, x1 - 14.0, 132.0);
+            self.light.SetOpacity(0.28 * alpha);
+            self.target.DrawRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: bounds,
+                    radiusX: 14.0,
+                    radiusY: 14.0,
+                },
+                &self.light,
+                1.5,
+                &self.dashes,
+            );
             let hint = "Drag file ke notch, atau copy teks dan gambar";
             self.draw_text(hint, &self.tile_text, bounds, 0.5 * alpha);
             return;
@@ -2870,11 +2940,45 @@ impl Renderer {
         if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
             self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
         }
-        self.draw_pill(layout.clear, glyph::DELETE, "Hapus semua", None, alpha);
+        let picked = format!("Hapus ({})", shelf.selected.len());
+        if shelf.selected.is_empty() {
+            self.draw_pill(layout.clear, glyph::DELETE, "Hapus semua", None, alpha);
+        } else {
+            self.draw_pill(
+                layout.clear,
+                glyph::DELETE,
+                &picked,
+                Some(Accent::Red),
+                alpha,
+            );
+        }
 
         for (index, path) in shelf.items.iter().enumerate() {
             let tile = layout.tile(index);
-            if shelf.hover == Some(index) {
+            let selected = shelf.selected.contains(path);
+            if selected {
+                self.accent.SetColor(&accent_color(Accent::Blue));
+                self.accent.SetOpacity(0.12 * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: tile,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                );
+                self.accent.SetOpacity(0.95 * alpha);
+                self.target.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: tile,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                    1.5,
+                    None,
+                );
+            } else if shelf.hover == Some(index) {
                 self.light.SetOpacity(0.08 * alpha);
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
@@ -2941,7 +3045,9 @@ impl Renderer {
             };
             self.draw_text(&label, &self.tile_text, name, 0.85 * alpha);
 
-            if shelf.hover == Some(index) {
+            if selected {
+                self.draw_check(tile.right - 9.0, tile.top + 9.0, alpha);
+            } else if shelf.hover == Some(index) && shelf.selected.is_empty() {
                 self.draw_tile_button(glyph::CLOSE, layout.remove(index), alpha);
                 self.draw_tile_button(glyph::COPY, layout.copy(index), alpha);
             }
@@ -3180,6 +3286,35 @@ impl Renderer {
             DWRITE_MEASURING_MODE_NATURAL,
         );
         self.black.SetOpacity(1.0);
+    }
+
+    /// A tick on a picked shelf tile, in the accent colour.
+    unsafe fn draw_check(&self, cx: f32, cy: f32, alpha: f32) {
+        self.accent.SetColor(&accent_color(Accent::Blue));
+        self.accent.SetOpacity(alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: 7.5,
+                radiusY: 7.5,
+            },
+            &self.accent,
+        );
+        self.light.SetOpacity(alpha);
+        self.target.DrawLine(
+            pt(cx - 3.2, cy + 0.2),
+            pt(cx - 0.8, cy + 2.6),
+            &self.light,
+            1.8,
+            None,
+        );
+        self.target.DrawLine(
+            pt(cx - 0.8, cy + 2.6),
+            pt(cx + 3.4, cy - 2.4),
+            &self.light,
+            1.8,
+            None,
+        );
     }
 
     /// What sits at (`x`, `y`) on the shelf card holding `count` files.

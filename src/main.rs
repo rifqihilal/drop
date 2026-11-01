@@ -14,6 +14,7 @@ mod bluetooth;
 mod calendar;
 mod clipboard;
 mod config;
+mod downloads;
 mod dragdrop;
 mod frames;
 mod geo;
@@ -79,8 +80,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
-    COMPACT_LARGE, COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX,
-    MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
+    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP,
+    LYRIC_STRIP_MAX, MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -92,9 +93,9 @@ use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
 use render::{
-    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, InboxRow, InboxScene, MusicScene,
-    Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerControl,
-    TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
+    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, DownloadScene, InboxRow, InboxScene,
+    MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
+    TimerControl, TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -243,8 +244,12 @@ struct App {
     shelf_hover: Option<usize>,
     /// Shelf tile just copied, and when.
     shelf_copied: Option<(usize, Instant)>,
+    /// Shelf items picked out to remove together.
+    shelf_picked: Vec<PathBuf>,
     /// The camera and microphone bits in use, see `privacy`.
     privacy: usize,
+    /// Files still arriving in the Downloads folder: name and bytes so far.
+    downloads: Vec<(String, u64)>,
     /// Whether the default microphone is muted; None without one.
     mic_muted: Option<bool>,
     /// When a picture was last copied, and a screenshot last saved: one
@@ -449,7 +454,9 @@ fn main() -> Result<()> {
             drag_over: false,
             shelf_hover: None,
             shelf_copied: None,
+            shelf_picked: Vec::new(),
             privacy: 0,
+            downloads: Vec::new(),
             mic_muted: None,
             clip_at: None,
             shot_at: None,
@@ -518,6 +525,7 @@ fn main() -> Result<()> {
         screenshots::watch(hwnd);
         notifications::watch(hwnd);
         privacy::watch(hwnd);
+        downloads::watch(hwnd);
         if has_flag("--settings") {
             settings::open(hwnd);
         }
@@ -543,6 +551,15 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_tick).as_secs_f32().min(0.05);
         self.last_tick = now;
+
+        if !self.shelf_picked.is_empty() {
+            if self.shown_page() == Page::Shelf && self.notch.card_visible.value >= 0.5 {
+                let items = self.shelf.items();
+                self.shelf_picked.retain(|path| items.contains(path));
+            } else {
+                self.shelf_picked.clear();
+            }
+        }
 
         let idle = self.settings.module_eyes
             && !self.settings.notch_minimal
@@ -742,6 +759,7 @@ impl App {
         let strip = match self.strip() {
             Strip::Timer if self.song_playing() => Some(TIMER_MUSIC_STRIP),
             Strip::Timer => Some(TIMER_STRIP),
+            Strip::Download => Some(DOWNLOAD_STRIP),
             Strip::Music if lyric_mode => Some((
                 self.lyric_strip.clamp(LYRIC_STRIP.0, LYRIC_STRIP_MAX),
                 LYRIC_STRIP.1,
@@ -760,6 +778,8 @@ impl App {
             Strip::None
         } else if modules.module_calendar && self.live_timer().is_some() {
             Strip::Timer
+        } else if !self.downloads.is_empty() {
+            Strip::Download
         } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
         } else {
@@ -1275,7 +1295,21 @@ impl App {
             .shelf_hit(x, y, self.notch.width.value, self.shelf.items().len())
     }
 
-    /// Click on the shelf page: open, copy, remove one, or clear all.
+    /// Picks a shelf tile, or lets it go again.
+    fn toggle_shelf_pick(&mut self, index: usize) {
+        let Some(path) = self.shelf.items().get(index).cloned() else {
+            return;
+        };
+        match self.shelf_picked.iter().position(|item| *item == path) {
+            Some(place) => {
+                self.shelf_picked.remove(place);
+            }
+            None => self.shelf_picked.push(path),
+        }
+    }
+
+    /// Click on the shelf page: open, copy, pick, remove, or clear all. Once
+    /// something is picked, every tile click picks too.
     fn on_shelf_click(&mut self, x: f32, y: f32) {
         let pressed = self.press.take();
         if pressed.is_some() {
@@ -1283,7 +1317,16 @@ impl App {
                 let _ = ReleaseCapture();
             }
         }
+        let picking = !self.shelf_picked.is_empty() || system::ctrl_down();
         match self.shelf_hit(x, y) {
+            Some(ShelfHit::Tile(index) | ShelfHit::Remove(index) | ShelfHit::Copy(index))
+                if picking && pressed.is_none_or(|(i, ..)| i == index) =>
+            {
+                self.toggle_shelf_pick(index);
+                self.tick();
+                self.draw();
+                return;
+            }
             Some(ShelfHit::Tile(index)) if pressed.is_some_and(|(i, ..)| i == index) => {
                 // A clip is there to be pasted back.
                 let clip = self.shelf.items().get(index).filter(|p| shelf::is_clip(p));
@@ -1300,6 +1343,14 @@ impl App {
                 return;
             }
             Some(ShelfHit::Remove(index)) => self.shelf.remove(index),
+            Some(ShelfHit::ClearAll) if !self.shelf_picked.is_empty() => {
+                for path in std::mem::take(&mut self.shelf_picked) {
+                    let place = self.shelf.items().iter().position(|item| *item == path);
+                    if let Some(index) = place {
+                        self.shelf.remove(index);
+                    }
+                }
+            }
             Some(ShelfHit::ClearAll) => self.shelf.clear(),
             _ => return,
         }
@@ -1520,6 +1571,19 @@ impl App {
         std::iter::once(self.timer_view)
             .chain(all)
             .find(|&kind| self.timer_live(kind))
+    }
+
+    /// The first download, or how many there are when several arrive.
+    fn download_scene(&self) -> Option<DownloadScene> {
+        let (name, bytes) = self.downloads.first()?;
+        Some(DownloadScene {
+            label: if self.downloads.len() > 1 {
+                format!("{} unduhan", self.downloads.len())
+            } else {
+                name.clone()
+            },
+            size: downloads::size_label(*bytes),
+        })
     }
 
     fn timer_scene(&self, kind: TimerKind) -> TimerScene {
@@ -2323,6 +2387,31 @@ impl App {
         }
     }
 
+    /// The Downloads folder changed: files still arriving, and those that
+    /// have just landed.
+    fn on_downloads(&mut self, update: downloads::Update) {
+        self.downloads = update.active;
+        for name in update.done {
+            self.notify(notices::download(&name));
+        }
+        self.tick();
+        self.draw();
+    }
+
+    /// Caps Lock was released, and has flipped.
+    fn on_caps(&mut self) {
+        let on = system::caps_lock_on();
+        // Nothing to suppress: Windows draws no flyout of its own for this.
+        self.notch.show_level(
+            LevelKind::Caps { on },
+            if on { 1.0 } else { 0.0 },
+            false,
+            Instant::now(),
+        );
+        self.tick();
+        self.draw();
+    }
+
     fn on_volume_key(&mut self, vk: u16) {
         let result = self.audio.as_ref().and_then(|audio| audio.press(vk));
         if let Some((level, muted)) = result {
@@ -2486,6 +2575,7 @@ impl App {
             } else {
                 self.live_timer().unwrap_or(self.timer_view)
             })),
+            download: self.download_scene(),
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
@@ -2504,6 +2594,7 @@ impl App {
                     .shelf_copied
                     .filter(|(_, at)| at.elapsed() < COPIED_SHOWN)
                     .map(|(index, _)| index),
+                selected: &self.shelf_picked,
             },
             inbox: self.inbox_scene(),
             todo: self.todo_scene(),
@@ -2697,6 +2788,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(|app| app.on_screenshot(path));
             LRESULT(0)
         }
+        downloads::DOWNLOAD_MSG => {
+            let update = downloads::take_update(lparam);
+            with_app(|app| app.on_downloads(update));
+            LRESULT(0)
+        }
         notifications::INBOX_MSG => {
             let inbox = notifications::take_inbox(lparam);
             with_app(|app| app.on_inbox(inbox));
@@ -2732,6 +2828,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         keys::VOLUME_KEY_MSG => {
             with_app(|app| app.on_volume_key(wparam.0 as u16));
+            LRESULT(0)
+        }
+        keys::CAPS_MSG => {
+            with_app(App::on_caps);
             LRESULT(0)
         }
         settings::SAVED_MSG => {
@@ -2971,6 +3071,20 @@ mod notices {
             } else {
                 "Copy dari Shelf".to_string()
             },
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
+
+    /// A file that was downloading has landed in the Downloads folder.
+    pub fn download(name: &str) -> Notice {
+        Notice {
+            icon: glyph::DOWNLOAD,
+            motion: Motion::Bob,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: "Unduhan selesai".to_string(),
+            subtitle: name.to_string(),
             trailing: Trailing::None,
             dim: false,
         }
