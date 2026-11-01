@@ -1415,13 +1415,24 @@ impl Renderer {
             _ => 0.0,
         };
         let card = shown * scene.card_visible.clamp(0.0, 1.0);
-        // In lyric mode the strip glows too.
-        let lyric = scene
-            .music
-            .as_ref()
-            .is_some_and(|music| music.lyric.is_some());
-        let strip = if lyric && scene.strip == Strip::Music {
-            scene.music_visible.clamp(0.0, 1.0)
+        // The strip glows too while it shows a song.
+        let song = match scene.strip {
+            Strip::Music => true,
+            Strip::Timer => scene.timer.as_ref().is_some_and(|timer| timer.with_music),
+            _ => false,
+        };
+        let strip = if song { scene.music_visible } else { 0.0 };
+        // So does the widened notch with its controls, and a new song's
+        // banner; any other banner stays black.
+        let banner = scene.banner_visible.clamp(0.0, 1.0);
+        let song_banner = matches!(scene.banner, Some(Content::Song(_)));
+        let strip = if song_banner {
+            strip.max(banner)
+        } else {
+            strip * (1.0 - banner)
+        };
+        let strip = if scene.music.is_some() {
+            strip.max(scene.peek_visible).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -4682,10 +4693,12 @@ impl Renderer {
         charging: bool,
         alpha: f32,
     ) {
-        let fill = if !charging && percent <= 20 {
+        let fill = if charging {
+            accent_color(Accent::Green)
+        } else if percent <= 20 {
             accent_color(Accent::Red)
         } else {
-            accent_color(Accent::Green)
+            color(1.0, 1.0, 1.0, 1.0)
         };
         let _ = self.draw_ring(cx, cy, radius, percent as f32 / 100.0, fill, alpha);
         if charging {
