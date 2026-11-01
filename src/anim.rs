@@ -57,6 +57,8 @@ pub const AGENDA_ROWS: usize = 3;
 pub const TIMER_STRIP: (f32, f32) = (196.0, 30.0);
 /// The same with a song playing, whose cover and bars join the timer.
 pub const TIMER_MUSIC_STRIP: (f32, f32) = (216.0, 30.0);
+/// Notch size while files download: a glyph, a name and its bytes.
+pub const DOWNLOAD_STRIP: (f32, f32) = (232.0, 30.0);
 /// Notch size while a prayer reminder shows: only wider than the clock.
 pub const PRAYER_BANNER: (f32, f32) = (276.0, 30.0);
 /// Damping of the notch's shape: close to no overshoot, and for a card a

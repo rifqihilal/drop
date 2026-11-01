@@ -14,6 +14,7 @@ mod bluetooth;
 mod calendar;
 mod clipboard;
 mod config;
+mod downloads;
 mod dragdrop;
 mod frames;
 mod geo;
@@ -79,8 +80,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
-    COMPACT_LARGE, COMPACT_SMALL, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX,
-    MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
+    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP,
+    LYRIC_STRIP_MAX, MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -92,9 +93,9 @@ use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
 use render::{
-    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, InboxRow, InboxScene, MusicScene,
-    Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip, TimerControl,
-    TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
+    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, DownloadScene, InboxRow, InboxScene,
+    MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
+    TimerControl, TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -245,6 +246,8 @@ struct App {
     shelf_copied: Option<(usize, Instant)>,
     /// The camera and microphone bits in use, see `privacy`.
     privacy: usize,
+    /// Files still arriving in the Downloads folder: name and bytes so far.
+    downloads: Vec<(String, u64)>,
     /// Whether the default microphone is muted; None without one.
     mic_muted: Option<bool>,
     /// When a picture was last copied, and a screenshot last saved: one
@@ -450,6 +453,7 @@ fn main() -> Result<()> {
             shelf_hover: None,
             shelf_copied: None,
             privacy: 0,
+            downloads: Vec::new(),
             mic_muted: None,
             clip_at: None,
             shot_at: None,
@@ -518,6 +522,7 @@ fn main() -> Result<()> {
         screenshots::watch(hwnd);
         notifications::watch(hwnd);
         privacy::watch(hwnd);
+        downloads::watch(hwnd);
         if has_flag("--settings") {
             settings::open(hwnd);
         }
@@ -737,6 +742,7 @@ impl App {
         let strip = match self.strip() {
             Strip::Timer if self.song_playing() => Some(TIMER_MUSIC_STRIP),
             Strip::Timer => Some(TIMER_STRIP),
+            Strip::Download => Some(DOWNLOAD_STRIP),
             Strip::Music if lyric_mode => Some((
                 self.lyric_strip.clamp(LYRIC_STRIP.0, LYRIC_STRIP_MAX),
                 LYRIC_STRIP.1,
@@ -755,6 +761,8 @@ impl App {
             Strip::None
         } else if modules.module_calendar && self.live_timer().is_some() {
             Strip::Timer
+        } else if !self.downloads.is_empty() {
+            Strip::Download
         } else if self.music().is_some_and(|track| track.playing) {
             Strip::Music
         } else {
@@ -1515,6 +1523,19 @@ impl App {
         std::iter::once(self.timer_view)
             .chain(all)
             .find(|&kind| self.timer_live(kind))
+    }
+
+    /// The first download, or how many there are when several arrive.
+    fn download_scene(&self) -> Option<DownloadScene> {
+        let (name, bytes) = self.downloads.first()?;
+        Some(DownloadScene {
+            label: if self.downloads.len() > 1 {
+                format!("{} unduhan", self.downloads.len())
+            } else {
+                name.clone()
+            },
+            size: downloads::size_label(*bytes),
+        })
     }
 
     fn timer_scene(&self, kind: TimerKind) -> TimerScene {
@@ -2316,6 +2337,17 @@ impl App {
         }
     }
 
+    /// The Downloads folder changed: files still arriving, and those that
+    /// have just landed.
+    fn on_downloads(&mut self, update: downloads::Update) {
+        self.downloads = update.active;
+        for name in update.done {
+            self.notify(notices::download(&name));
+        }
+        self.tick();
+        self.draw();
+    }
+
     /// Caps Lock was pressed, and has just flipped.
     fn on_caps(&mut self) {
         let on = system::caps_lock_on();
@@ -2492,6 +2524,7 @@ impl App {
             } else {
                 self.live_timer().unwrap_or(self.timer_view)
             })),
+            download: self.download_scene(),
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
@@ -2701,6 +2734,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         screenshots::SCREENSHOT_MSG => {
             let path = screenshots::take_path(lparam);
             with_app(|app| app.on_screenshot(path));
+            LRESULT(0)
+        }
+        downloads::DOWNLOAD_MSG => {
+            let update = downloads::take_update(lparam);
+            with_app(|app| app.on_downloads(update));
             LRESULT(0)
         }
         notifications::INBOX_MSG => {
@@ -2981,6 +3019,20 @@ mod notices {
             } else {
                 "Copy dari Shelf".to_string()
             },
+            trailing: Trailing::None,
+            dim: false,
+        }
+    }
+
+    /// A file that was downloading has landed in the Downloads folder.
+    pub fn download(name: &str) -> Notice {
+        Notice {
+            icon: glyph::DOWNLOAD,
+            motion: Motion::Bob,
+            accent: Accent::Blue,
+            progress: 1.0,
+            title: "Unduhan selesai".to_string(),
+            subtitle: name.to_string(),
             trailing: Trailing::None,
             dim: false,
         }

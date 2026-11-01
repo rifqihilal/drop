@@ -745,6 +745,8 @@ pub struct Scene<'a> {
     pub calendar: CalendarScene,
     /// The Pomodoro timer; `timer_strip` puts it in the live strip.
     pub timer: Option<TimerScene>,
+    /// What is downloading, when `strip` is `Strip::Download`.
+    pub download: Option<DownloadScene>,
     /// What the live strip beside the clock shows.
     pub strip: Strip,
     pub shelf: ShelfScene<'a>,
@@ -855,6 +857,8 @@ pub enum Strip {
     None,
     Music,
     Timer,
+    /// Files arriving in the Downloads folder.
+    Download,
 }
 
 pub struct PrayerScene {
@@ -944,6 +948,14 @@ pub struct TimerScene {
     pub with_music: bool,
     /// How much of the phase has gone, 0..1.
     pub progress: f32,
+}
+
+/// A file arriving in the Downloads folder.
+pub struct DownloadScene {
+    /// Its final name, or "N unduhan" when several arrive.
+    pub label: String,
+    /// "1.4 MB" so far.
+    pub size: String,
 }
 
 impl TimerScene {
@@ -2019,6 +2031,11 @@ impl Renderer {
                 (Strip::Music, _, Some(music)) => {
                     self.draw_music_strip(music, left, right, height, alpha)
                 }
+                (Strip::Download, _, _) => {
+                    if let Some(download) = scene.download.as_ref() {
+                        self.draw_download_strip(download, left, right, height, alpha);
+                    }
+                }
                 _ => {}
             });
             self.target.PopAxisAlignedClip();
@@ -2389,6 +2406,31 @@ impl Renderer {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
+    }
+
+    /// A download glyph on the left, its name, and the bytes so far on the
+    /// right. Browsers do not say how large a file will be, so there is no
+    /// percentage to give.
+    unsafe fn draw_download_strip(
+        &self,
+        download: &DownloadScene,
+        x0: f32,
+        x1: f32,
+        h: f32,
+        alpha: f32,
+    ) {
+        let cy = h / 2.0;
+        self.light.SetOpacity(0.9 * alpha);
+        self.draw_glyph(glyph::DOWNLOAD, x0 + 21.0, cy, &self.light);
+        let right = x1 - 14.0;
+        let mut name_right = right;
+        if let Some(text) = self.text_layout(&download.size, &self.text_left, 80.0) {
+            let x = right - text.width;
+            self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha);
+            name_right = x - 8.0;
+        }
+        let name = rect(x0 + 38.0, 0.0, name_right, h);
+        self.draw_text(&download.label, &self.tile_text, name, 0.9 * alpha);
     }
 
     /// A prayer icon on the left, "Maghrib 12 mnt" on the right.
