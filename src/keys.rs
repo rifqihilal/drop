@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// A volume key was pressed. WPARAM: the virtual-key code.
 pub const VOLUME_KEY_MSG: u32 = WM_APP + 4;
-/// Caps Lock was pressed; the notch reads its new state itself.
+/// Caps Lock was released; the notch reads its new state itself.
 pub const CAPS_MSG: u32 = WM_APP + 21;
 
 static TARGET: AtomicIsize = AtomicIsize::new(0);
@@ -35,9 +35,9 @@ unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRE
         let vk = key.vkCode as u16;
         let message = wparam.0 as u32;
         let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
-        if vk == VK_CAPITAL.0 && down {
-            // The hook sees the key before the toggle flips; the notch reads
-            // the new state when this message arrives.
+        if vk == VK_CAPITAL.0 && !down {
+            // The toggle flips after the hook sees the key-down, and held keys
+            // repeat, so the notch reads the new state on release.
             let target = HWND(TARGET.load(Ordering::Relaxed) as *mut c_void);
             let _ = PostMessageW(Some(target), CAPS_MSG, WPARAM(0), LPARAM(0));
         }

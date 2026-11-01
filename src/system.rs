@@ -49,7 +49,8 @@ use windows::Win32::System::SystemServices::{
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CAPITAL, VK_CONTROL, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+    GetAsyncKeyState, GetKeyState, VK_CAPITAL, VK_CONTROL, VK_VOLUME_DOWN, VK_VOLUME_MUTE,
+    VK_VOLUME_UP,
 };
 use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState, DROPFILES, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
@@ -474,7 +475,7 @@ pub fn do_not_disturb() -> bool {
 
 /// Whether Caps Lock is on.
 pub fn caps_lock_on() -> bool {
-    unsafe { GetAsyncKeyState(VK_CAPITAL.0 as i32) & 1 != 0 }
+    unsafe { GetKeyState(VK_CAPITAL.0 as i32) & 1 != 0 }
 }
 
 /// Whether Ctrl is held, for a click that adds to a selection.

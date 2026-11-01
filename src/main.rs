@@ -244,6 +244,8 @@ struct App {
     shelf_hover: Option<usize>,
     /// Shelf tile just copied, and when.
     shelf_copied: Option<(usize, Instant)>,
+    /// Shelf items picked out to remove together.
+    shelf_picked: Vec<PathBuf>,
     /// The camera and microphone bits in use, see `privacy`.
     privacy: usize,
     /// Files still arriving in the Downloads folder: name and bytes so far.
@@ -452,6 +454,7 @@ fn main() -> Result<()> {
             drag_over: false,
             shelf_hover: None,
             shelf_copied: None,
+            shelf_picked: Vec::new(),
             privacy: 0,
             downloads: Vec::new(),
             mic_muted: None,
@@ -548,6 +551,15 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_tick).as_secs_f32().min(0.05);
         self.last_tick = now;
+
+        if !self.shelf_picked.is_empty() {
+            if self.shown_page() == Page::Shelf && self.notch.card_visible.value >= 0.5 {
+                let items = self.shelf.items();
+                self.shelf_picked.retain(|path| items.contains(path));
+            } else {
+                self.shelf_picked.clear();
+            }
+        }
 
         let idle = self.settings.module_eyes
             && !self.settings.notch_minimal
@@ -1278,7 +1290,21 @@ impl App {
             .shelf_hit(x, y, self.notch.width.value, self.shelf.items().len())
     }
 
-    /// Click on the shelf page: open, copy, remove one, or clear all.
+    /// Picks a shelf tile, or lets it go again.
+    fn toggle_shelf_pick(&mut self, index: usize) {
+        let Some(path) = self.shelf.items().get(index).cloned() else {
+            return;
+        };
+        match self.shelf_picked.iter().position(|item| *item == path) {
+            Some(place) => {
+                self.shelf_picked.remove(place);
+            }
+            None => self.shelf_picked.push(path),
+        }
+    }
+
+    /// Click on the shelf page: open, copy, pick, remove, or clear all. Once
+    /// something is picked, every tile click picks too.
     fn on_shelf_click(&mut self, x: f32, y: f32) {
         let pressed = self.press.take();
         if pressed.is_some() {
@@ -1286,7 +1312,16 @@ impl App {
                 let _ = ReleaseCapture();
             }
         }
+        let picking = !self.shelf_picked.is_empty() || system::ctrl_down();
         match self.shelf_hit(x, y) {
+            Some(ShelfHit::Tile(index) | ShelfHit::Remove(index) | ShelfHit::Copy(index))
+                if picking && pressed.is_none_or(|(i, ..)| i == index) =>
+            {
+                self.toggle_shelf_pick(index);
+                self.tick();
+                self.draw();
+                return;
+            }
             Some(ShelfHit::Tile(index)) if pressed.is_some_and(|(i, ..)| i == index) => {
                 // A clip is there to be pasted back.
                 let clip = self.shelf.items().get(index).filter(|p| shelf::is_clip(p));
@@ -1303,6 +1338,14 @@ impl App {
                 return;
             }
             Some(ShelfHit::Remove(index)) => self.shelf.remove(index),
+            Some(ShelfHit::ClearAll) if !self.shelf_picked.is_empty() => {
+                for path in std::mem::take(&mut self.shelf_picked) {
+                    let place = self.shelf.items().iter().position(|item| *item == path);
+                    if let Some(index) = place {
+                        self.shelf.remove(index);
+                    }
+                }
+            }
             Some(ShelfHit::ClearAll) => self.shelf.clear(),
             _ => return,
         }
@@ -2348,7 +2391,7 @@ impl App {
         self.draw();
     }
 
-    /// Caps Lock was pressed, and has just flipped.
+    /// Caps Lock was released, and has flipped.
     fn on_caps(&mut self) {
         let on = system::caps_lock_on();
         // Nothing to suppress: Windows draws no flyout of its own for this.
@@ -2359,6 +2402,7 @@ impl App {
             Instant::now(),
         );
         self.tick();
+        self.draw();
     }
 
     fn on_volume_key(&mut self, vk: u16) {
@@ -2543,6 +2587,7 @@ impl App {
                     .shelf_copied
                     .filter(|(_, at)| at.elapsed() < COPIED_SHOWN)
                     .map(|(index, _)| index),
+                selected: &self.shelf_picked,
             },
             inbox: self.inbox_scene(),
             todo: self.todo_scene(),

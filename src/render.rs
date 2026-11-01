@@ -883,6 +883,8 @@ pub struct ShelfScene<'a> {
     pub hover: Option<usize>,
     /// The tile whose file was just copied.
     pub copied: Option<usize>,
+    /// Tiles picked out for removal together.
+    pub selected: &'a [PathBuf],
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -2422,14 +2424,12 @@ impl Renderer {
         let cy = h / 2.0;
         self.light.SetOpacity(0.9 * alpha);
         self.draw_glyph(glyph::DOWNLOAD, x0 + 21.0, cy, &self.light);
-        let right = x1 - 14.0;
-        let mut name_right = right;
         if let Some(text) = self.text_layout(&download.size, &self.text_left, 80.0) {
-            let x = right - text.width;
+            let x = x1 - 14.0 - text.width;
             self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha);
-            name_right = x - 8.0;
         }
-        let name = rect(x0 + 38.0, 0.0, name_right, h);
+        // The clock keeps the middle, so the name stays to its left.
+        let name = rect(x0 + 36.0, 0.0, (x0 + x1) / 2.0 - 36.0, h);
         self.draw_text(&download.label, &self.tile_text, name, 0.9 * alpha);
     }
 
@@ -2889,7 +2889,18 @@ impl Renderer {
     unsafe fn draw_shelf_card(&self, shelf: &ShelfScene, x0: f32, x1: f32, alpha: f32) {
         let layout = ShelfRects::new(x0, x1);
         if shelf.items.is_empty() {
-            let bounds = rect(x0, 40.0, x1, 120.0);
+            let bounds = rect(x0 + 14.0, 8.0, x1 - 14.0, 132.0);
+            self.light.SetOpacity(0.28 * alpha);
+            self.target.DrawRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: bounds,
+                    radiusX: 14.0,
+                    radiusY: 14.0,
+                },
+                &self.light,
+                1.5,
+                &self.dashes,
+            );
             let hint = "Drag file ke notch, atau copy teks dan gambar";
             self.draw_text(hint, &self.tile_text, bounds, 0.5 * alpha);
             return;
@@ -2898,11 +2909,45 @@ impl Renderer {
         if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
             self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
         }
-        self.draw_pill(layout.clear, glyph::DELETE, "Hapus semua", None, alpha);
+        let picked = format!("Hapus ({})", shelf.selected.len());
+        if shelf.selected.is_empty() {
+            self.draw_pill(layout.clear, glyph::DELETE, "Hapus semua", None, alpha);
+        } else {
+            self.draw_pill(
+                layout.clear,
+                glyph::DELETE,
+                &picked,
+                Some(Accent::Red),
+                alpha,
+            );
+        }
 
         for (index, path) in shelf.items.iter().enumerate() {
             let tile = layout.tile(index);
-            if shelf.hover == Some(index) {
+            let selected = shelf.selected.contains(path);
+            if selected {
+                self.accent.SetColor(&accent_color(Accent::Blue));
+                self.accent.SetOpacity(0.12 * alpha);
+                self.target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: tile,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                );
+                self.accent.SetOpacity(0.95 * alpha);
+                self.target.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: tile,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                    1.5,
+                    None,
+                );
+            } else if shelf.hover == Some(index) {
                 self.light.SetOpacity(0.08 * alpha);
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
@@ -2969,7 +3014,9 @@ impl Renderer {
             };
             self.draw_text(&label, &self.tile_text, name, 0.85 * alpha);
 
-            if shelf.hover == Some(index) {
+            if selected {
+                self.draw_check(tile.right - 9.0, tile.top + 9.0, alpha);
+            } else if shelf.hover == Some(index) && shelf.selected.is_empty() {
                 self.draw_tile_button(glyph::CLOSE, layout.remove(index), alpha);
                 self.draw_tile_button(glyph::COPY, layout.copy(index), alpha);
             }
@@ -3208,6 +3255,35 @@ impl Renderer {
             DWRITE_MEASURING_MODE_NATURAL,
         );
         self.black.SetOpacity(1.0);
+    }
+
+    /// A tick on a picked shelf tile, in the accent colour.
+    unsafe fn draw_check(&self, cx: f32, cy: f32, alpha: f32) {
+        self.accent.SetColor(&accent_color(Accent::Blue));
+        self.accent.SetOpacity(alpha);
+        self.target.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: 7.5,
+                radiusY: 7.5,
+            },
+            &self.accent,
+        );
+        self.light.SetOpacity(alpha);
+        self.target.DrawLine(
+            pt(cx - 3.2, cy + 0.2),
+            pt(cx - 0.8, cy + 2.6),
+            &self.light,
+            1.8,
+            None,
+        );
+        self.target.DrawLine(
+            pt(cx - 0.8, cy + 2.6),
+            pt(cx + 3.4, cy - 2.4),
+            &self.light,
+            1.8,
+            None,
+        );
     }
 
     /// What sits at (`x`, `y`) on the shelf card holding `count` files.
