@@ -79,8 +79,7 @@ Drop menghubungi layanan luar hanya untuk fitur yang memerlukannya:
 Modul Cuaca dan Lirik lagu bisa dimatikan di Pengaturan. Agenda hanya aktif kalau
 tautannya diisi.
 
-## Asal-usul dan lisensi
-
+## Lisensi
 
 Dilisensikan di bawah [GPLv3](LICENSE). Font [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans)
 ikut dipaket di bawah [SIL Open Font License](assets/fonts/OFL.txt).
