@@ -3,7 +3,8 @@
 //! today's times above its rows.
 //!
 //! Text fields are native EDIT controls (for typing, selection and IME);
-//! everything else is drawn with Direct2D in Windows 11's dark style. The
+//! everything else is drawn with Direct2D in Windows 11's dark style. Every
+//! change is written as soon as it is made, so there is no Save button. The
 //! window only exists while open, so it costs nothing the rest of the time.
 
 use std::cell::RefCell;
@@ -98,9 +99,7 @@ const ROW: f32 = 48.0;
 const GROUP_GAP: f32 = 10.0;
 const CONTENT_TOP: f32 = 50.0;
 const FOOTER_TOP: f32 = 516.0;
-const FOOTER_STATUS: Rect = Rect::new(LEFT, 524.0, 480.0, 552.0);
-const CANCEL_BUTTON: Rect = Rect::new(488.0, 524.0, 572.0, 552.0);
-const SAVE_BUTTON: Rect = Rect::new(580.0, 524.0, RIGHT, 552.0);
+const FOOTER_STATUS: Rect = Rect::new(LEFT, 524.0, RIGHT, 552.0);
 
 // The Sholat page's location block.
 const LOCATION_HEADING: Rect = Rect::new(LEFT + 2.0, 50.0, RIGHT, 72.0);
@@ -666,11 +665,8 @@ struct Window {
     /// The mouse is on the close button.
     close_hover: bool,
     notch_floating: bool,
-    /// The settings as they were when the window opened, for Batal.
-    opened: Settings,
-    opened_autostart: bool,
-    /// Something was written since then.
-    applied: bool,
+    /// Kept as it was: the form does not show it.
+    usage_week: bool,
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -934,9 +930,7 @@ impl Window {
             notch_size: settings.notch_size,
             notch_fill: settings.notch_fill,
             notch_floating: settings.notch_floating,
-            opened: settings.clone(),
-            opened_autostart: autostart::is_enabled(),
-            applied: false,
+            usage_week: settings.usage_week,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
@@ -1114,6 +1108,7 @@ impl Window {
         self.hide_results();
         self.set_status(&format!("Lokasi: {}", place.region), false);
         self.update_preview();
+        self.apply_live();
     }
 
     /// Closes through WM_CLOSE: destroying the window right away would run
@@ -1185,7 +1180,7 @@ impl Window {
             module_eyes: self.toggles[11],
             module_todo: self.toggles[12],
             module_usage: self.toggles[23],
-            usage_week: self.opened.usage_week,
+            usage_week: self.usage_week,
             module_lyrics: self.toggles[13],
             water: self.toggles[14],
             water_minutes: self.health_minutes[0],
@@ -1210,44 +1205,39 @@ impl Window {
         if self.toggles[5] != autostart::is_enabled() {
             autostart::set_enabled(self.toggles[5]);
         }
-        self.applied = true;
+        if self.status_is_error {
+            self.status = SEARCH_HINT.to_string();
+            self.status_is_error = false;
+            self.invalidate();
+        }
         unsafe {
             let _ = PostMessageW(Some(self.notch), SAVED_MSG, WPARAM(0), LPARAM(0));
         }
         true
     }
 
-    /// Puts a changed switch into effect at once, so it can be seen. A field
-    /// still being typed wrong holds this back until Simpan points at it.
+    /// Puts the form into effect at once, so every change sticks. A field
+    /// still being typed wrong only shows why in the footer.
     fn apply_live(&mut self) {
-        if let Ok(settings) = self.form() {
-            self.apply(&settings);
+        match self.form() {
+            Ok(settings) => {
+                self.apply(&settings);
+            }
+            Err((_, message)) => self.set_status(message, true),
         }
     }
 
-    /// Validates the form; on success writes the file and closes.
-    fn save(&mut self) {
+    /// Applies the form, or moves to the field that is wrong. Returns whether
+    /// it was applied.
+    fn commit(&mut self) -> bool {
         match self.form() {
-            Ok(settings) => {
-                if self.apply(&settings) {
-                    self.close();
-                }
-            }
+            Ok(settings) => self.apply(&settings),
             Err((page, message)) => {
                 self.set_page(page);
                 self.set_status(message, true);
+                false
             }
         }
-    }
-
-    /// Closes, taking back whatever was applied since the window opened.
-    fn cancel(&mut self) {
-        if self.applied {
-            self.toggles[5] = self.opened_autostart;
-            let original = self.opened.clone();
-            self.apply(&original);
-        }
-        self.close();
     }
 
     /// The switch under a point on the current page.
@@ -1321,10 +1311,6 @@ impl Window {
         }
         if self.search_button(x, y) {
             self.start_search();
-        } else if SAVE_BUTTON.contains(x, y) {
-            self.save();
-        } else if CANCEL_BUTTON.contains(x, y) {
-            self.cancel();
         } else if let Some(floating) = self.style_at(x, y) {
             self.notch_floating = floating;
             self.invalidate();
@@ -1352,8 +1338,6 @@ impl Window {
             return self.result_at(x, y).is_some() || SEARCH_BUTTON.contains(x, y);
         }
         self.search_button(x, y)
-            || SAVE_BUTTON.contains(x, y)
-            || CANCEL_BUTTON.contains(x, y)
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
             || self.style_at(x, y).is_some()
@@ -1399,17 +1383,12 @@ impl Window {
             &self.brush,
         );
         // The Sholat page shows its status under the search box.
-        if self.status_is_error && self.page != PAGE_PRAYER {
-            self.text_at(
-                &self.status,
-                &self.fonts.small,
-                FOOTER_STATUS,
-                0xff99a4,
-                1.0,
-            );
-        }
-        self.button("Cancel", CANCEL_BUTTON, false);
-        self.button("Save", SAVE_BUTTON, true);
+        let (footer, color, alpha) = if self.status_is_error && self.page != PAGE_PRAYER {
+            (self.status.as_str(), 0xff99a4, 1.0)
+        } else {
+            ("Setiap perubahan langsung tersimpan", 0xffffff, 0.45)
+        };
+        self.text_at(footer, &self.fonts.small, FOOTER_STATUS, color, alpha);
 
         let _ = t.EndDraw(None, None);
     }
@@ -1948,19 +1927,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let id = wparam.0 & 0xffff;
             let code = (wparam.0 >> 16) as u32;
             with_window(|window| match (id, code) {
-                // Enter: pick a result, search from the search box, otherwise save.
+                // Enter: pick a result, search from the search box, otherwise
+                // apply what is typed and close.
                 (id, _) if id == IDOK.0 as usize => {
                     if !window.places.is_empty() {
                         window.pick_result(window.hover);
                     } else if window.focused == Some(ID_SEARCH) {
                         window.start_search();
-                    } else {
-                        window.save();
+                    } else if window.commit() {
+                        window.close();
                     }
                 }
                 (id, _) if id == IDCANCEL.0 as usize => {
                     if window.places.is_empty() {
-                        window.cancel();
+                        window.close();
                     } else {
                         window.hide_results();
                     }
@@ -1971,6 +1951,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 (_, EN_KILLFOCUS) => {
                     window.focused = None;
+                    window.apply_live();
                     window.invalidate();
                 }
                 (ID_LATITUDE | ID_LONGITUDE | ID_ELEVATION, EN_CHANGE) => window.update_preview(),
@@ -1984,6 +1965,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CLOSE => {
+            // A field typed just before the window closed still counts.
+            with_window(|window| window.apply_live());
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
