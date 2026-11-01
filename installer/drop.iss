@@ -42,6 +42,7 @@ Name: "autostart"; Description: "{cm:AutoStart}"
 [Files]
 Source: "..\target\release\drop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; DestName: "NOTICE.txt"; Flags: ignoreversion
 Source: "..\assets\fonts\OFL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

@@ -1,0 +1,16 @@
+Drop
+A lightweight native notch for Windows.
+Copyright (C) 2026 Hilal
+
+Drop is a modified version of Bloom by sehaz:
+https://github.com/SehajveerSingh2005/bloom
+
+It began as a fork of Bloom 3.10.1 in October 2026 and was then rewritten as
+a native Rust application.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3. It comes with ABSOLUTELY NO WARRANTY. See LICENSE.
+
+Plus Jakarta Sans is included under the SIL Open Font License, see
+assets/fonts/OFL.txt.

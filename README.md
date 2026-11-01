@@ -87,5 +87,7 @@ tautannya diisi.
 
 ## Lisensi
 
-Dilisensikan di bawah [GPLv3](LICENSE). Font [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans)
+Dilisensikan di bawah [GPLv3](LICENSE). Drop berawal dari fork
+[Bloom](https://github.com/SehajveerSingh2005/bloom) karya sehaz, lalu ditulis
+ulang sebagai aplikasi native; lihat [NOTICE](NOTICE). Font [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans)
 ikut dipaket di bawah [SIL Open Font License](assets/fonts/OFL.txt).
