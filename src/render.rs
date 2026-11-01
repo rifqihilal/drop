@@ -4,6 +4,7 @@
 //! Direct3D device keeps the GPU driver out of the process, which is most of
 //! what makes a webview-based notch heavy.
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -16,9 +17,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1LinearGradientBrush,
-    ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1GradientStopCollection,
+    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND,
     D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
     D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
@@ -1113,6 +1114,7 @@ pub struct Renderer {
     art: Option<ID2D1Bitmap>,
     /// The art's main colour, for the music card's background.
     art_tint: Option<[f32; 3]>,
+    strip_stops: RefCell<Option<([f32; 3], ID2D1GradientStopCollection)>>,
     /// Shelf thumbnails, in shelf order.
     thumbs: Vec<(PathBuf, Option<ID2D1Bitmap>)>,
     /// Logos of the apps on the notification page, by app identity.
@@ -1301,6 +1303,7 @@ impl Renderer {
                 card_side: CARD_SIDE,
                 art: None,
                 art_tint: None,
+                strip_stops: RefCell::new(None),
                 thumbs: Vec::new(),
                 logos: Vec::new(),
                 usage_icons: Vec::new(),
@@ -1456,16 +1459,13 @@ impl Renderer {
             };
             let clear = color(0.0, 0.0, 0.0, 0.0);
             let glow = if strip > card {
-                let foot = strip_foot([r, g, b]);
-                let shade = |k: f32| color(r * k, g * k, b * k, 1.0);
-                self.gradient(
-                    start,
-                    end,
-                    &[
-                        (0.0, shade(foot)),
-                        (0.45, shade(foot * 0.3)),
-                        (1.0, shade(0.06)),
-                    ],
+                self.target.CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: start,
+                        endPoint: end,
+                    },
+                    None,
+                    &self.strip_stops([r, g, b])?,
                 )?
             } else {
                 self.gradient(start, end, &[(0.0, color(r, g, b, 1.0)), (0.9, clear)])?
@@ -1474,6 +1474,30 @@ impl Renderer {
             self.target.FillGeometry(&geometry, &glow, None);
         }
         Ok(())
+    }
+
+    /// The strip's colours for this cover, made once: building them is the
+    /// costly part of a gradient, and the strip redraws with every beat.
+    unsafe fn strip_stops(&self, tint: [f32; 3]) -> Result<ID2D1GradientStopCollection> {
+        let mut made = self.strip_stops.borrow_mut();
+        if let Some((_, stops)) = made.as_ref().filter(|(known, _)| *known == tint) {
+            return Ok(stops.clone());
+        }
+        let [r, g, b] = tint;
+        let foot = strip_foot(tint);
+        let shade = |k: f32| color(r * k, g * k, b * k, 1.0);
+        let stops = self.target.CreateGradientStopCollection(
+            &[(0.0, foot), (0.45, foot * 0.3), (1.0, 0.06)].map(|(position, k)| {
+                D2D1_GRADIENT_STOP {
+                    position,
+                    color: shade(k),
+                }
+            }),
+            D2D1_GAMMA_2_2,
+            D2D1_EXTEND_MODE_CLAMP,
+        )?;
+        *made = Some((tint, stops.clone()));
+        Ok(stops)
     }
 
     /// A small notch of its own right of the main one, with an icon for each

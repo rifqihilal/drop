@@ -3,6 +3,7 @@
 //! Calls block, so they run on worker threads.
 
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Networking::WinHttp::{
@@ -46,18 +47,29 @@ fn strip_scheme<'a>(url: &'a str, scheme: &str) -> Option<&'a str> {
         .then(|| &url[scheme.len()..])
 }
 
-fn request(host: &str, port: u16, path: &str, secure: bool) -> Option<Vec<u8>> {
-    unsafe {
-        let session = Handle(WinHttpOpen(
+/// The one WinHTTP session, kept for the whole run: every new session holds on
+/// to its own proxy and TLS state, which adds up over a day of songs.
+fn session() -> Option<*mut c_void> {
+    static SESSION: OnceLock<usize> = OnceLock::new();
+    let session = *SESSION.get_or_init(|| unsafe {
+        let session = WinHttpOpen(
             w!("Drop"),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
             0,
-        ));
-        session.valid()?;
-        let _ = WinHttpSetTimeouts(session.0, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS);
-        let connection = Handle(WinHttpConnect(session.0, &HSTRING::from(host), port, 0));
+        );
+        if !session.is_null() {
+            let _ = WinHttpSetTimeouts(session, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS);
+        }
+        session as usize
+    });
+    (session != 0).then_some(session as *mut c_void)
+}
+
+fn request(host: &str, port: u16, path: &str, secure: bool) -> Option<Vec<u8>> {
+    unsafe {
+        let connection = Handle(WinHttpConnect(session()?, &HSTRING::from(host), port, 0));
         connection.valid()?;
         let request = Handle(WinHttpOpenRequest(
             connection.0,
