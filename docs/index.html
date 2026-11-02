@@ -98,15 +98,16 @@ section { padding: 96px 0; }
 }
 .top a.link:hover { color: var(--text); }
 
-.hero { padding: 0 0 72px; min-height: min(100dvh, 720px); display: flex; flex-direction: column; }
+.hero { padding: 0 0 72px; min-height: min(100dvh, 800px); display: flex; flex-direction: column; }
 .stage {
   --k: 1;
-  position: relative;
-  width: min(598px, 100%);
+  position: fixed;
+  top: 0;
+  left: 50%;
+  width: min(598px, 100vw);
   height: calc(56px * var(--k));
-  margin: 0 auto;
-  flex: none;
-  z-index: 2;
+  translate: -50% 0;
+  z-index: 10;
 }
 .nt {
   position: absolute;
@@ -320,7 +321,7 @@ section { padding: 96px 0; }
 .zone ul { list-style: none; margin: 0; padding: 0; }
 .zone li { max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 18px auto 0; max-width: 720px; padding: 0 16px; }
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 104px auto 0; max-width: 720px; padding: 0 16px; }
 .chips p { width: 100%; text-align: center; color: var(--muted); font-size: .9rem; }
 .chip {
   all: unset;
@@ -503,6 +504,7 @@ footer a:hover { color: var(--text); }
 @media (max-width: 900px) {
   .top { position: static; height: auto; padding: 16px; order: 1; }
   .hero { min-height: 0; padding-bottom: 56px; }
+  .chips { margin-top: 76px; }
   .hero-copy { grid-template-columns: 1fr; gap: 24px; padding-top: 16px; order: 2; }
   .stage { order: 0; }
   .wrap { padding: 0 16px; }
