@@ -1,0 +1,1081 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drop - Notch ringan untuk Windows</title>
+<meta name="description" content="Notch di tepi atas layar Windows: jam, musik, jadwal sholat, kalender, dan notifikasi. Gratis dan open source.">
+<meta property="og:title" content="Drop - Notch ringan untuk Windows">
+<meta property="og:description" content="Jam, musik, jadwal sholat, dan notifikasi di tepi atas layar Windows.">
+<meta property="og:image" content="assets/shots/home.png">
+<link rel="icon" href="assets/icon.png">
+<link rel="preload" href="assets/fonts/PlusJakartaSans.ttf" as="font" type="font/ttf" crossorigin>
+<style>
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("assets/fonts/PlusJakartaSans.ttf") format("truetype");
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+:root {
+  --bg: #eef1f5;
+  --surface: #e2e7ee;
+  --text: #12161d;
+  --muted: #566070;
+  --line: #d0d7e0;
+  --accent: #1f6fd6;
+  --accent-text: #f7f9fc;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  --spring: cubic-bezier(.3, 1.35, .45, 1);
+  --radius: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b2029;
+    --surface: #252b36;
+    --text: #eef1f5;
+    --muted: #a2adbd;
+    --line: #353d4a;
+    --accent: #5aaef0;
+    --accent-text: #0c1219;
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+img { display: block; max-width: 100%; height: auto; }
+a { color: inherit; }
+h1, h2, p { margin: 0; }
+h2 {
+  font-size: clamp(1.8rem, 3.6vw, 2.75rem);
+  line-height: 1.12;
+  letter-spacing: -.03em;
+  font-weight: 700;
+}
+.wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 32px; }
+.body { color: var(--muted); max-width: 52ch; }
+section { padding: 96px 0; }
+
+.icon { width: 1.25em; height: 1.25em; flex: none; fill: currentColor; }
+
+.top {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 64px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 32px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: -.02em;
+}
+.brand img { width: 30px; height: 30px; border-radius: 8px; background: #0a0d12; }
+.top a.link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .94rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--muted);
+  transition: color .2s;
+}
+.top a.link:hover { color: var(--text); }
+
+.hero { padding: 0 0 72px; min-height: min(100dvh, 720px); display: flex; flex-direction: column; }
+.stage {
+  --k: 1;
+  position: relative;
+  width: min(598px, 100%);
+  height: calc(233px * var(--k));
+  margin: 0 auto;
+  flex: none;
+}
+.nt {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 598px;
+  height: 233px;
+  transform: translateX(-50%) scale(var(--k));
+  transform-origin: 50% 0;
+  pointer-events: none;
+}
+.shell {
+  --w: 218px;
+  --h: 35px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--w);
+  height: var(--h);
+  transform: translateX(-50%);
+  transition: width .5s var(--spring), height .5s var(--spring);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.shell::before, .shell::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  background: radial-gradient(circle at 0 100%, transparent 15.5px, #000 16px);
+}
+.shell::before { left: -16px; }
+.shell::after { right: -16px; transform: scaleX(-1); }
+.shell.eyes::before, .shell.eyes::after { display: none; }
+.body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 0 0 26px 26px;
+  background: #000;
+  color: #f5f7fa;
+  font-size: 14px;
+  line-height: 1.3;
+  transition: background .4s;
+}
+.shell.small .body { border-radius: 0 0 18px 18px; }
+.body > * { animation: fade .3s ease both; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+:where(.body button) {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .2s var(--ease), opacity .2s;
+}
+:where(.body button):hover { transform: scale(1.15); }
+:where(.body button):active { transform: scale(.92); }
+.body button:focus-visible { outline: 2px solid #5aaef0; outline-offset: 2px; border-radius: 6px; }
+.body .g { width: 1.15em; height: 1.15em; fill: currentColor; flex: none; }
+.dim { opacity: .6; }
+
+.strip { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 16px; gap: 10px; }
+.strip b { font-weight: 700; }
+.strip .end { justify-self: end; }
+.ring { width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid #37d67a; }
+.cover { background: var(--cover); }
+.strip .cover { width: 24px; height: 24px; border-radius: 6px; }
+.lyricline { position: absolute; inset: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-weight: 700; }
+.lyricline .cover { width: 24px; height: 24px; border-radius: 6px; flex: none; }
+.lyricline span { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bars { display: flex; gap: 2.5px; align-items: center; height: 12px; color: var(--tint, #37d67a); }
+.bars i { width: 3px; height: 100%; border-radius: 2px; background: currentColor; transform-origin: 50% 50%; scale: 1 .45; }
+.bars.on i { animation: bar .8s ease-in-out infinite alternate; }
+.bars.on i:nth-child(2) { animation-delay: -.3s; }
+.bars.on i:nth-child(3) { animation-delay: -.55s; }
+.bars.on i:nth-child(4) { animation-delay: -.15s; }
+@keyframes bar { to { scale: 1 1; } }
+
+.notice { position: absolute; inset: 0; display: flex; align-items: center; gap: 14px; padding: 0 24px 0 20px; }
+.notice .disc { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: #fff; font-size: 19px; flex: none; }
+.notice .txt { flex: 1; min-width: 0; }
+.notice .txt b { display: block; font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notice .txt span { opacity: .6; font-size: 14px; }
+.notice .big { font-size: 26px; font-weight: 300; }
+.vol { width: 110px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .18); overflow: hidden; }
+.vol i { display: block; height: 100%; background: #fff; }
+
+.app { position: absolute; inset: 0; padding: 0 14px; }
+.app .row { height: 36px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 13px; }
+.app .tile { position: relative; display: flex; gap: 14px; align-items: center; padding: 12px 14px; border-radius: 18px; background: rgba(255, 255, 255, .08); }
+.logo { width: 56px; height: 56px; border-radius: 14px; background: #25d366; color: #fff; display: grid; place-items: center; font-size: 30px; flex: none; }
+.app .meta { display: flex; justify-content: space-between; font-size: 12px; opacity: .7; }
+.app b { display: block; font-size: 16px; font-weight: 700; }
+.app p { opacity: .7; font-size: 14px; }
+.app .tile > div:last-child { flex: 1; min-width: 0; }
+
+.card { position: absolute; inset: 0; padding: 12px 40px 22px; }
+.card .head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; height: 24px; font-size: 13px; }
+.card .head h4 { margin: 0; font-size: 15px; font-weight: 700; color: #fff; }
+.card .head h4 em { font-style: normal; color: var(--t, #37d67a); }
+.card .head .end { justify-self: end; }
+.side { position: absolute; top: 50%; translate: 0 -50%; width: 24px; height: 24px; border-radius: 50%; background: rgba(255, 255, 255, .12); font-size: 11px; }
+.side.l { left: 9px; }
+.side.r { right: 9px; }
+.dots { position: absolute; left: 0; right: 0; bottom: 8px; display: flex; justify-content: center; gap: 5px; }
+.dots button { width: 6px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .28); transition: width .25s var(--ease), background-color .2s; }
+.dots button[aria-current] { width: 18px; background: #fff; }
+.dots button:hover { background: #fff; transform: none; }
+.page { position: relative; height: 168px; padding-top: 8px; }
+
+.mus { display: grid; grid-template-columns: 76px 1fr; gap: 6px 14px; }
+.mus .cover { width: 76px; height: 76px; border-radius: 13px; }
+.mus .t { font-size: 17px; font-weight: 700; margin-top: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mus .a { opacity: .6; }
+.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; font-size: 12px; }
+.seek span { opacity: .6; }
+.track { display: block; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .18); cursor: pointer; overflow: hidden; position: relative; }
+.track::after { content: ""; position: absolute; inset: -8px 0; }
+.track i { display: block; height: 100%; background: var(--tint); width: 0; }
+.ctl { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-size: 19px; }
+.ctl .mid { display: flex; gap: 24px; align-items: center; }
+.ctl .mid .big { font-size: 25px; }
+.ctl .q { justify-self: start; opacity: .6; }
+.ctl .q.on { opacity: 1; color: var(--tint); }
+.ctl .q.off { opacity: .25; }
+.ctl .s { justify-self: end; opacity: .85; }
+.mus.ly { grid-template-columns: 196px 1fr; column-gap: 22px; }
+.mus.ly .left { display: grid; grid-template-columns: 54px 1fr; gap: 6px 10px; align-content: start; }
+.mus.ly .cover { width: 54px; height: 54px; border-radius: 10px; }
+.mus.ly .t { font-size: 14px; margin-top: 6px; }
+.mus.ly .a { font-size: 12px; }
+.mus.ly .ctl { font-size: 15px; }
+.mus.ly .ctl .mid { gap: 12px; }
+.mus.ly .ctl .mid .big { font-size: 20px; }
+.lines { height: 136px; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.lines p { font-size: 14px; opacity: .3; transition: opacity .35s; }
+.lines p.now { font-size: 18px; font-weight: 700; line-height: 1.25; opacity: 1; animation: roll .45s var(--ease); }
+@keyframes roll { from { translate: 0 16px; opacity: .3; } }
+
+.home { display: grid; grid-template-columns: 190px 1fr; gap: 16px; }
+.hero-tile { height: 158px; border-radius: 16px; padding: 12px 16px; background: linear-gradient(180deg, #2a62c2, #5aa3e3); position: relative; font-size: 13px; }
+.hero-tile b { display: block; font-size: 32px; font-weight: 700; line-height: 1.2; }
+.hero-tile small { position: absolute; left: 16px; bottom: 12px; font-size: 12px; }
+.home ul, .inbox ul, .todo ul { list-style: none; margin: 0; padding: 0; }
+.home li { padding: 7px 0; font-size: 13px; }
+.home li + li { border-top: 1px solid rgba(255, 255, 255, .1); }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.home li b { font-size: 14px; }
+.hbar { height: 3px; margin-top: 5px; border-radius: 2px; background: rgba(255, 255, 255, .15); overflow: hidden; }
+.hbar i { display: block; height: 100%; background: #3b92ee; }
+
+.inbox .top2, .todo .top2 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.pill { padding: 4px 11px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: 12px; font-weight: 600; gap: 5px; }
+.inbox li { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 4px 6px; border-radius: 10px; font-size: 13px; cursor: pointer; }
+.inbox li:hover { background: rgba(255, 255, 255, .08); }
+.inbox .logo { width: 32px; height: 32px; border-radius: 8px; font-size: 18px; }
+.inbox .logo.mail { background: #3b82e8; }
+.inbox .logo.cal { background: #e8583b; }
+.inbox small { display: block; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbox li > span:nth-child(2) { min-width: 0; }
+.empty { display: grid; place-items: center; height: 130px; opacity: .5; }
+
+.pray { display: grid; grid-template-columns: 1fr 1.25fr; gap: 16px; }
+.pray .nm { font-size: 30px; font-weight: 700; line-height: 1.15; }
+.pray svg { width: 100%; height: 86px; display: block; }
+.times { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 12px; text-align: center; margin-top: 2px; }
+.times b { display: block; font-weight: 600; }
+.times .now { color: #3b92ee; }
+
+.cal { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11.5px; row-gap: 3px; }
+.days .h { opacity: .55; }
+.days .today { background: #3b92ee; border-radius: 50%; color: #fff; }
+
+.foc { display: grid; grid-template-columns: 130px 1fr; gap: 22px; align-items: center; }
+.dial { width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; font-weight: 700; background: conic-gradient(#ee4b4b var(--p, 0%), rgba(255, 255, 255, .12) 0); position: relative; }
+.dial::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #000; }
+.dial span { position: relative; }
+.seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: 12px; margin-bottom: 10px; }
+.seg button { padding: 3px 11px; border-radius: 999px; opacity: .7; }
+.seg button[aria-pressed="true"] { background: rgba(255, 255, 255, .16); opacity: 1; }
+.go { padding: 7px 18px; border-radius: 999px; background: #ee4b4b; font-weight: 700; font-size: 13px; gap: 6px; margin-top: 10px; }
+.round { width: 32px; height: 32px; border-radius: 50%; background: rgba(255, 255, 255, .1); margin-left: 8px; }
+
+.todo li { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 14px; }
+.todo li button { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .55); box-sizing: border-box; }
+.todo li.done { opacity: .45; text-decoration: line-through; }
+.todo li.done button { background: #37d67a; border-color: #37d67a; }
+.todo input { all: unset; box-sizing: border-box; width: 100%; padding: 5px 12px; margin-top: 6px; border-radius: 10px; background: rgba(255, 255, 255, .1); font-size: 13px; cursor: text; }
+.todo input::placeholder { color: rgba(255, 255, 255, .6); }
+.todo input:focus-visible { outline: 2px solid #5aaef0; }
+
+.zone { height: 130px; margin-top: 4px; border: 1.5px dashed rgba(255, 255, 255, .35); border-radius: 14px; display: grid; place-items: center; text-align: center; font-size: 13px; padding: 8px; transition: background-color .25s; }
+.zone.over { background: rgba(90, 174, 240, .25); }
+.zone ul { list-style: none; margin: 0; padding: 0; }
+.zone li { max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 18px auto 0; max-width: 720px; padding: 0 16px; }
+.chips p { width: 100%; text-align: center; color: var(--muted); font-size: .9rem; }
+.chip {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: .9rem;
+  font-weight: 600;
+  transition: transform .2s var(--ease), border-color .2s, background-color .2s;
+}
+.chip:hover { border-color: var(--muted); background: var(--surface); transform: translateY(-1px); }
+.chip:active { transform: scale(.97); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.lyric-sec .box { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+.lyric-sec .say { font-size: clamp(1.2rem, 2.2vw, 1.6rem); font-weight: 700; line-height: 1.35; letter-spacing: -.02em; }
+.lyric-sec .say span { display: block; color: var(--muted); font-weight: 500; opacity: .6; }
+.lyric-sec .btn { margin-top: 24px; }
+
+.mini { background: #000; color: #f5f7fa; border-radius: 0 0 20px 20px; display: flex; align-items: center; gap: 12px; padding: 12px 18px; width: 340px; max-width: 100%; font-size: 14px; line-height: 1.3; }
+.mini .logo { width: 44px; height: 44px; border-radius: 11px; font-size: 24px; }
+.mini b { display: block; font-size: 15px; }
+.mini span { opacity: .65; }
+.mini .g { width: 20px; height: 20px; fill: currentColor; flex: none; }
+.mini .end { margin-left: auto; opacity: .6; }
+
+.hero-copy {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 56px;
+  align-items: end;
+  padding-top: 64px;
+}
+h1 {
+  font-size: clamp(2.6rem, 6vw, 4.5rem);
+  line-height: 1.04;
+  letter-spacing: -.04em;
+  font-weight: 800;
+}
+.hero-side { display: grid; gap: 24px; justify-items: start; }
+.hero-side p { color: var(--muted); font-size: 1.1rem; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 1rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform .25s var(--ease), background-color .2s, border-color .2s;
+}
+.btn:active { transform: scale(.97); }
+.btn:hover { transform: translateY(-2px); }
+.btn:active:hover { transform: scale(.97); }
+.btn.main { background: var(--accent); color: var(--accent-text); }
+.btn.plain { border: 1px solid var(--line); color: var(--text); }
+.btn.plain:hover { border-color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+  border-top: 1px solid var(--line);
+  padding-top: 32px;
+}
+.facts b {
+  display: block;
+  font-size: clamp(2rem, 4vw, 3.1rem);
+  line-height: 1.1;
+  letter-spacing: -.03em;
+  font-weight: 700;
+}
+.facts span { color: var(--muted); font-size: .96rem; }
+
+.pages .grid {
+  display: grid;
+  grid-template-columns: 1fr 598px;
+  gap: 64px;
+  align-items: center;
+  margin-top: 48px;
+}
+.tabs { display: grid; gap: 4px; }
+.tabs button {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: block;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  transition: background-color .2s;
+}
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tabs button:hover { background: var(--surface); }
+.tabs button b { font-weight: 700; }
+.tabs button span {
+  display: block;
+  color: var(--muted);
+  font-size: .94rem;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height .4s var(--ease), opacity .3s;
+}
+.tabs button[aria-selected="true"] { background: var(--surface); }
+.tabs button[aria-selected="true"] span { max-height: 4.6em; opacity: 1; }
+.shot { position: relative; aspect-ratio: 598 / 233; }
+.shot img { position: absolute; inset: 0; width: 100%; opacity: 0; transition: opacity .3s; }
+.shot img.on { opacity: 1; }
+
+.bento {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-top: 48px;
+}
+.cell {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 32px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cell h3 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
+.cell p { color: var(--muted); font-size: .97rem; }
+.notices { grid-column: span 3; grid-row: span 2; }
+.pile { display: grid; gap: 12px; margin-top: 24px; justify-items: start; }
+.pile img { width: 330px; max-width: 100%; }
+.pile > :nth-child(2) { margin-left: 13%; }
+.pile > :nth-child(3) { margin-left: 4%; }
+.eyes { grid-column: span 2; }
+.eyes img { width: 229px; margin: 0 auto 20px; }
+.local { grid-column: span 2; background: var(--accent); }
+.local h3, .local p { color: var(--accent-text); }
+.local p { opacity: .88; }
+
+.install .steps {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr 1fr;
+  gap: 40px;
+  margin-top: 48px;
+  border-top: 1px solid var(--line);
+  padding-top: 32px;
+}
+.steps h3 { margin: 0 0 8px; font-size: 1.15rem; letter-spacing: -.02em; }
+.steps p { color: var(--muted); font-size: .98rem; }
+.steps code {
+  font-family: inherit;
+  font-weight: 700;
+  color: var(--text);
+}
+.install .cta { margin-top: 40px; }
+
+footer { border-top: 1px solid var(--line); padding: 32px 0 40px; color: var(--muted); font-size: .92rem; }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; }
+footer nav { display: flex; gap: 20px; }
+footer a { color: inherit; text-underline-offset: 3px; }
+footer a:hover { color: var(--text); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .rise { opacity: 0; transform: translateY(20px); transition: opacity .7s var(--ease), transform .7s var(--ease); }
+  .rise.seen { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+@media (max-width: 1040px) {
+  .pages .grid { grid-template-columns: 1fr; gap: 32px; }
+  .shot { order: -1; max-width: 598px; }
+}
+@media (max-width: 900px) {
+  .top { position: static; height: auto; padding: 16px; order: 1; }
+  .hero { min-height: 0; padding-bottom: 56px; }
+  .hero-copy { grid-template-columns: 1fr; gap: 24px; padding-top: 16px; order: 2; }
+  .stage { order: 0; }
+  .wrap { padding: 0 16px; }
+  section { padding: 64px 0; }
+  .facts { grid-template-columns: 1fr; gap: 20px; }
+  .bento { grid-template-columns: 1fr; }
+  .notices, .eyes, .local { grid-column: auto; grid-row: auto; }
+  .cell { padding: 24px; }
+  .pile > :nth-child(2), .pile > :nth-child(3) { margin-left: 0; }
+  .install .steps { grid-template-columns: 1fr; gap: 24px; }
+  .lyric-sec .box { grid-template-columns: 1fr; gap: 24px; }
+  .cta, .cta .btn { width: 100%; justify-content: center; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- Icons from Phosphor Icons (MIT). -->
+  <symbol id="i-win" viewBox="0 0 256 256"><path d="M208,136H128a8,8,0,0,0-8,8v57.45a8,8,0,0,0,6.57,7.88l80,14.54A7.61,7.61,0,0,0,208,224a8,8,0,0,0,8-8V144A8,8,0,0,0,208,136Zm-8,70.41-64-11.63V152h64ZM96,136H32a8,8,0,0,0-8,8v40a8,8,0,0,0,6.57,7.87l64,11.64a8.54,8.54,0,0,0,1.43.13,8,8,0,0,0,8-8V144A8,8,0,0,0,96,136Zm-8,50.05-48-8.73V152H88ZM213.13,33.86a8,8,0,0,0-6.56-1.73l-80,14.55A8,8,0,0,0,120,54.55V112a8,8,0,0,0,8,8h80a8,8,0,0,0,8-8V40A8,8,0,0,0,213.13,33.86ZM200,104H136V61.22l64-11.63ZM101.13,54.22a8,8,0,0,0-6.56-1.73l-64,11.64A8,8,0,0,0,24,72v40a8,8,0,0,0,8,8H96a8,8,0,0,0,8-8V60.36A8,8,0,0,0,101.13,54.22ZM88,104H40V78.68L88,70Z"/></symbol>
+  <symbol id="i-git" viewBox="0 0 256 256"><path d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
+  <symbol id="p-play" viewBox="0 0 256 256"><path d="M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z"/></symbol>
+  <symbol id="p-pause" viewBox="0 0 256 256"><path d="M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z"/></symbol>
+  <symbol id="p-skip-back" viewBox="0 0 256 256"><path d="M208,47.88V208.12a16,16,0,0,1-24.43,13.43L64,146.77V216a8,8,0,0,1-16,0V40a8,8,0,0,1,16,0v69.23L183.57,34.45A15.95,15.95,0,0,1,208,47.88Z"/></symbol>
+  <symbol id="p-skip-forward" viewBox="0 0 256 256"><path d="M208,40V216a8,8,0,0,1-16,0V146.77L72.43,221.55A15.95,15.95,0,0,1,48,208.12V47.88A15.95,15.95,0,0,1,72.43,34.45L192,109.23V40a8,8,0,0,1,16,0Z"/></symbol>
+  <symbol id="p-speaker-high" viewBox="0 0 256 256"><path d="M160,32.25V223.69a8.29,8.29,0,0,1-3.91,7.18,8,8,0,0,1-9-.56l-65.57-51A4,4,0,0,1,80,176.16V79.84a4,4,0,0,1,1.55-3.15l65.57-51a8,8,0,0,1,10,.16A8.27,8.27,0,0,1,160,32.25ZM60,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H60a4,4,0,0,0,4-4V84A4,4,0,0,0,60,80Zm126.77,20.84a8,8,0,0,0-.72,11.3,24,24,0,0,1,0,31.72,8,8,0,1,0,12,10.58,40,40,0,0,0,0-52.88A8,8,0,0,0,186.74,100.84Zm40.89-26.17a8,8,0,1,0-11.92,10.66,64,64,0,0,1,0,85.34,8,8,0,1,0,11.92,10.66,80,80,0,0,0,0-106.66Z"/></symbol>
+  <symbol id="p-quotes" viewBox="0 0 256 256"><path d="M116,72v88a48.05,48.05,0,0,1-48,48,8,8,0,0,1,0-16,32,32,0,0,0,32-32v-8H40a16,16,0,0,1-16-16V72A16,16,0,0,1,40,56h60A16,16,0,0,1,116,72ZM216,56H156a16,16,0,0,0-16,16v64a16,16,0,0,0,16,16h60v8a32,32,0,0,1-32,32,8,8,0,0,0,0,16,48.05,48.05,0,0,0,48-48V72A16,16,0,0,0,216,56Z"/></symbol>
+  <symbol id="p-caret-left" viewBox="0 0 256 256"><path d="M168,48V208a8,8,0,0,1-13.66,5.66l-80-80a8,8,0,0,1,0-11.32l80-80A8,8,0,0,1,168,48Z"/></symbol>
+  <symbol id="p-caret-right" viewBox="0 0 256 256"><path d="M181.66,133.66l-80,80A8,8,0,0,1,88,208V48a8,8,0,0,1,13.66-5.66l80,80A8,8,0,0,1,181.66,133.66Z"/></symbol>
+  <symbol id="p-bluetooth" viewBox="0 0 256 256"><path d="M200,176a8,8,0,0,1-3.2,6.4l-64,48A8,8,0,0,1,128,232a8,8,0,0,1-8-8V144L68.8,182.4a8,8,0,0,1-9.6-12.8L114.67,128,59.2,86.4a8,8,0,0,1,9.6-12.8L120,112V32a8,8,0,0,1,12.8-6.4l64,48a8,8,0,0,1,0,12.8L141.33,128l55.47,41.6A8,8,0,0,1,200,176Z"/></symbol>
+  <symbol id="p-battery-warning" viewBox="0 0 256 256"><path d="M200,56H32A24,24,0,0,0,8,80v96a24,24,0,0,0,24,24H200a24,24,0,0,0,24-24V80A24,24,0,0,0,200,56ZM108,88a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,116,176ZM256,96v64a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0Z"/></symbol>
+  <symbol id="p-download-simple" viewBox="0 0 256 256"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40A8,8,0,0,0,168,96H136V32a8,8,0,0,0-16,0V96H88a8,8,0,0,0-5.66,13.66Z"/></symbol>
+  <symbol id="p-trash" viewBox="0 0 256 256"><path d="M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM112,168a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm0-120H96V40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8Z"/></symbol>
+  <symbol id="p-plus" viewBox="0 0 256 256"><path d="M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM184,136H136v48a8,8,0,0,1-16,0V136H72a8,8,0,0,1,0-16h48V72a8,8,0,0,1,16,0v48h48a8,8,0,0,1,0,16Z"/></symbol>
+  <symbol id="p-x" viewBox="0 0 256 256"><path d="M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM181.66,170.34a8,8,0,0,1-11.32,11.32L128,139.31,85.66,181.66a8,8,0,0,1-11.32-11.32L116.69,128,74.34,85.66A8,8,0,0,1,85.66,74.34L128,116.69l42.34-42.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></symbol>
+  <symbol id="p-whatsapp-logo" viewBox="0 0 256 256"><path d="M152.58,145.23l23,11.48A24,24,0,0,1,152,176a72.08,72.08,0,0,1-72-72A24,24,0,0,1,99.29,80.46l11.48,23L101,118a8,8,0,0,0-.73,7.51,56.47,56.47,0,0,0,30.15,30.15A8,8,0,0,0,138,155ZM232,128A104,104,0,0,1,79.12,219.82L45.07,231.17a16,16,0,0,1-20.24-20.24l11.35-34.05A104,104,0,1,1,232,128Zm-40,24a8,8,0,0,0-4.42-7.16l-32-16a8,8,0,0,0-8,.5l-14.69,9.8a40.55,40.55,0,0,1-16-16l9.8-14.69a8,8,0,0,0,.5-8l-16-32A8,8,0,0,0,104,64a40,40,0,0,0-40,40,88.1,88.1,0,0,0,88,88A40,40,0,0,0,192,152Z"/></symbol>
+  <symbol id="p-envelope-simple" viewBox="0 0 256 256"><path d="M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48Zm-8,144H40V74.19l82.59,75.71a8,8,0,0,0,10.82,0L216,74.19V192Z"/></symbol>
+  <symbol id="p-calendar-blank" viewBox="0 0 256 256"><path d="M208,32H184V24a8,8,0,0,0-16,0v8H88V24a8,8,0,0,0-16,0v8H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Zm0,48H48V48H72v8a8,8,0,0,0,16,0V48h80v8a8,8,0,0,0,16,0V48h24Z"/></symbol>
+  <symbol id="p-arrow-counter-clockwise" viewBox="0 0 256 256"><path d="M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.63A80,80,0,1,0,71.43,71.39a3.07,3.07,0,0,1-.26.25L60.63,81.29l17,17A8,8,0,0,1,72,112H24a8,8,0,0,1-8-8V56A8,8,0,0,1,29.66,50.3L49.31,70,60.25,60A96,96,0,0,1,224,128Z"/></symbol>
+  <symbol id="p-text-aa" viewBox="0 0 256 256"><path d="M200,156c0,6.5-7.33,12-16,12s-16-5.5-16-12,7.33-12,16-12S200,149.5,200,156ZM232,56V200a16,16,0,0,1-16,16H40a16,16,0,0,1-16-16V56A16,16,0,0,1,40,40H216A16,16,0,0,1,232,56ZM143.37,172.88l-44-104a8,8,0,0,0-14.74,0l-44,104a8,8,0,0,0,14.74,6.24L66.84,152h50.32l11.47,27.12a8,8,0,0,0,14.74-6.24ZM216,124c0-15.44-14.36-28-32-28a34.86,34.86,0,0,0-20.78,6.68,8,8,0,0,0,9.56,12.83A18.84,18.84,0,0,1,184,112c8.56,0,15.8,5.36,16,11.76v8A35.24,35.24,0,0,0,184,128c-17.64,0-32,12.56-32,28s14.36,28,32,28a35.13,35.13,0,0,0,16.93-4.26A8,8,0,0,0,216,176ZM73.61,136h36.78L92,92.53Z"/></symbol>
+  <symbol id="p-speaker-low" viewBox="0 0 256 256"><path d="M160,32.25V223.69a8.29,8.29,0,0,1-3.91,7.18,8,8,0,0,1-9-.56l-65.57-51A4,4,0,0,1,80,176.16V79.84a4,4,0,0,1,1.55-3.15l65.57-51a8,8,0,0,1,10,.16A8.27,8.27,0,0,1,160,32.25ZM60,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H60a4,4,0,0,0,4-4V84A4,4,0,0,0,60,80ZM198,101.56a8,8,0,1,0-12,10.58,24,24,0,0,1,0,31.72,8,8,0,1,0,12,10.58,40,40,0,0,0,0-52.88Z"/></symbol>
+  <symbol id="p-wifi-high" viewBox="0 0 256 256"><path d="M140,204a12,12,0,1,1-12-12A12,12,0,0,1,140,204ZM237.08,87A172,172,0,0,0,18.92,87,8,8,0,0,0,29.08,99.37a156,156,0,0,1,197.84,0A8,8,0,0,0,237.08,87ZM205,122.77a124,124,0,0,0-153.94,0A8,8,0,0,0,61,135.31a108,108,0,0,1,134.06,0,8,8,0,0,0,11.24-1.3A8,8,0,0,0,205,122.77Zm-32.26,35.76a76.05,76.05,0,0,0-89.42,0,8,8,0,0,0,9.42,12.94,60,60,0,0,1,70.58,0,8,8,0,1,0,9.42-12.94Z"/></symbol>
+  <symbol id="p-cloud-sun" viewBox="0 0 256 256"><path d="M164,72a76.2,76.2,0,0,0-20.26,2.73,55.63,55.63,0,0,0-9.41-11.54l9.51-13.57a8,8,0,1,0-13.11-9.18L121.22,54A55.9,55.9,0,0,0,96,48c-.58,0-1.16,0-1.74,0L91.37,31.71a8,8,0,1,0-15.75,2.77L78.5,50.82A56.1,56.1,0,0,0,55.23,65.67L41.61,56.14a8,8,0,1,0-9.17,13.11L46,78.77A55.55,55.55,0,0,0,40,104c0,.57,0,1.15,0,1.72L23.71,108.6a8,8,0,0,0,1.38,15.88,8.24,8.24,0,0,0,1.39-.12l16.32-2.88a55.74,55.74,0,0,0,5.86,12.42A52,52,0,0,0,84,224h80a76,76,0,0,0,0-152ZM56,104a40,40,0,0,1,72.54-23.24,76.26,76.26,0,0,0-35.62,40,52.14,52.14,0,0,0-31,4.17A40,40,0,0,1,56,104ZM164,208H84a36,36,0,1,1,4.78-71.69c-.37,2.37-.63,4.79-.77,7.23a8,8,0,0,0,16,.92,58.91,58.91,0,0,1,1.88-11.81c0-.16.09-.32.12-.48A60.06,60.06,0,1,1,164,208Z"/></symbol>
+</svg>
+
+<div class="hero">
+  <header class="top">
+    <a class="brand" href="#"><img src="assets/icon.png" alt="" width="30" height="30">Drop</a>
+    <a class="link" href="https://github.com/rifqihilal/drop"><svg class="icon"><use href="#i-git"/></svg>GitHub</a>
+  </header>
+  <div class="stage" id="stage">
+    <div class="nt"><div class="shell" id="shell" aria-label="Demo notch Drop"><div class="body" id="body"></div></div></div>
+  </div>
+  <div class="chips">
+    <p>Mainkan notch-nya: arahkan kursor, scroll, klik. Atau picu kabarnya di sini.</p>
+    <button class="chip" data-chip="whatsapp">WhatsApp</button>
+    <button class="chip" data-chip="download">Download</button>
+    <button class="chip" data-chip="volume">Volume</button>
+    <button class="chip" data-chip="wifi">Wi-Fi</button>
+    <button class="chip" data-chip="bluetooth">Bluetooth</button>
+    <button class="chip" data-chip="battery">Baterai</button>
+    <button class="chip" data-chip="caps">Caps Lock</button>
+    <button class="chip" data-chip="eyes">Mata</button>
+  </div>
+  <div class="wrap hero-copy">
+    <h1>Windows-mu kini punya notch.</h1>
+    <div class="hero-side">
+      <p>Jam, musik, jadwal sholat, dan notifikasi di tepi atas layar. Melebar saat perlu, mengecil saat tidak.</p>
+      <div class="cta">
+        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.1.0/Drop-0.1.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="wrap">
+    <div class="facts rise">
+      <div><b>2,4 MB</b><span>ukuran installer</span></div>
+      <div><b>~ 20MB</b><span>memori saat berjalan</span></div>
+      <div><b>Rust</b><span>native, tanpa webview</span></div>
+    </div>
+  </div>
+
+  <section class="pages">
+    <div class="wrap">
+      <h2 class="rise">Satu kartu untuk semua yang kamu cek.</h2>
+      <div class="grid rise">
+        <div class="tabs" role="tablist" aria-label="Halaman kartu" id="tabs">
+          <button role="tab" aria-selected="true" aria-controls="shot" data-shot="0"><b>Hari Ini</b><span>Jam, cuaca, sholat berikutnya, dan tugas terdekat.</span></button>
+          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="1"><b>Sholat</b><span>Jadwal Kemenag RI dengan posisi matahari, plus pengingat sebelum adzan.</span></button>
+          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="2"><b>Kalender</b><span>Kalender bulanan dan agenda dari sampai tiga tautan .ics.</span></button>
+          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="3"><b>Fokus</b><span>Pomodoro, timer, dan stopwatch.</span></button>
+          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="4"><b>Tugas</b><span>Daftar singkat yang diketik langsung di notch.</span></button>
+          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="5"><b>Shelf</b><span>Seret file ke notch, lalu seret keluar ke aplikasi lain. Screenshot baru masuk sendiri.</span></button>
+        </div>
+        <div class="shot" id="shot" role="tabpanel">
+          <img class="on" src="assets/shots/home.png" alt="Halaman Hari Ini: jam, cuaca, dan sholat berikutnya" width="598" height="233">
+          <img src="assets/shots/sholat.png" alt="Halaman Sholat dengan lengkung posisi matahari" width="598" height="233" loading="lazy">
+          <img src="assets/shots/kalender.png" alt="Kalender bulanan" width="598" height="233" loading="lazy">
+          <img src="assets/shots/fokus.png" alt="Timer Fokus 25 menit" width="598" height="233" loading="lazy">
+          <img src="assets/shots/tugas.png" alt="Daftar tugas" width="598" height="233" loading="lazy">
+          <img src="assets/shots/shelf.png" alt="Shelf kosong dengan area taruh file" width="598" height="233" loading="lazy">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="lyric-sec" style="padding-top:0">
+    <div class="wrap box">
+      <div class="rise">
+        <h2>Lagunya main, liriknya ikut jalan.</h2>
+        <p class="body" style="margin-top:16px">Sampul, kontrol, dan warna kartu mengikuti lagu yang diputar. Nyalakan mode lirik, dan barisnya tampil di kartu maupun di notch.</p>
+        <button class="btn main" data-lyrics style="border:0;cursor:pointer;font-family:inherit">Coba mode lirik</button>
+      </div>
+      <p class="say rise" aria-hidden="true"><span>Kopi dingin, kita belum beranjak</span>Lampu jalan mulai menyala<span>Besok biar jadi urusan besok</span></p>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="wrap">
+      <h2 class="rise">Ada kabar, muncul sebentar, lalu pergi.</h2>
+      <div class="bento">
+        <div class="cell notices rise">
+          <h3>Notifikasi tanpa jendela baru</h3>
+          <p>Pesan WhatsApp, progres download, volume, Wi-Fi, Bluetooth, baterai, dan agenda tampil di notch.</p>
+          <div class="pile">
+            <div class="mini"><span class="logo"><svg class="g"><use href="#p-whatsapp-logo"/></svg></span><div><b>Rani</b><span>Besok jadi ketemu jam 3?</span></div></div>
+            <div class="mini"><svg class="g"><use href="#p-download-simple"/></svg><div>Laporan-Q3.pdf</div><span class="end">49,6 MB</span></div>
+            <img src="assets/shots/baterai.png" alt="Notifikasi baterai lemah" width="364" height="78" loading="lazy">
+            <img src="assets/shots/agenda.png" alt="Pengingat agenda 10 menit lagi" width="397" height="78" loading="lazy" style="width:360px">
+          </div>
+        </div>
+        <div class="cell eyes rise">
+          <img src="assets/shots/mata.png" alt="Mata beranimasi di notch" width="229" height="50" loading="lazy">
+          <h3>Ditinggal, Drop tidur</h3>
+          <p>Saat komputer tidak disentuh, notch berubah jadi sepasang mata yang mengantuk.</p>
+        </div>
+        <div class="cell local rise">
+          <h3>Tanpa akun</h3>
+          <p>Semua tersimpan di komputermu sebagai berkas teks. Internet hanya dipakai untuk cuaca, lirik, dan agenda.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="install" id="pasang" style="padding-top:0">
+    <div class="wrap">
+      <h2 class="rise">Pasang dalam semenit.</h2>
+      <div class="steps rise">
+        <div>
+          <h3>Download installer</h3>
+          <p>Untuk Windows 10 dan 11, ukurannya 2,4 MB.</p>
+        </div>
+        <div>
+          <h3>Lewati peringatan SmartScreen</h3>
+          <p>Installer Drop belum ditandatangani, jadi Windows menampilkan "Windows protected your PC". Klik <code>More info</code>, lalu <code>Run anyway</code>. Tidak yakin? Periksa source-nya di GitHub.</p>
+        </div>
+        <div>
+          <h3>Selesai</h3>
+          <p>Drop jalan sendiri setiap Windows menyala. Klik kanan notch untuk membuka Settings.</p>
+        </div>
+      </div>
+      <div class="cta rise">
+        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.1.0/Drop-0.1.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+        <a class="btn plain" href="https://github.com/rifqihilal/drop"><svg class="icon"><use href="#i-git"/></svg>Lihat source</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Dibuat oleh Hilal. Berawal dari fork <a href="https://github.com/SehajveerSingh2005/bloom">Bloom</a> karya sehaz. Lisensi GPLv3.</p>
+    <nav aria-label="Tautan">
+      <a href="https://github.com/rifqihilal/drop/blob/main/NOTICE">NOTICE</a>
+      <a href="https://github.com/rifqihilal/drop/blob/main/LICENSE">Lisensi</a>
+      <a href="https://github.com/rifqihilal/drop/releases">Semua rilis</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+// The hero notch: a playable copy of the real one, drawn in HTML.
+(() => {
+  const stage = document.getElementById('stage');
+  const shell = document.getElementById('shell');
+  const body = document.getElementById('body');
+  const pad = n => String(n).padStart(2, '0');
+  const icon = name => `<svg class="g"><use href="#p-${name}"/></svg>`;
+  const clean = text => text.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const mmss = s => `${Math.floor(s / 60)}:${pad(Math.floor(s % 60))}`;
+  const clock = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const DAYS = ['Min', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  const today = () => { const d = new Date(); return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`; };
+
+  const tracks = [
+    { title: 'Senja di Teras', artist: 'Lagu demo', length: 214, cover: 'linear-gradient(140deg,#f2994a,#d6457a 55%,#3a2a8c)', tint: '#f2884a', glow: '#5a2346',
+      lines: ['Senja turun di teras rumah', 'Kopi dingin, kita belum beranjak', 'Lampu jalan mulai menyala', 'Besok biar jadi urusan besok'] },
+    { title: 'Kereta Terakhir', artist: 'Lagu demo', length: 187, cover: 'linear-gradient(140deg,#2bb5a0,#1f6fd6 60%,#10234f)', tint: '#35c7b0', glow: '#123d55',
+      lines: ['Peron sepi menjelang malam', 'Tiket lusuh di saku jaket', 'Kereta datang tanpa suara', 'Kupilih pulang kali ini'] },
+    { title: 'Hujan Bulan Sepuluh', artist: 'Lagu demo', length: 246, cover: 'linear-gradient(140deg,#8c9bb5,#4b5a78 55%,#1a2133)', tint: '#a9bbd6', glow: '#2a3347',
+      lines: ['Atap seng mulai bernyanyi', 'Jendela berembun pelan', 'Kutulis namamu di kaca', 'Lalu hujan menghapusnya'] },
+  ];
+  const prayers = [['Subuh', '04:06'], ['Dzuhur', '11:39'], ['Ashar', '14:57'], ['Maghrib', '17:52'], ['Isya', '19:05']];
+  const modes = [['Fokus', 1500], ['Timer', 300], ['Stopwatch', 0]];
+  const PAGES = ['music', 'home', 'inbox', 'pray', 'cal', 'focus', 'todo', 'shelf'];
+
+  const state = {
+    view: 'card', page: 0, track: 0, pos: 64, playing: true, lyrics: false,
+    mode: 0, left: 1500, running: false, session: 1,
+    tasks: [['Kirim laporan bulanan', false], ['Telepon Ibu', false], ['Beli kopi', true]],
+    inbox: [
+      { logo: 'whatsapp-logo', cls: '', title: 'Rani', text: 'Besok jadi ketemu jam 3?', age: '2 mnt' },
+      { logo: 'envelope-simple', cls: 'mail', title: 'Email', text: 'Tagihan listrik bulan ini sudah terbit', age: '1 jam' },
+      { logo: 'calendar-blank', cls: 'cal', title: 'Kalender', text: 'Rapat tim jam 14:00', age: '3 jam' },
+    ],
+    shelf: [],
+  };
+  let noticeTimer = 0;
+  let downloadTimer = 0;
+  let leaveTimer = 0;
+  let lastWheel = 0;
+  let shownLine = -1;
+
+  const track = () => tracks[state.track];
+  const lineIndex = () => Math.floor(state.pos / 4) % track().lines.length;
+  const lyricAt = offset => { const { lines } = track(); return lines[(lineIndex() + offset + lines.length) % lines.length]; };
+  const shape = (w, h, small) => {
+    shell.style.setProperty('--w', `${w}px`);
+    shell.style.setProperty('--h', `${h}px`);
+    shell.classList.toggle('small', Boolean(small));
+    shell.classList.toggle('eyes', state.view === 'eyes');
+  };
+  const bars = () => `<span class="bars ${state.playing ? 'on' : ''}" style="--tint:${track().tint}"><i></i><i></i><i></i><i></i></span>`;
+
+  const header = (first, second, color, end = '') => `<div class="head" style="--t:${color}"><h4>${first} <em>${second}</em></h4><span class="dim">${today()} <b id="clk">${clock()}</b></span><span class="end">${end}</span></div>`;
+
+  const pages = {
+    music() {
+      const t = track();
+      const info = `<div class="cover" style="--cover:${t.cover}"></div><div style="min-width:0"><div class="t">${t.title}</div><div class="a">${t.artist}</div></div>`;
+      const seek = `<div class="seek"><span id="pos">${mmss(state.pos)}</span><span class="track" id="seek"><i id="fill" style="width:${state.pos / t.length * 100}%"></i></span><span>${mmss(t.length)}</span></div>`;
+      const ctl = `<div class="ctl"><button class="q ${state.lyrics ? 'on' : ''}" data-do="lyrics" aria-label="Mode lirik" aria-pressed="${state.lyrics}">${icon('quotes')}</button><span class="mid"><button data-do="prev" aria-label="Lagu sebelumnya">${icon('skip-back')}</button><button class="big" data-do="play" aria-label="${state.playing ? 'Jeda' : 'Putar'}">${icon(state.playing ? 'pause' : 'play')}</button><button data-do="next" aria-label="Lagu berikutnya">${icon('skip-forward')}</button></span><span class="s">${icon('speaker-high')}</span></div>`;
+      const inner = state.lyrics
+        ? `<div class="mus ly"><div class="left">${info}${'<div style="grid-column:1/-1">' + seek + '</div>'}<div style="grid-column:1/-1">${ctl}</div></div><div class="lines" id="lines">${lines()}</div></div>`
+        : `<div class="mus">${info}${seek}${ctl}</div>`;
+      return header('Now', 'Playing', '#37d67a', bars()) + `<div class="page">${inner}</div>`;
+    },
+    home() {
+      const hour = new Date().getHours();
+      const hello = hour < 11 ? 'pagi' : hour < 15 ? 'siang' : hour < 18 ? 'sore' : 'malam';
+      const task = state.tasks.find(item => !item[1]);
+      const [name, time] = nextPrayer();
+      return `<div class="page" style="padding-top:4px"><div class="home"><div class="hero-tile">Selamat ${hello}<b id="clk">${clock()}</b>${today()}<small>76% baterai</small></div><ul>
+        <li class="spread">${icon('cloud-sun')}<span style="flex:1"><b>31°</b><br><span class="dim">Cerah berawan, Jakarta</span></span></li>
+        <li><div class="spread"><b>${name}</b><b>${time}</b></div><div class="hbar"><i style="width:68%"></i></div></li>
+        <li>${task ? clean(task[0]) : 'Semua tugas selesai'}</li></ul></div></div>`;
+    },
+    inbox() {
+      const { inbox } = state;
+      const rows = inbox.map((row, i) => `<li data-remove="${i}"><span class="logo ${row.cls}">${icon(row.logo)}</span><span><b>${clean(row.title)}</b><small>${clean(row.text)}</small></span><span class="dim" style="font-size:12px">${row.age}</span></li>`).join('');
+      return header('Pusat', 'Notifikasi', '#5aaef0') + `<div class="page inbox">${inbox.length
+        ? `<div class="top2"><b>${inbox.length} notifikasi</b><button class="pill" data-do="clear">${icon('trash')}Hapus semua</button></div><ul>${rows}</ul>`
+        : '<div class="empty">Belum ada notifikasi</div>'}</div>`;
+    },
+    pray() {
+      const [name, time, index] = nextPrayer();
+      const d = new Date();
+      const part = Math.min(1, Math.max(0, ((d.getHours() + d.getMinutes() / 60) - 5.5) / 12.5));
+      const x = 10 + part * 200;
+      const y = 80 - Math.sin(part * Math.PI) * 68;
+      const row = prayers.map(([label, at], i) => `<span class="${i === index ? 'now' : ''}"><b>${label}</b>${at}</span>`).join('');
+      return header('Sholat', 'Jakarta', '#37d67a') + `<div class="page"><div class="pray"><div><span class="dim">Next</span><div class="nm">${name}</div><b>${time}</b> <span class="dim">contoh jadwal</span></div>
+        <svg viewBox="0 0 220 90" aria-hidden="true"><path d="M10 80 Q110 -56 210 80" fill="none" stroke="#7c8ff0" stroke-width="2"/><circle cx="${x}" cy="${y}" r="7" fill="#f7c04a"/></svg>
+        <div class="times">${row}</div></div></div>`;
+    },
+    cal() {
+      const d = new Date();
+      const first = (new Date(d.getFullYear(), d.getMonth(), 1).getDay() + 6) % 7;
+      const count = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      let cells = ['Sn', 'Sl', 'Rb', 'Km', 'Jm', 'Sb', 'Mg'].map(day => `<span class="h">${day}</span>`).join('');
+      cells += '<span></span>'.repeat(first);
+      for (let day = 1; day <= count; day += 1) cells += `<span class="${day === d.getDate() ? 'today' : ''}">${day}</span>`;
+      return header(['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'][d.getMonth()], d.getFullYear(), '#ee4b4b') +
+        `<div class="page"><div class="cal"><div class="days">${cells}</div><div><span class="dim">Agenda</span><p style="margin-top:6px"><b>Rapat tim</b><br><span class="dim">14:00</span></p><p style="margin-top:6px"><b>Bayar listrik</b><br><span class="dim">Besok</span></p></div></div></div>`;
+    },
+    focus() {
+      const segs = modes.map(([label], i) => `<button aria-pressed="${i === state.mode}" data-mode="${i}">${label}</button>`).join('');
+      return header('Fokus', 'Timer', '#ee4b4b') + `<div class="page"><div class="foc"><div class="dial" id="dial"><span id="left">${mmss(state.left)}</span></div><div><div class="seg">${segs}</div><div><b>${modes[state.mode][0]}</b> <span class="dim">Sesi ${state.session}</span></div><button class="go" data-do="run">${icon(state.running ? 'pause' : 'play')}${state.running ? 'Jeda' : 'Start'}</button><button class="round" data-do="reset" aria-label="Ulangi">${icon('arrow-counter-clockwise')}</button></div></div></div>`;
+    },
+    todo() {
+      const done = state.tasks.filter(item => item[1]).length;
+      const rows = state.tasks.slice(-3).map((item, i, shown) => {
+        const index = state.tasks.length - shown.length + i;
+        return `<li class="${item[1] ? 'done' : ''}"><button data-task="${index}" aria-label="Tandai ${clean(item[0])}"></button>${clean(item[0])}</li>`;
+      }).join('');
+      return header('Daftar', 'Tugas', '#37d67a') + `<div class="page todo"><div class="top2"><span><b>${done}/${state.tasks.length}</b> <span class="dim">selesai</span></span>${done ? '<button class="pill" data-do="tidy">Hapus selesai</button>' : ''}</div><ul>${rows}</ul><input id="newtask" placeholder="Ketik tugas, lalu Enter" aria-label="Tugas baru" maxlength="40"></div>`;
+    },
+    shelf() {
+      const files = state.shelf.slice(-4).map(name => `<li>${clean(name)}</li>`).join('');
+      return header('Shelf', 'Berkas', '#5aaef0') + `<div class="page"><div class="zone" id="zone">${files ? `<ul>${files}</ul>` : 'Seret file dari komputermu ke sini. File tidak diunggah ke mana pun.'}</div></div>`;
+    },
+  };
+
+  function lines() {
+    return `<p>${lyricAt(-1)}</p><p class="now">${lyricAt(0)}</p><p>${lyricAt(1)}</p>`;
+  }
+  function nextPrayer() {
+    const now = clock();
+    const index = prayers.findIndex(([, at]) => at > now);
+    const at = index < 0 ? 0 : index;
+    return [...prayers[at], at];
+  }
+
+  function draw() {
+    clearTimeout(noticeTimer);
+    if (state.view === 'card') {
+      const name = PAGES[state.page];
+      shape(598, 233);
+      const tinted = name === 'music';
+      body.style.background = tinted ? `linear-gradient(100deg, ${track().glow}, #000 62%)` : '';
+      const dots = PAGES.map((_, i) => `<button ${i === state.page ? 'aria-current="true"' : ''} data-page="${i}" aria-label="Halaman ${i + 1}"></button>`).join('');
+      body.innerHTML = `<div class="card" style="--tint:${track().tint}">${pages[name]()}</div><button class="side l" data-step="-1" aria-label="Halaman sebelumnya">${icon('caret-left')}</button><button class="side r" data-step="1" aria-label="Halaman berikutnya">${icon('caret-right')}</button><div class="dots">${dots}</div>`;
+      return;
+    }
+    body.style.background = '';
+    if (state.lyrics && state.playing) {
+      shape(340, 38, true);
+      body.innerHTML = `<div class="lyricline" tabindex="0" role="button" aria-label="Buka notch"><div class="cover" style="--cover:${track().cover}"></div><span id="stripline">${lyricAt(0)}</span></div>`;
+    } else if (state.playing) {
+      shape(269, 38, true);
+      body.innerHTML = `<div class="strip" tabindex="0" role="button" aria-label="Buka notch"><div class="cover" style="--cover:${track().cover}"></div><b id="clk">${clock()}</b><span class="end">${bars()}</span></div>`;
+    } else {
+      shape(218, 35, true);
+      body.innerHTML = `<div class="strip" tabindex="0" role="button" aria-label="Buka notch"><div class="ring"></div><b id="clk">${clock()}</b><span class="end">31°</span></div>`;
+    }
+  }
+
+  function tick() {
+    if (state.playing) {
+      state.pos += .25;
+      if (state.pos >= track().length) step(1);
+    }
+    if (state.running) {
+      if (modes[state.mode][1]) {
+        state.left = Math.max(0, state.left - .25);
+        if (!state.left) { state.running = false; state.session += 1; say({ c: '#ee4b4b', i: 'calendar-blank', t: 'Sesi selesai', s: 'Istirahat dulu sebentar', w: 340 }); }
+      } else {
+        state.left += .25;
+      }
+    }
+    const set = (id, text) => { const el = document.getElementById(id); if (el && el.textContent !== text) el.textContent = text; };
+    set('clk', clock());
+    set('pos', mmss(state.pos));
+    set('left', mmss(state.left));
+    const fill = document.getElementById('fill');
+    if (fill) fill.style.width = `${state.pos / track().length * 100}%`;
+    const dial = document.getElementById('dial');
+    if (dial) {
+      const total = modes[state.mode][1];
+      dial.style.setProperty('--p', `${total ? (1 - state.left / total) * 100 : (state.left % 60) / 60 * 100}%`);
+    }
+    if (lineIndex() !== shownLine) {
+      shownLine = lineIndex();
+      const box = document.getElementById('lines');
+      if (box) box.innerHTML = lines();
+      set('stripline', lyricAt(0));
+    }
+  }
+
+  function step(by) {
+    state.track = (state.track + by + tracks.length) % tracks.length;
+    state.pos = 0;
+    if (state.view === 'card' || state.view === 'rest') draw();
+  }
+
+  function open(page) {
+    clearTimeout(leaveTimer);
+    if (page !== undefined) state.page = page;
+    state.view = 'card';
+    draw();
+  }
+  function close() {
+    state.view = 'rest';
+    draw();
+  }
+
+  function say({ c, i, t, s, big, w, vol }) {
+    clearTimeout(downloadTimer);
+    state.view = 'notice';
+    shape(w || 370, 78);
+    body.style.background = '';
+    const end = vol !== undefined ? `<span class="vol"><i style="width:${vol}%"></i></span>` : big ? `<span class="big">${big}</span>` : '';
+    body.innerHTML = `<div class="notice" style="--c:${c}"><span class="disc">${icon(i)}</span><span class="txt"><b>${t}</b><span>${s}</span></span>${end}</div>`;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(close, 3000);
+  }
+
+  const chips = {
+    volume: () => say({ c: '#4b5563', i: 'speaker-high', t: 'Volume', s: '62%', vol: 62, w: 340 }),
+    whatsapp() {
+      clearTimeout(noticeTimer);
+      clearTimeout(downloadTimer);
+      state.view = 'notice';
+      shape(470, 128);
+      body.style.background = '';
+      body.innerHTML = `<div class="app"><div class="row"><span class="dim">${today()}</span><b id="clk">${clock()}</b></div><div class="tile"><span class="logo">${icon('whatsapp-logo')}</span><div><div class="meta"><span>WhatsApp</span><span>Baru saja</span></div><b>Rani</b><p>Besok jadi ketemu jam 3?</p></div></div></div>`;
+      noticeTimer = setTimeout(close, 4000);
+    },
+    download() {
+      clearTimeout(noticeTimer);
+      clearTimeout(downloadTimer);
+      state.view = 'notice';
+      shape(420, 38, true);
+      body.style.background = '';
+      body.innerHTML = `<div class="strip" style="grid-template-columns:1fr auto 1fr"><span class="spread" style="justify-content:start;min-width:0">${icon('download-simple')}<span style="white-space:nowrap">Laporan-Q3.pdf</span></span><b id="clk">${clock()}</b><span class="end dim" id="size">0 MB</span></div>`;
+      let size = 0;
+      const grow = () => {
+        size += 7.3;
+        const label = document.getElementById('size');
+        if (!label) return;
+        if (size > 50) {
+          say({ c: '#3b92ee', i: 'download-simple', t: 'Unduhan selesai', s: 'Laporan-Q3.pdf', w: 340 });
+          return;
+        }
+        label.textContent = `${size.toFixed(1)} MB`;
+        downloadTimer = setTimeout(grow, 320);
+      };
+      downloadTimer = setTimeout(grow, 320);
+    },
+    wifi: () => say({ c: '#4bbcf0', i: 'wifi-high', t: 'Rumah 5G', s: 'Wi-Fi connected', w: 300 }),
+    bluetooth: () => say({ c: '#3b92ee', i: 'bluetooth', t: 'Earbuds', s: 'Connected, baterai 99%', w: 340 }),
+    battery: () => say({ c: '#f0483e', i: 'battery-warning', t: 'Battery low', s: 'Colok charger dulu', big: '20%', w: 370 }),
+    caps: () => say({ c: '#4b5563', i: 'text-aa', t: 'Caps Lock', s: 'Nyala', w: 270 }),
+    eyes() {
+      clearTimeout(noticeTimer);
+      state.view = 'eyes';
+      shape(229, 50);
+      body.style.background = 'transparent';
+      body.innerHTML = '<img src="assets/shots/mata.png" alt="" width="229" height="50">';
+      noticeTimer = setTimeout(close, 5000);
+    },
+  };
+
+  const actions = {
+    play() { state.playing = !state.playing; draw(); },
+    next() { step(1); },
+    prev() { step(-1); },
+    lyrics() { state.lyrics = !state.lyrics; draw(); },
+    clear() { state.inbox = []; draw(); },
+    run() { state.running = !state.running; draw(); },
+    reset() { state.running = false; state.left = modes[state.mode][1]; draw(); },
+    tidy() { state.tasks = state.tasks.filter(item => !item[1]); draw(); },
+  };
+
+  shell.addEventListener('click', event => {
+    if (state.view !== 'card') {
+      if (state.view === 'rest' || state.view === 'eyes') open();
+      return;
+    }
+    const hit = event.target.closest('[data-do],[data-step],[data-page],[data-mode],[data-task],[data-remove]');
+    const seek = event.target.closest('#seek');
+    if (seek) {
+      const box = seek.getBoundingClientRect();
+      state.pos = (event.clientX - box.left) / box.width * track().length;
+      tick();
+      return;
+    }
+    if (!hit) return;
+    const { do: action, step: by, page, mode, task, remove } = hit.dataset;
+    if (action) actions[action]();
+    if (by) open((state.page + Number(by) + PAGES.length) % PAGES.length);
+    if (page) open(Number(page));
+    if (mode) { state.mode = Number(mode); state.running = false; state.left = modes[state.mode][1]; draw(); }
+    if (task) { state.tasks[task][1] = !state.tasks[task][1]; draw(); }
+    if (remove) { state.inbox.splice(Number(remove), 1); draw(); }
+  });
+  shell.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && state.view === 'card') { close(); return; }
+    if ((event.key === 'Enter' || event.key === ' ') && state.view !== 'card') { event.preventDefault(); open(); return; }
+    if (event.key === 'Enter' && event.target.id === 'newtask') {
+      const text = event.target.value.trim();
+      if (!text) return;
+      state.tasks.push([text, false]);
+      draw();
+      document.getElementById('newtask').focus();
+    }
+  });
+  shell.addEventListener('pointerenter', event => {
+    if (event.pointerType === 'mouse' && state.view !== 'notice') open();
+    clearTimeout(leaveTimer);
+  });
+  shell.addEventListener('pointerleave', event => {
+    if (event.pointerType !== 'mouse' || state.view !== 'card') return;
+    leaveTimer = setTimeout(() => { if (document.activeElement.id !== 'newtask') close(); }, 500);
+  });
+  document.addEventListener('pointerdown', event => {
+    if (state.view === 'card' && event.pointerType !== 'mouse' && !shell.contains(event.target)) close();
+  });
+  shell.addEventListener('wheel', event => {
+    if (state.view !== 'card') return;
+    event.preventDefault();
+    const now = performance.now();
+    if (now - lastWheel < 260) return;
+    lastWheel = now;
+    open((state.page + Math.sign(event.deltaY) + PAGES.length) % PAGES.length);
+  }, { passive: false });
+
+  // The shelf takes real files from the desktop, by name only.
+  let shelfOpened = false;
+  document.addEventListener('dragover', event => event.preventDefault());
+  document.addEventListener('drop', event => event.preventDefault());
+  shell.addEventListener('dragenter', () => { if (!shelfOpened) { shelfOpened = true; open(PAGES.indexOf('shelf')); } });
+  shell.addEventListener('dragover', () => { const zone = document.getElementById('zone'); if (zone) zone.classList.add('over'); });
+  shell.addEventListener('dragleave', event => {
+    if (shell.contains(event.relatedTarget)) return;
+    shelfOpened = false;
+    const zone = document.getElementById('zone');
+    if (zone) zone.classList.remove('over');
+  });
+  shell.addEventListener('drop', event => {
+    shelfOpened = false;
+    state.shelf.push(...[...event.dataTransfer.files].map(file => file.name));
+    open(PAGES.indexOf('shelf'));
+  });
+
+  document.querySelectorAll('[data-chip]').forEach(chip => chip.addEventListener('click', () => chips[chip.dataset.chip]()));
+  document.querySelectorAll('[data-lyrics]').forEach(button => button.addEventListener('click', () => {
+    state.lyrics = true;
+    state.playing = true;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    open(0);
+  }));
+
+  const fit = () => stage.style.setProperty('--k', Math.min(1, stage.clientWidth / 598));
+  new ResizeObserver(fit).observe(stage);
+  fit();
+  draw();
+  setInterval(tick, 250);
+})();
+
+// Keep the download button on the newest release without editing this page.
+// The installer's name carries its version, so /releases/latest/download can't.
+fetch('https://api.github.com/repos/rifqihilal/drop/releases/latest')
+  .then(response => response.ok ? response.json() : null)
+  .then(release => {
+    const asset = release && release.assets.find(item => item.name.endsWith('.exe'));
+    if (!asset) return;
+    document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
+  })
+  .catch(() => {});
+
+const tabs = [...document.querySelectorAll('#tabs button')];
+const shots = [...document.querySelectorAll('#shot img')];
+function pick(index) {
+  tabs.forEach((tab, i) => {
+    tab.setAttribute('aria-selected', i === index);
+    tab.tabIndex = i === index ? 0 : -1;
+  });
+  shots.forEach((shot, i) => shot.classList.toggle('on', i === index));
+}
+tabs.forEach((tab, i) => {
+  tab.tabIndex = i === 0 ? 0 : -1;
+  tab.addEventListener('click', () => pick(i));
+  tab.addEventListener('keydown', event => {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const next = (i + step + tabs.length) % tabs.length;
+    pick(next);
+    tabs[next].focus();
+  });
+});
+
+const seen = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    entry.target.classList.add('seen');
+    seen.unobserve(entry.target);
+  });
+}, { threshold: .15 });
+document.querySelectorAll('.rise').forEach(item => seen.observe(item));
+</script>
+</body>
+</html>
