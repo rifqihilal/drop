@@ -64,7 +64,6 @@ h2 {
   font-weight: 700;
 }
 .wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 32px; }
-.body { color: var(--muted); max-width: 52ch; }
 section { padding: 96px 0; }
 
 .icon { width: 1.25em; height: 1.25em; flex: none; fill: currentColor; }
@@ -104,9 +103,10 @@ section { padding: 96px 0; }
   --k: 1;
   position: relative;
   width: min(598px, 100%);
-  height: calc(233px * var(--k));
+  height: calc(56px * var(--k));
   margin: 0 auto;
   flex: none;
+  z-index: 2;
 }
 .nt {
   position: absolute;
@@ -137,11 +137,15 @@ section { padding: 96px 0; }
   top: 0;
   width: 16px;
   height: 16px;
-  background: radial-gradient(circle at 0 100%, transparent 15.5px, #000 16px);
+  background: radial-gradient(circle at 0 100%, transparent 15.5px, var(--sh, #000) 16px);
 }
-.shell::before { left: -16px; }
+.shell::before { left: -16px; --sh: var(--sl, #000); }
 .shell::after { right: -16px; transform: scaleX(-1); }
-.shell.eyes::before, .shell.eyes::after { display: none; }
+.shell { top: 0; transition: width .5s var(--spring), height .5s var(--spring), top .5s var(--spring); }
+.shell.floating { top: 10px; }
+.shell.floating::before, .shell.floating::after { display: none; }
+.shell.floating .body { border-radius: 26px; }
+.shell.floating.small .body { border-radius: 19px; }
 .body {
   position: absolute;
   inset: 0;
@@ -170,6 +174,16 @@ section { padding: 96px 0; }
 .body .g { width: 1.15em; height: 1.15em; fill: currentColor; flex: none; }
 .dim { opacity: .6; }
 
+.face { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 30px; background: linear-gradient(180deg, #000 8%, #0e2259); }
+.shell.floating .face { background: linear-gradient(180deg, #0a1534, #0e2259); }
+.face i { width: 28px; height: 11px; border: 3px solid #e6efff; border-bottom: 0; border-radius: 28px 28px 0 0; box-sizing: border-box; filter: drop-shadow(0 0 6px #5aaef0); animation: blink 5.5s infinite; transform-origin: 50% 100%; }
+.face i + i { animation-delay: .04s; }
+@keyframes blink { 0%, 44%, 50%, 100% { scale: 1 1; } 47% { scale: 1 .12; } }
+.face .z { position: absolute; left: 72%; top: 18px; font-size: 10px; font-weight: 700; color: #bcd4ff; opacity: 0; animation: zee 3.4s ease-out infinite; }
+.face .z + .z { left: 77%; animation-delay: 1.5s; }
+@keyframes zee { 0% { translate: 0 6px; opacity: 0; } 25% { opacity: .9; } 100% { translate: 8px -12px; opacity: 0; } }
+.face .hi { position: absolute; left: 78%; font-size: 11px; font-weight: 700; color: #e6efff; animation: fade .2s ease both; }
+.face.awake i { height: 14px; animation: none; border-radius: 28px; border-bottom: 3px solid #e6efff; }
 .strip { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 16px; gap: 10px; }
 .strip b { font-weight: 700; }
 .strip .end { justify-self: end; }
@@ -321,14 +335,10 @@ section { padding: 96px 0; }
   font-weight: 600;
   transition: transform .2s var(--ease), border-color .2s, background-color .2s;
 }
-.chip:hover { border-color: var(--muted); background: var(--surface); transform: translateY(-1px); }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.chip[aria-pressed="false"]:hover, .chip:not([aria-pressed]):hover { border-color: var(--muted); background: var(--surface); transform: translateY(-1px); }
 .chip:active { transform: scale(.97); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.lyric-sec .box { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
-.lyric-sec .say { font-size: clamp(1.2rem, 2.2vw, 1.6rem); font-weight: 700; line-height: 1.35; letter-spacing: -.02em; }
-.lyric-sec .say span { display: block; color: var(--muted); font-weight: 500; opacity: .6; }
-.lyric-sec .btn { margin-top: 24px; }
 
 .mini { background: #000; color: #f5f7fa; border-radius: 0 0 20px 20px; display: flex; align-items: center; gap: 12px; padding: 12px 18px; width: 340px; max-width: 100%; font-size: 14px; line-height: 1.3; }
 .mini .logo { width: 44px; height: 44px; border-radius: 11px; font-size: 24px; }
@@ -503,7 +513,6 @@ footer a:hover { color: var(--text); }
   .cell { padding: 24px; }
   .pile > :nth-child(2), .pile > :nth-child(3) { margin-left: 0; }
   .install .steps { grid-template-columns: 1fr; gap: 24px; }
-  .lyric-sec .box { grid-template-columns: 1fr; gap: 24px; }
   .cta, .cta .btn { width: 100%; justify-content: center; }
 }
 </style>
@@ -546,7 +555,7 @@ footer a:hover { color: var(--text); }
     <div class="nt"><div class="shell" id="shell" aria-label="Demo notch Drop"><div class="body" id="body"></div></div></div>
   </div>
   <div class="chips">
-    <p>Mainkan notch-nya: arahkan kursor, scroll, klik. Atau picu kabarnya di sini.</p>
+    <p>Arahkan kursor ke notch, lalu scroll dan klik. Atau picu kabarnya di sini.</p>
     <button class="chip" data-chip="whatsapp">WhatsApp</button>
     <button class="chip" data-chip="download">Download</button>
     <button class="chip" data-chip="volume">Volume</button>
@@ -555,6 +564,7 @@ footer a:hover { color: var(--text); }
     <button class="chip" data-chip="battery">Baterai</button>
     <button class="chip" data-chip="caps">Caps Lock</button>
     <button class="chip" data-chip="eyes">Mata</button>
+    <button class="chip" id="float" aria-pressed="false">Floating</button>
   </div>
   <div class="wrap hero-copy">
     <h1>Windows-mu kini punya notch.</h1>
@@ -597,17 +607,6 @@ footer a:hover { color: var(--text); }
           <img src="assets/shots/shelf.png" alt="Shelf kosong dengan area taruh file" width="598" height="233" loading="lazy">
         </div>
       </div>
-    </div>
-  </section>
-
-  <section class="lyric-sec" style="padding-top:0">
-    <div class="wrap box">
-      <div class="rise">
-        <h2>Lagunya main, liriknya ikut jalan.</h2>
-        <p class="body" style="margin-top:16px">Sampul, kontrol, dan warna kartu mengikuti lagu yang diputar. Nyalakan mode lirik, dan barisnya tampil di kartu maupun di notch.</p>
-        <button class="btn main" data-lyrics style="border:0;cursor:pointer;font-family:inherit">Coba mode lirik</button>
-      </div>
-      <p class="say rise" aria-hidden="true"><span>Kopi dingin, kita belum beranjak</span>Lampu jalan mulai menyala<span>Besok biar jadi urusan besok</span></p>
     </div>
   </section>
 
@@ -702,7 +701,7 @@ footer a:hover { color: var(--text); }
   const PAGES = ['music', 'home', 'inbox', 'pray', 'cal', 'focus', 'todo', 'shelf'];
 
   const state = {
-    view: 'card', page: 0, track: 0, pos: 64, playing: true, lyrics: false,
+    view: 'eyes', page: 0, track: 0, pos: 64, playing: true, lyrics: false,
     mode: 0, left: 1500, running: false, session: 1,
     tasks: [['Kirim laporan bulanan', false], ['Telepon Ibu', false], ['Beli kopi', true]],
     inbox: [
@@ -717,6 +716,8 @@ footer a:hover { color: var(--text); }
   let leaveTimer = 0;
   let lastWheel = 0;
   let shownLine = -1;
+  let restTimer = 0;
+  let mouse = false;
 
   const track = () => tracks[state.track];
   const lineIndex = () => Math.floor(state.pos / 4) % track().lines.length;
@@ -725,7 +726,7 @@ footer a:hover { color: var(--text); }
     shell.style.setProperty('--w', `${w}px`);
     shell.style.setProperty('--h', `${h}px`);
     shell.classList.toggle('small', Boolean(small));
-    shell.classList.toggle('eyes', state.view === 'eyes');
+    shell.style.setProperty('--sl', '#000');
   };
   const bars = () => `<span class="bars ${state.playing ? 'on' : ''}" style="--tint:${track().tint}"><i></i><i></i><i></i><i></i></span>`;
 
@@ -808,18 +809,29 @@ footer a:hover { color: var(--text); }
     return [...prayers[at], at];
   }
 
+  const face = hi => `<div class="face ${hi ? 'awake' : ''}"><i></i><i></i>${hi ? '<span class="hi">Hi!</span>' : '<b class="z">z</b><b class="z">z</b>'}</div>`;
+
   function draw() {
     clearTimeout(noticeTimer);
+    clearTimeout(restTimer);
+    if (state.view === 'eyes') {
+      shape(229, 50);
+      body.style.background = '';
+      body.innerHTML = face(false);
+      return;
+    }
     if (state.view === 'card') {
       const name = PAGES[state.page];
       shape(598, 233);
       const tinted = name === 'music';
       body.style.background = tinted ? `linear-gradient(100deg, ${track().glow}, #000 62%)` : '';
+      if (tinted) shell.style.setProperty('--sl', track().glow);
       const dots = PAGES.map((_, i) => `<button ${i === state.page ? 'aria-current="true"' : ''} data-page="${i}" aria-label="Halaman ${i + 1}"></button>`).join('');
       body.innerHTML = `<div class="card" style="--tint:${track().tint}">${pages[name]()}</div><button class="side l" data-step="-1" aria-label="Halaman sebelumnya">${icon('caret-left')}</button><button class="side r" data-step="1" aria-label="Halaman berikutnya">${icon('caret-right')}</button><div class="dots">${dots}</div>`;
       return;
     }
     body.style.background = '';
+    restTimer = setTimeout(() => { state.view = 'eyes'; draw(); }, 6000);
     if (state.lyrics && state.playing) {
       shape(340, 38, true);
       body.innerHTML = `<div class="lyricline" tabindex="0" role="button" aria-label="Buka notch"><div class="cover" style="--cover:${track().cover}"></div><span id="stripline">${lyricAt(0)}</span></div>`;
@@ -872,7 +884,18 @@ footer a:hover { color: var(--text); }
 
   function open(page) {
     clearTimeout(leaveTimer);
+    clearTimeout(restTimer);
     if (page !== undefined) state.page = page;
+    if (state.view === 'eyes') {
+      state.view = 'hi';
+      body.innerHTML = face(true);
+      setTimeout(() => {
+        state.view = 'card';
+        draw();
+        if (mouse && !shell.matches(':hover')) leaveTimer = setTimeout(close, 500);
+      }, 500);
+      return;
+    }
     state.view = 'card';
     draw();
   }
@@ -929,12 +952,9 @@ footer a:hover { color: var(--text); }
     battery: () => say({ c: '#f0483e', i: 'battery-warning', t: 'Battery low', s: 'Colok charger dulu', big: '20%', w: 370 }),
     caps: () => say({ c: '#4b5563', i: 'text-aa', t: 'Caps Lock', s: 'Nyala', w: 270 }),
     eyes() {
-      clearTimeout(noticeTimer);
+      clearTimeout(downloadTimer);
       state.view = 'eyes';
-      shape(229, 50);
-      body.style.background = 'transparent';
-      body.innerHTML = '<img src="assets/shots/mata.png" alt="" width="229" height="50">';
-      noticeTimer = setTimeout(close, 5000);
+      draw();
     },
   };
 
@@ -983,7 +1003,8 @@ footer a:hover { color: var(--text); }
     }
   });
   shell.addEventListener('pointerenter', event => {
-    if (event.pointerType === 'mouse' && state.view !== 'notice') open();
+    mouse = event.pointerType === 'mouse';
+    if (mouse && state.view !== 'notice' && state.view !== 'hi') open();
     clearTimeout(leaveTimer);
   });
   shell.addEventListener('pointerleave', event => {
@@ -1021,12 +1042,11 @@ footer a:hover { color: var(--text); }
   });
 
   document.querySelectorAll('[data-chip]').forEach(chip => chip.addEventListener('click', () => chips[chip.dataset.chip]()));
-  document.querySelectorAll('[data-lyrics]').forEach(button => button.addEventListener('click', () => {
-    state.lyrics = true;
-    state.playing = true;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    open(0);
-  }));
+
+  const floating = document.getElementById('float');
+  floating.addEventListener('click', () => {
+    floating.setAttribute('aria-pressed', shell.classList.toggle('floating'));
+  });
 
   const fit = () => stage.style.setProperty('--k', Math.min(1, stage.clientWidth / 598));
   new ResizeObserver(fit).observe(stage);
