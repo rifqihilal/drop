@@ -162,6 +162,8 @@ const APP_BANNER_SHOWN: Duration = Duration::from_secs(4);
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
 const PAGE_SWITCH: Duration = Duration::from_millis(260);
+/// How long the prayer page's sun takes to travel to its place.
+const PAGE_REVEAL: Duration = Duration::from_millis(700);
 /// A prayer's arrival is still announced this many minutes after its time,
 /// so a minute's tick that runs late does not miss it.
 const PRAYER_ARRIVAL_MINUTES: u32 = 2;
@@ -236,6 +238,9 @@ struct App {
     shown: bool,
     /// A page switch in progress on the open card.
     page_switch: Option<PageSwitch>,
+    /// The page on the open card and when it came into view, for the prayer
+    /// page's sun travelling to its place; None while the card is closed.
+    page_shown: Option<(Page, Instant)>,
     /// Display-refresh frames while animating.
     pacer: Pacer,
     /// Files parked in the notch.
@@ -454,6 +459,7 @@ fn main() -> Result<()> {
             timer_view: TimerKind::Pomodoro,
             month_offset: 0,
             page_switch: None,
+            page_shown: None,
             shown: true,
             pacer: Pacer::start(hwnd),
             shelf: Shelf::load(),
@@ -640,10 +646,22 @@ impl App {
         if !switching {
             self.page_switch = None;
         }
+        // A page comes into view as the card opens on it or switches to it.
+        let page = self.shown_page();
+        if self.notch.card_visible.value <= 0.01 {
+            self.page_shown = None;
+        } else if self.page_shown.is_none_or(|(shown, _)| shown != page) {
+            self.page_shown = Some((page, now));
+        }
+        let revealing = page == Page::Prayer
+            && self
+                .page_shown
+                .is_some_and(|(_, shown)| now.duration_since(shown) < PAGE_REVEAL);
         let rolling = self.update_lyric_roll(now);
         let zooming = self.step_zooms(dt);
         let sliding = self.usage_switch.step(dt) | self.step_privacy(dt);
-        let moving = self.notch.step(now, dt) || switching || rolling || zooming || sliding;
+        let moving =
+            self.notch.step(now, dt) || switching || revealing || rolling || zooming || sliding;
         let moving = self.step_bell(now) || moving;
         let bars_moving = self.step_bars(dt);
         // The open card shows a running progress bar.
@@ -2366,6 +2384,9 @@ impl App {
             next_today,
             progress: prayer::wait_progress(&day.times, now, time),
             sun: prayer::day_position(&day.times, now),
+            reveal: self.page_shown.map_or(1.0, |(_, shown)| {
+                shown.elapsed().as_secs_f32() / PAGE_REVEAL.as_secs_f32()
+            }),
             now,
             minutes: day.times,
         })

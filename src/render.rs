@@ -511,6 +511,9 @@ fn inbox_remove(x1: f32, index: usize) -> (f32, f32) {
 
 /// Whether the closed notch has room for the bell: it shows only the clock
 /// and its neighbours, with no live strip, eyes, or thin bar.
+/// Room the bell takes right of the closed notch's clock.
+const BELL_ROOM: f32 = 18.0;
+
 fn unread_bell(scene: &Scene) -> bool {
     !scene.minimal && scene.music_visible < 0.01 && scene.eyes_visible < 0.01
 }
@@ -977,6 +980,8 @@ pub struct PrayerScene {
     pub progress: f32,
     /// The sun's place on its path: 0 at Subuh, 4 at Isya.
     pub sun: f32,
+    /// How far the sun has travelled to its place since the page appeared, 0..1.
+    pub reveal: f32,
     /// Minutes since midnight now, and today's five times in minutes, which
     /// set the sky's colour.
     pub now: u32,
@@ -3394,8 +3399,8 @@ impl Renderer {
         Ok(())
     }
 
-    /// Tells the closed notch there are notifications to see: a bell in the
-    /// middle, or only the dot where the notch shows other things.
+    /// Tells the closed notch there are notifications to see: a bell right of
+    /// the clock, or only the dot where the notch shows other things.
     unsafe fn draw_unread(&self, scene: &Scene) {
         let alpha = (1.0 - scene.banner_visible.max(scene.card_visible) * 1.6).clamp(0.0, 1.0);
         if !scene.inbox.unread || alpha <= 0.0 {
@@ -3411,9 +3416,8 @@ impl Renderer {
         if scene.peek_visible > 0.01 && scene.music.is_some() {
             self.draw_red_dot(cx - width / 2.0 + 38.0, height / 2.0, 3.0, alpha);
         } else if unread_bell(scene) {
-            // Widened, the clock comes to the middle and the bell gives way.
-            let alpha = alpha * (1.0 - scene.peek_visible).clamp(0.0, 1.0);
-            let (x, y) = (cx, height / 2.0);
+            // At the far right, past the clock.
+            let (x, y) = (right - 14.0 - BELL_ROOM / 2.0 + 2.0, height / 2.0);
             self.light.SetOpacity(0.9 * alpha);
             // It swings from its top.
             self.tilted_at(x, y - 6.0, scene.bell_angle, || {
@@ -3860,7 +3864,7 @@ impl Renderer {
     /// and its wait sit at the top, the sun's path through today's five in
     /// the middle, and their names and times in a row under the horizon.
     unsafe fn draw_prayer_card(&self, prayer: &PrayerScene, x0: f32, x1: f32, alpha: f32) {
-        let panel = rect(x0 + 6.0, 2.0, x1 - 6.0, 144.0);
+        let panel = rect(x0 + 6.0, 12.0, x1 - 6.0, 146.0);
         let sky = prayer_sky(prayer.now, &prayer.minutes);
         if let Ok(fill) = self.gradient(
             pt(0.0, panel.top),
@@ -3899,9 +3903,9 @@ impl Renderer {
             }
         }
 
-        // The ground under the horizon, a little darker than the sky.
-        let base = 96.0;
-        self.black.SetOpacity(0.22 * alpha);
+        // The ground under the horizon, dark enough for the times on it.
+        let base = panel.top + 88.0;
+        self.black.SetOpacity(0.42 * alpha);
         self.target.FillRectangle(
             &rect(panel.left, base, panel.right, panel.bottom),
             &self.black,
@@ -3916,9 +3920,12 @@ impl Renderer {
         // The sun's path: walked solid, still ahead dotted.
         let (first, last) = (panel.left + 34.0, panel.right - 34.0);
         let at_x = |position: f32| first + (last - first) * position / 4.0;
-        let rise = 46.0;
+        let rise = 40.0;
         let at_y = |position: f32| base - rise * sun_arc(position);
-        let _ = self.draw_sun_path(&at_x, &at_y, prayer.sun, alpha);
+        // As the page appears the sun travels from Subuh to where it is.
+        let reveal = prayer.reveal.clamp(0.0, 1.0);
+        let sun = prayer.sun * (1.0 - (1.0 - reveal).powi(3));
+        let _ = self.draw_sun_path(&at_x, &at_y, sun, alpha);
 
         for index in 0..5 {
             let position = index as f32;
@@ -3949,32 +3956,10 @@ impl Renderer {
                     None,
                 );
             }
-            // Under the horizon, in the point's column; the next one bright.
-            let label = if next {
-                1.0
-            } else if passed {
-                0.5
-            } else {
-                0.75
-            };
-            let name_box = rect(x - 34.0, base + 6.0, x + 34.0, base + 20.0);
-            let time_box = rect(x - 34.0, base + 20.0, x + 34.0, base + 36.0);
-            self.draw_text(
-                prayer::NAMES[index],
-                &self.tiny,
-                name_box,
-                0.85 * label * alpha,
-            );
-            let format = if next {
-                &self.prayer_next
-            } else {
-                &self.prayer_time
-            };
-            self.draw_text(&prayer.times[index], format, time_box, label * alpha);
         }
 
-        // The sun by day, the moon by night.
-        let (sx, sy) = (at_x(prayer.sun), at_y(prayer.sun));
+        // The sun by day.
+        let (sx, sy) = (at_x(sun), at_y(sun));
         if sky.night < 0.99 {
             self.accent.SetColor(&color(1.0, 0.84, 0.45, 1.0));
             for (radius, opacity) in [(15.0, 0.16), (10.0, 0.32), (6.5, 1.0)] {
@@ -3989,8 +3974,39 @@ impl Renderer {
                 );
             }
         }
+
+        // Under the horizon, each in its point's column; the next one bright.
+        for index in 0..5 {
+            let position = index as f32;
+            let x = at_x(position);
+            let next = prayer.next_today == Some(index);
+            let passed = position <= prayer.sun && !next;
+            let label = if next {
+                1.0
+            } else if passed {
+                0.62
+            } else {
+                0.9
+            };
+            let name_box = rect(x - 34.0, base + 5.0, x + 34.0, base + 19.0);
+            let time_box = rect(x - 34.0, base + 19.0, x + 34.0, base + 35.0);
+            self.draw_text(
+                prayer::NAMES[index],
+                &self.tiny,
+                name_box,
+                0.85 * label * alpha,
+            );
+            let format = if next {
+                &self.prayer_next
+            } else {
+                &self.prayer_time
+            };
+            self.draw_text(&prayer.times[index], format, time_box, label * alpha);
+        }
+
+        // The moon by night.
         if sky.night > 0.01 {
-            let (mx, my) = ((first + last) / 2.0 + 40.0, 30.0);
+            let (mx, my) = ((first + last) / 2.0 + 40.0, panel.top + 24.0);
             self.accent.SetColor(&color(0.97, 0.95, 0.86, 1.0));
             self.accent.SetOpacity(0.18 * sky.night * alpha);
             let disc = |x: f32, y: f32, radius: f32, brush: &ID2D1SolidColorBrush| {
@@ -4026,20 +4042,21 @@ impl Renderer {
             "Berikutnya"
         };
         if let Some(text) = self.text_layout(caption, &self.small_left, 150.0) {
-            self.draw_layout(&text.layout, left, 9.0, 0.8 * alpha);
+            self.draw_layout(&text.layout, left, panel.top + 8.0, 0.8 * alpha);
         }
         let mut x = left;
+        let y = panel.top + 21.0;
         if let Some(name) = self.text_layout(prayer.next_name, &self.prayer_name, 150.0) {
-            self.draw_layout(&name.layout, x, 23.0, alpha);
+            self.draw_layout(&name.layout, x, y, alpha);
             x += name.width + 7.0;
             if let Some(time) = self.text_layout(&prayer.next_time, &self.prayer_name, 80.0) {
-                self.draw_layout(&time.layout, x, 23.0, 0.75 * alpha);
+                self.draw_layout(&time.layout, x, y, 0.75 * alpha);
             }
         }
         let wait = format!("{} lagi", prayer.wait);
         if let Some(text) = self.text_layout(&wait, &self.text_left, 150.0) {
             let x = panel.right - 14.0 - text.width;
-            self.draw_layout(&text.layout, x, 12.0, alpha);
+            self.draw_layout(&text.layout, x, panel.top + 10.0, alpha);
         }
 
         self.target.PopAxisAlignedClip();
@@ -5202,11 +5219,18 @@ impl Renderer {
             scene.height / scene.closed_scale,
         );
         let bounds = rect(cx - width / 2.0, 0.0, cx + width / 2.0, height);
-        // At rest the clock sits on the right; widened or with music it moves
-        // to the middle.
-        let middle = peek.max(scene.music_visible).clamp(0.0, 1.0);
+        // The clock stays on the right; only music, whose strip and controls
+        // take the sides, brings it to the middle.
+        let music_peek = if scene.music.is_some() { peek } else { 0.0 };
+        let middle = music_peek.max(scene.music_visible).clamp(0.0, 1.0);
         if let Some(clock) = self.text_layout(scene.clock, &self.bold_left, 80.0) {
-            let side = bounds.right - 14.0 - clock.width;
+            // The notifications' bell, when there is one, takes the far right.
+            let bell = if scene.inbox.unread && unread_bell(scene) {
+                BELL_ROOM
+            } else {
+                0.0
+            };
+            let side = bounds.right - 14.0 - bell - clock.width;
             let x = side + (cx - clock.width / 2.0 - side) * middle;
             self.draw_layout(&clock.layout, x, (height - clock.height) / 2.0, alpha);
         }
@@ -5226,28 +5250,23 @@ impl Renderer {
         if let Some((percent, charging)) = scene.status.battery {
             self.battery_mark(bounds.left + 14.0, cy, 6.5, percent, charging, alpha);
         }
-        // Widened, a prayer close at hand shows on the right, where the clock
-        // was, with its name and wait.
-        let prayer = scene
-            .prayer_soon
-            .as_ref()
-            .map(|(name, wait)| (wait.as_str(), *name));
-        let fade = (2.0 * peek - 1.0).max(0.0);
-        if let Some((value, label)) = prayer.filter(|_| peek >= 0.5) {
-            if let Some(text) = self.text_layout(value, &self.bold_left, 56.0) {
-                let x = bounds.right - 14.0 - text.width;
-                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha * fade);
-                if let Some(name) = self.text_layout(label, &self.small_left, 90.0) {
-                    let x = x - 7.0 - name.width;
-                    let opacity = 0.75 * alpha * peek * peek * fade;
-                    self.draw_layout(&name.layout, x, cy - name.height / 2.0, opacity);
-                }
-            }
+        // Widened, the middle shows the day and date, or a prayer close at
+        // hand with its name and wait.
+        let opacity = 0.85 * alpha * peek * peek;
+        if opacity <= 0.01 {
+            return;
         }
-        // Widened: the day and date on the clock's left.
-        if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 120.0) {
-            let x = cx - 32.0 - date.width;
-            let opacity = 0.85 * alpha * peek * peek;
+        if let Some((name, wait)) = scene.prayer_soon.as_ref() {
+            let name = self.text_layout(name, &self.small_left, 90.0);
+            let wait = self.text_layout(wait, &self.bold_left, 80.0);
+            if let (Some(name), Some(wait)) = (name, wait) {
+                let x = cx - (name.width + 6.0 + wait.width) / 2.0;
+                self.draw_layout(&name.layout, x, cy - name.height / 2.0, opacity);
+                let x = x + name.width + 6.0;
+                self.draw_layout(&wait.layout, x, cy - wait.height / 2.0, opacity);
+            }
+        } else if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 160.0) {
+            let x = cx - date.width / 2.0;
             self.draw_layout(&date.layout, x, cy - date.height / 2.0, opacity);
         }
     }

@@ -18,7 +18,7 @@ const ASR_FACTOR: f64 = 1.0;
 /// Kemenag schedules (Dzuhur and Maghrib get a longer one).
 const IHTIYAT: [f64; 5] = [2.0, 3.0, 2.0, 3.0, 2.0];
 /// How long before a prayer the closed notch counts down to it.
-const SOON_MINUTES: u32 = 30;
+const SOON_MINUTES: u32 = 5;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Location {
@@ -233,10 +233,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn soon_covers_the_last_half_hour() {
+    fn soon_covers_the_last_five_minutes() {
         let times = [300, 720, 900, 1080, 1150];
-        assert_eq!(soon(&times, 689), None);
-        assert_eq!(soon(&times, 690), Some((1, 30)));
+        assert_eq!(soon(&times, 714), None);
+        assert_eq!(soon(&times, 715), Some((1, 5)));
         assert_eq!(soon(&times, 720), Some((1, 0)));
         assert_eq!(soon(&times, 721), None);
         assert_eq!(soon(&times, 1200), None);
