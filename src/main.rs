@@ -2179,7 +2179,6 @@ impl App {
         dragdrop::set_accepting(self.settings.module_shelf);
         self.notch.bounce = self.settings.card_bounce;
         self.renderer.set_arrows(self.settings.card_arrows);
-        self.renderer.set_battery_style(self.settings.battery_style);
         self.aim_usage_switch();
         let resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,

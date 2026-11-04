@@ -32,28 +32,6 @@ impl NotchSize {
     }
 }
 
-/// How the notch shows the battery.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum BatteryStyle {
-    /// An outlined battery with the percentage beside it.
-    #[default]
-    IconNumber,
-    Icon,
-    Ring,
-    Number,
-}
-
-impl BatteryStyle {
-    fn name(self) -> &'static str {
-        match self {
-            Self::IconNumber => "ikon_angka",
-            Self::Icon => "ikon",
-            Self::Ring => "lingkaran",
-            Self::Number => "angka",
-        }
-    }
-}
-
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     /// Place name shown with prayer times.
@@ -112,7 +90,6 @@ pub struct Settings {
     pub notch_fill: u32,
     /// The notch floats below the screen's top edge instead of joining it.
     pub notch_floating: bool,
-    pub battery_style: BatteryStyle,
     /// Links to iCalendar feeds for the agenda; each slot has its colour,
     /// and an empty one is unused.
     pub ical_urls: [String; FEEDS],
@@ -163,7 +140,6 @@ impl Default for Settings {
             notch_size: NotchSize::Normal,
             notch_fill: 100,
             notch_floating: false,
-            battery_style: BatteryStyle::IconNumber,
             ical_urls: Default::default(),
             water: true,
             water_minutes: 60,
@@ -291,8 +267,6 @@ impl Settings {
              transparansi = {}\n\
              ; Notch mengambang di bawah tepi atas layar, tidak menempel.\n\
              notch_mengambang = {}\n\
-             ; Baterai di notch: ikon_angka, ikon, lingkaran atau angka.\n\
-             gaya_baterai = {}\n\
              \n\
              [agenda]\n\
              ; Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia\n\
@@ -345,7 +319,6 @@ impl Settings {
             self.notch_size.name(),
             self.notch_fill,
             flag(self.notch_floating),
-            self.battery_style.name(),
             self.ical_urls[0],
             self.ical_urls[1],
             self.ical_urls[2],
@@ -460,14 +433,6 @@ fn parse(text: &str) -> Settings {
             }
             "transparansi" => s.notch_fill = number().map_or(100, |v| v.clamp(0.0, 100.0) as u32),
             "notch_mengambang" => s.notch_floating = flag(false),
-            "gaya_baterai" => {
-                s.battery_style = match value.to_lowercase().as_str() {
-                    "ikon" => BatteryStyle::Icon,
-                    "lingkaran" => BatteryStyle::Ring,
-                    "angka" => BatteryStyle::Number,
-                    _ => BatteryStyle::IconNumber,
-                }
-            }
             "ical" => s.ical_urls[0] = value.to_string(),
             "ical2" => s.ical_urls[1] = value.to_string(),
             "ical3" => s.ical_urls[2] = value.to_string(),
@@ -532,7 +497,6 @@ mod tests {
             notch_size: NotchSize::Large,
             notch_fill: 40,
             notch_floating: true,
-            battery_style: BatteryStyle::Ring,
             ical_urls: [
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
                     .to_string(),

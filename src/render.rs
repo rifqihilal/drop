@@ -18,10 +18,10 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1GradientStopCollection,
-    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
-    ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE,
-    D2D1_ARC_SIZE_SMALL, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT,
-    D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_CUSTOM, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
+    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND,
+    D2D1_DASH_STYLE_CUSTOM, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2,
     D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
@@ -66,7 +66,6 @@ use crate::anim::{
     CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, IDLE, LEVEL, LYRIC_CARD_EXTRA, LYRIC_STRIP_MAX,
     NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
-use crate::config::BatteryStyle;
 use crate::media::Command;
 use crate::notifications::AppNotice;
 use crate::todo::Task;
@@ -466,7 +465,7 @@ fn visible_square(pixels: &[u8], width: usize, height: usize) -> (usize, usize, 
 static FONT: &[u8] = include_bytes!("../assets/fonts/PlusJakartaSans.ttf");
 
 /// Makes the carried typeface available to DirectWrite, from memory.
-pub unsafe fn bundled_font(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+unsafe fn bundled_font(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
     let factory: IDWriteFactory5 = dwrite.cast()?;
     let loader = factory.CreateInMemoryFontFileLoader()?;
     factory.RegisterFontFileLoader(&loader)?;
@@ -511,9 +510,6 @@ fn inbox_remove(x1: f32, index: usize) -> (f32, f32) {
 
 /// Whether the closed notch has room for the bell: it shows only the clock
 /// and its neighbours, with no live strip, eyes, or thin bar.
-/// Room the bell takes right of the closed notch's clock.
-const BELL_ROOM: f32 = 18.0;
-
 fn unread_bell(scene: &Scene) -> bool {
     !scene.minimal && scene.music_visible < 0.01 && scene.eyes_visible < 0.01
 }
@@ -1170,6 +1166,7 @@ pub struct Renderer {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     target: ID2D1DCRenderTarget,
+    text: IDWriteTextFormat,
     small_text: IDWriteTextFormat,
     title_text: IDWriteTextFormat,
     subtitle_text: IDWriteTextFormat,
@@ -1186,9 +1183,7 @@ pub struct Renderer {
     tile_text: IDWriteTextFormat,
     /// Bold left-aligned line: reminders and the lyric strip.
     bold_left: IDWriteTextFormat,
-    /// The battery's percentage beside its icon.
-    battery_text: IDWriteTextFormat,
-    /// The prayer page's next prayer, and the time under each point.
+    /// The prayer page's next prayer, and the times under the horizon.
     prayer_name: IDWriteTextFormat,
     prayer_time: IDWriteTextFormat,
     prayer_next: IDWriteTextFormat,
@@ -1212,7 +1207,6 @@ pub struct Renderer {
     round_caps: ID2D1StrokeStyle,
     /// The page's margin on each side of the open card.
     card_side: f32,
-    battery_style: BatteryStyle,
     /// Album art of the current track, decoded once per song.
     art: Option<ID2D1Bitmap>,
     /// The art's main colour, for the music card's background.
@@ -1363,6 +1357,7 @@ impl Renderer {
                 )?;
                 Ok(format)
             };
+            let text = format(font, DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let small_text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0)?;
             let icons = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 15.0)?;
             let title_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5)?;
@@ -1371,7 +1366,6 @@ impl Renderer {
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
             let text_left = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
             let bold_left = line(DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
-            let battery_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 11.5)?;
             let prayer_name = line(DWRITE_FONT_WEIGHT_BOLD, 18.0)?;
             let prayer_time = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.5)?;
             let prayer_next = format(font, DWRITE_FONT_WEIGHT_BOLD, 14.0)?;
@@ -1398,6 +1392,7 @@ impl Renderer {
                 factory,
                 dwrite,
                 target,
+                text,
                 small_text,
                 title_text,
                 subtitle_text,
@@ -1408,7 +1403,6 @@ impl Renderer {
                 tiny,
                 tile_text,
                 bold_left,
-                battery_text,
                 prayer_name,
                 prayer_time,
                 prayer_next,
@@ -1424,7 +1418,6 @@ impl Renderer {
                 accent,
                 round_caps,
                 card_side: CARD_SIDE,
-                battery_style: BatteryStyle::default(),
                 art: None,
                 art_tint: None,
                 strip_stops: RefCell::new(None),
@@ -1444,11 +1437,6 @@ impl Renderer {
     /// Whether the open card keeps room for its side arrows.
     pub fn set_arrows(&mut self, arrows: bool) {
         self.card_side = if arrows { CARD_SIDE } else { CARD_SIDE_BARE };
-    }
-
-    /// How the closed notch and the card's header show the battery.
-    pub fn set_battery_style(&mut self, style: BatteryStyle) {
-        self.battery_style = style;
     }
 
     /// A point on the open card (its `y`, and the card's `width`) as the page
@@ -1503,7 +1491,39 @@ impl Renderer {
         let cx = CANVAS.0 / 2.0;
         let (w, h) = (scene.width, scene.height);
         let (x0, x1) = (cx - w / 2.0, cx + w / 2.0);
-        let geometry = notch_outline(&self.factory, cx, w, h, scene.floating)?;
+        let r = (h / 2.0).min(24.0);
+        let ear = EAR.min(h - r);
+
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        if scene.floating {
+            sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(x1 - r, 0.0));
+            sink.AddArc(&arc(pt(x1, r), r));
+        } else {
+            sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(x1 + ear, 0.0));
+            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                point1: pt(x1, 0.0),
+                point2: pt(x1, ear),
+            });
+        }
+        sink.AddLine(pt(x1, h - r));
+        sink.AddArc(&arc(pt(x1 - r, h), r));
+        sink.AddLine(pt(x0 + r, h));
+        sink.AddArc(&arc(pt(x0, h - r), r));
+        if scene.floating {
+            sink.AddLine(pt(x0, r));
+            sink.AddArc(&arc(pt(x0 + r, 0.0), r));
+        } else {
+            sink.AddLine(pt(x0, ear));
+            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                point1: pt(x0, 0.0),
+                point2: pt(x0 - ear, 0.0),
+            });
+        }
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
 
         self.black.SetOpacity(scene.notch_opacity);
         self.target.FillGeometry(&geometry, &self.black, None);
@@ -2417,15 +2437,16 @@ impl Renderer {
         let (Some(date), Some(time)) = (date, time) else {
             return;
         };
-        let battery = scene.status.battery;
-        let mark = battery.map_or(0.0, |(percent, charging)| {
-            self.battery_mark(0.0, cy, 6.0, percent, charging, 0.0) + 8.0
-        });
-        let total = mark + date.width + 8.0 + time.width;
+        let ring = if scene.status.battery.is_some() {
+            20.0
+        } else {
+            0.0
+        };
+        let total = ring + date.width + 8.0 + time.width;
         let mut x = (x0 + x1) / 2.0 - total / 2.0;
-        if let Some((percent, charging)) = battery {
-            self.battery_mark(x, cy, 6.0, percent, charging, alpha);
-            x += mark;
+        if let Some((percent, charging)) = scene.status.battery {
+            self.draw_battery(x + 6.0, cy, 6.0, percent, charging, alpha);
+            x += ring;
         }
         self.draw_layout(&date.layout, x, cy - date.height / 2.0, 0.75 * alpha);
         x += date.width + 8.0;
@@ -3399,8 +3420,8 @@ impl Renderer {
         Ok(())
     }
 
-    /// Tells the closed notch there are notifications to see: a bell right of
-    /// the clock, or only the dot where the notch shows other things.
+    /// Tells the closed notch there are notifications to see: a bell in the
+    /// temperature's place, or only the dot where the notch shows other things.
     unsafe fn draw_unread(&self, scene: &Scene) {
         let alpha = (1.0 - scene.banner_visible.max(scene.card_visible) * 1.6).clamp(0.0, 1.0);
         if !scene.inbox.unread || alpha <= 0.0 {
@@ -3416,8 +3437,7 @@ impl Renderer {
         if scene.peek_visible > 0.01 && scene.music.is_some() {
             self.draw_red_dot(cx - width / 2.0 + 38.0, height / 2.0, 3.0, alpha);
         } else if unread_bell(scene) {
-            // At the far right, past the clock.
-            let (x, y) = (right - 14.0 - BELL_ROOM / 2.0 + 2.0, height / 2.0);
+            let (x, y) = (right - 22.0, height / 2.0);
             self.light.SetOpacity(0.9 * alpha);
             // It swings from its top.
             self.tilted_at(x, y - 6.0, scene.bell_angle, || {
@@ -4204,24 +4224,7 @@ impl Renderer {
         text(status.date, &self.subtitle_text, left, 63.0, room, 0.85);
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
-            match self.battery_style {
-                BatteryStyle::Ring | BatteryStyle::Number => {
-                    self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha)
-                }
-                BatteryStyle::IconNumber | BatteryStyle::Icon => {
-                    let _ = draw_battery_icon(
-                        &self.factory,
-                        &self.target,
-                        &self.accent,
-                        left,
-                        cy,
-                        0.75,
-                        percent,
-                        charging,
-                        alpha,
-                    );
-                }
-            }
+            self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
             let label = if charging {
                 format!("{percent}% \u{b7} mengisi")
             } else {
@@ -4940,66 +4943,6 @@ impl Renderer {
         self.target.PopAxisAlignedClip();
     }
 
-    /// The battery in the chosen style, from `x` and centred on `cy`, with
-    /// the ring at `radius`. Returns its width; at zero `alpha` it only measures.
-    unsafe fn battery_mark(
-        &self,
-        x: f32,
-        cy: f32,
-        radius: f32,
-        percent: u32,
-        charging: bool,
-        alpha: f32,
-    ) -> f32 {
-        let style = self.battery_style;
-        let icon = matches!(style, BatteryStyle::IconNumber | BatteryStyle::Icon);
-        let mut width = 0.0;
-        if icon {
-            if alpha > 0.0 {
-                let _ = draw_battery_icon(
-                    &self.factory,
-                    &self.target,
-                    &self.accent,
-                    x,
-                    cy,
-                    1.0,
-                    percent,
-                    charging,
-                    alpha,
-                );
-            }
-            width = BATTERY_ICON.0;
-        } else if style == BatteryStyle::Ring {
-            if alpha > 0.0 {
-                self.draw_battery(x + radius, cy, radius, percent, charging, alpha);
-            }
-            width = 2.0 * radius;
-        }
-        if matches!(style, BatteryStyle::IconNumber | BatteryStyle::Number) {
-            let gap = if icon { 4.0 } else { 0.0 };
-            let label = format!("{percent}%");
-            if let Some(text) = self.text_layout(&label, &self.battery_text, 40.0) {
-                if alpha > 0.0 {
-                    let (fill, opacity) = if percent <= 20 && !charging {
-                        (accent_color(Accent::Red), 1.0)
-                    } else {
-                        (color(1.0, 1.0, 1.0, 1.0), 0.9)
-                    };
-                    self.accent.SetColor(&fill);
-                    self.accent.SetOpacity(opacity * alpha);
-                    self.target.DrawTextLayout(
-                        pt(x + width + gap, cy - text.height / 2.0),
-                        &text.layout,
-                        &self.accent,
-                        D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    );
-                }
-                width += gap + text.width;
-            }
-        }
-        width
-    }
-
     /// The charge as a ring: green, with a bolt inside while charging, and
     /// red when low on battery.
     unsafe fn draw_battery(
@@ -5219,21 +5162,7 @@ impl Renderer {
             scene.height / scene.closed_scale,
         );
         let bounds = rect(cx - width / 2.0, 0.0, cx + width / 2.0, height);
-        // The clock stays on the right; only music, whose strip and controls
-        // take the sides, brings it to the middle.
-        let music_peek = if scene.music.is_some() { peek } else { 0.0 };
-        let middle = music_peek.max(scene.music_visible).clamp(0.0, 1.0);
-        if let Some(clock) = self.text_layout(scene.clock, &self.bold_left, 80.0) {
-            // The notifications' bell, when there is one, takes the far right.
-            let bell = if scene.inbox.unread && unread_bell(scene) {
-                BELL_ROOM
-            } else {
-                0.0
-            };
-            let side = bounds.right - 14.0 - bell - clock.width;
-            let x = side + (cx - clock.width / 2.0 - side) * middle;
-            self.draw_layout(&clock.layout, x, (height - clock.height) / 2.0, alpha);
-        }
+        self.draw_text(scene.clock, &self.text, bounds, alpha);
         // Widened with music on, the notch offers the controls.
         if let Some(music) = scene.music.as_ref().filter(|_| peek > 0.01) {
             let (x0, x1, cy) = (bounds.left, bounds.right, height / 2.0);
@@ -5241,32 +5170,54 @@ impl Renderer {
             return;
         }
 
-        // With nothing live beside it, the battery sits on the left.
+        // With nothing live beside it, the clock sits between the battery and
+        // the temperature.
         let alpha = alpha * (1.0 - scene.music_visible).clamp(0.0, 1.0);
         if alpha <= 0.01 {
             return;
         }
         let cy = height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            self.battery_mark(bounds.left + 14.0, cy, 6.5, percent, charging, alpha);
+            self.draw_battery(bounds.left + 21.0, cy, 6.5, percent, charging, alpha);
         }
-        // Widened, the middle shows the day and date, or a prayer close at
-        // hand with its name and wait.
-        let opacity = 0.85 * alpha * peek * peek;
-        if opacity <= 0.01 {
-            return;
-        }
-        if let Some((name, wait)) = scene.prayer_soon.as_ref() {
-            let name = self.text_layout(name, &self.small_left, 90.0);
-            let wait = self.text_layout(wait, &self.bold_left, 80.0);
-            if let (Some(name), Some(wait)) = (name, wait) {
-                let x = cx - (name.width + 6.0 + wait.width) / 2.0;
-                self.draw_layout(&name.layout, x, cy - name.height / 2.0, opacity);
-                let x = x + name.width + 6.0;
-                self.draw_layout(&wait.layout, x, cy - wait.height / 2.0, opacity);
+        // On the right the temperature. Widened, the weather joins it, or a
+        // prayer close at hand takes its place with its name and wait.
+        let weather = scene
+            .status
+            .weather
+            .as_ref()
+            .map(|weather| (weather.temperature.as_str(), weather.description));
+        let prayer = scene
+            .prayer_soon
+            .as_ref()
+            .map(|(name, wait)| (wait.as_str(), *name));
+        let right = if peek >= 0.5 {
+            prayer.or(weather)
+        } else {
+            weather
+        };
+        // The temperature fades out as the prayer fades in.
+        let fade = if prayer.is_some() {
+            (2.0 * peek - 1.0).abs()
+        } else {
+            1.0
+        };
+        if let Some((value, label)) = right.filter(|_| !(scene.inbox.unread && unread_bell(scene)))
+        {
+            if let Some(text) = self.text_layout(value, &self.bold_left, 56.0) {
+                let x = bounds.right - 14.0 - text.width;
+                self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha * fade);
+                if let Some(sky) = self.text_layout(label, &self.small_left, 90.0) {
+                    let x = x - 7.0 - sky.width;
+                    let opacity = 0.75 * alpha * peek * peek * fade;
+                    self.draw_layout(&sky.layout, x, cy - sky.height / 2.0, opacity);
+                }
             }
-        } else if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 160.0) {
-            let x = cx - date.width / 2.0;
+        }
+        // Widened: the day and date on the clock's left.
+        if let Some(date) = self.text_layout(scene.status.date, &self.small_left, 120.0) {
+            let x = cx - 32.0 - date.width;
+            let opacity = 0.85 * alpha * peek * peek;
             self.draw_layout(&date.layout, x, cy - date.height / 2.0, opacity);
         }
     }
@@ -5314,167 +5265,11 @@ fn pt(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
 }
 
-/// Size of the battery icon at scale 1, its tip included.
-pub const BATTERY_ICON: (f32, f32) = (20.5, 9.0);
-
-/// The charge's colour: green, yellow from half down, red when low; green
-/// while charging.
-pub fn battery_color(percent: u32, charging: bool) -> D2D1_COLOR_F {
-    if charging || percent > 50 {
-        accent_color(Accent::Green)
-    } else if percent > 20 {
-        color(1.0, 0.8, 0.04, 1.0)
-    } else {
-        accent_color(Accent::Red)
-    }
-}
-
-/// An outlined battery filled to `percent`, from `x` and centred on `cy`,
-/// with a bolt over it while charging. `brush` is recoloured.
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn draw_battery_icon(
-    factory: &ID2D1Factory,
-    target: &ID2D1RenderTarget,
-    brush: &ID2D1SolidColorBrush,
-    x: f32,
-    cy: f32,
-    scale: f32,
-    percent: u32,
-    charging: bool,
-    alpha: f32,
-) -> Result<()> {
-    let (width, height) = (18.0 * scale, BATTERY_ICON.1 * scale);
-    let body = rect(x, cy - height / 2.0, x + width, cy + height / 2.0);
-    brush.SetColor(&color(1.0, 1.0, 1.0, 1.0));
-    brush.SetOpacity(0.45 * alpha);
-    target.DrawRoundedRectangle(
-        &D2D1_ROUNDED_RECT {
-            rect: rect(
-                body.left + 0.5,
-                body.top + 0.5,
-                body.right - 0.5,
-                body.bottom - 0.5,
-            ),
-            radiusX: 2.6 * scale,
-            radiusY: 2.6 * scale,
-        },
-        brush,
-        1.1 * scale.max(1.0),
-        None,
-    );
-    let tip = 1.8 * scale;
-    target.FillRoundedRectangle(
-        &D2D1_ROUNDED_RECT {
-            rect: rect(
-                body.right + 0.8,
-                cy - 2.0 * scale,
-                body.right + 0.8 + tip,
-                cy + 2.0 * scale,
-            ),
-            radiusX: tip / 2.0,
-            radiusY: tip / 2.0,
-        },
-        brush,
-    );
-    let inset = 2.0 * scale;
-    let full = width - 2.0 * inset;
-    let level = full * (percent.min(100) as f32 / 100.0).max(0.08);
-    brush.SetColor(&battery_color(percent, charging));
-    brush.SetOpacity(alpha);
-    target.FillRoundedRectangle(
-        &D2D1_ROUNDED_RECT {
-            rect: rect(
-                body.left + inset,
-                body.top + inset,
-                body.left + inset + level,
-                body.bottom - inset,
-            ),
-            radiusX: 1.2 * scale,
-            radiusY: 1.2 * scale,
-        },
-        brush,
-    );
-    if charging {
-        const BOLT: [(f32, f32); 6] = [
-            (0.25, -1.0),
-            (-0.6, 0.18),
-            (-0.05, 0.18),
-            (-0.25, 1.0),
-            (0.6, -0.18),
-            (0.05, -0.18),
-        ];
-        let size = height * 0.62;
-        let (bx, by) = (body.left + width / 2.0, cy);
-        let geometry = factory.CreatePathGeometry()?;
-        let sink = geometry.Open()?;
-        let point = |(px, py): (f32, f32)| pt(bx + px * size, by + py * size);
-        sink.BeginFigure(point(BOLT[0]), D2D1_FIGURE_BEGIN_FILLED);
-        BOLT[1..]
-            .iter()
-            .for_each(|&corner| sink.AddLine(point(corner)));
-        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink.Close()?;
-        brush.SetColor(&color(0.0, 0.0, 0.0, 1.0));
-        brush.SetOpacity(0.85 * alpha);
-        target.DrawGeometry(&geometry, brush, 1.6 * scale, None);
-        brush.SetColor(&color(1.0, 1.0, 1.0, 1.0));
-        brush.SetOpacity(alpha);
-        target.FillGeometry(&geometry, brush, None);
-    }
-    Ok(())
-}
-
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
 
 /// Quarter-circle corner, drawn clockwise.
-/// The notch's outline, `w` by `h` and centred on `cx` from the top. Joined
-/// to the screen's edge it flares out into it; floating it is a pill.
-pub unsafe fn notch_outline(
-    factory: &ID2D1Factory,
-    cx: f32,
-    w: f32,
-    h: f32,
-    floating: bool,
-) -> Result<ID2D1PathGeometry> {
-    let (x0, x1) = (cx - w / 2.0, cx + w / 2.0);
-    let r = (h / 2.0).min(24.0);
-    let ear = EAR.min(h - r);
-
-    let geometry = factory.CreatePathGeometry()?;
-    let sink = geometry.Open()?;
-    if floating {
-        sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-        sink.AddLine(pt(x1 - r, 0.0));
-        sink.AddArc(&arc(pt(x1, r), r));
-    } else {
-        sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-        sink.AddLine(pt(x1 + ear, 0.0));
-        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-            point1: pt(x1, 0.0),
-            point2: pt(x1, ear),
-        });
-    }
-    sink.AddLine(pt(x1, h - r));
-    sink.AddArc(&arc(pt(x1 - r, h), r));
-    sink.AddLine(pt(x0 + r, h));
-    sink.AddArc(&arc(pt(x0, h - r), r));
-    if floating {
-        sink.AddLine(pt(x0, r));
-        sink.AddArc(&arc(pt(x0 + r, 0.0), r));
-    } else {
-        sink.AddLine(pt(x0, ear));
-        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-            point1: pt(x0, 0.0),
-            point2: pt(x0 - ear, 0.0),
-        });
-    }
-    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-    sink.Close()?;
-    Ok(geometry)
-}
-
 fn arc(end: Vector2, radius: f32) -> D2D1_ARC_SEGMENT {
     D2D1_ARC_SEGMENT {
         point: end,

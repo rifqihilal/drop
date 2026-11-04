@@ -13,23 +13,20 @@ use std::ffi::c_void;
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
-    D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
-    DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -62,10 +59,9 @@ use windows::Win32::System::SystemServices::MK_LBUTTON;
 
 use windows_numerics::Matrix3x2;
 
-use crate::anim::{COMPACT, COMPACT_LARGE, COMPACT_SMALL};
-use crate::config::{self, BatteryStyle, NotchSize, Settings};
+use crate::config::{self, NotchSize, Settings};
 use crate::geo::{self, Place};
-use crate::{autostart, prayer, render, tray};
+use crate::{autostart, prayer, tray};
 
 /// Sent to the notch window after the settings were saved.
 pub const SAVED_MSG: u32 = WM_APP + 6;
@@ -126,21 +122,6 @@ const ELEVATION_FIELD: Rect = Rect::new(430.0, 142.0, RIGHT, 172.0);
 const LATITUDE_FIELD: Rect = Rect::new(LEFT, 194.0, 418.0, 224.0);
 const LONGITUDE_FIELD: Rect = Rect::new(430.0, 194.0, RIGHT, 224.0);
 const PREVIEW: Rect = Rect::new(LEFT, 232.0, RIGHT, 310.0);
-/// The Notch page's pickers, each a row of tiles that preview their choice:
-/// the heading's top, under it the tiles' top.
-const STYLE_PICKER: f32 = 50.0;
-const SIZE_PICKER: f32 = 156.0;
-const BATTERY_PICKER: f32 = 262.0;
-const PICKER_HEADING: f32 = 22.0;
-const TILE_HEIGHT: f32 = 76.0;
-const TILE_GAP: f32 = 8.0;
-/// Under a tile's preview, its label.
-const TILE_LABEL: f32 = 22.0;
-/// Logical pixels between the floating notch and the screen's top.
-const FLOAT_GAP: f32 = 8.0;
-/// What the previews show: a time and a charge.
-const PREVIEW_CLOCK: &str = "10.34";
-const PREVIEW_PERCENT: u32 = 64;
 /// Where the Sholat page's rows start, under the location block.
 const PRAYER_TOP: f32 = 318.0;
 
@@ -154,8 +135,7 @@ const TOGGLE_COUNT: usize = 29;
 const FIRST_HEALTH: usize = 14;
 
 const PAGE_GENERAL: usize = 0;
-const PAGE_NOTCH: usize = 1;
-const PAGE_PRAYER: usize = 9;
+const PAGE_PRAYER: usize = 8;
 
 enum Row {
     Switch {
@@ -166,6 +146,16 @@ enum Row {
     Field {
         id: usize,
         width: f32,
+        title: &'static str,
+        note: &'static str,
+    },
+    /// The notch size, picked from [`SIZES`].
+    Size {
+        title: &'static str,
+        note: &'static str,
+    },
+    /// The notch's style, picked from [`STYLES`].
+    Style {
         title: &'static str,
         note: &'static str,
     },
@@ -181,13 +171,9 @@ const SIZES: [(&str, NotchSize); 3] = [
     ("Normal", NotchSize::Normal),
     ("Besar", NotchSize::Large),
 ];
+const SIZE_WIDTH: f32 = 60.0;
 const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
-const BATTERIES: [(&str, BatteryStyle); 4] = [
-    ("Ikon + %", BatteryStyle::IconNumber),
-    ("Ikon", BatteryStyle::Icon),
-    ("Lingkaran", BatteryStyle::Ring),
-    ("Angka", BatteryStyle::Number),
-];
+const STYLE_WIDTH: f32 = 90.0;
 /// The slider's track, and the steps its value moves in.
 const SLIDER_WIDTH: f32 = 170.0;
 const SLIDER_STEP: u32 = 5;
@@ -206,15 +192,32 @@ struct Page {
     groups: &'static [Group],
 }
 
-static PAGES: [Page; 12] = [
+static PAGES: [Page; 11] = [
     Page {
         title: "General",
         glyph: "\u{E713}",
         color: 0x8e8e93,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Umum",
+            title: "Notch",
             rows: &[
+                Row::Style {
+                    title: "Style notch",
+                    note: "Menempel di tepi atas, atau mengambang",
+                },
+                Row::Size {
+                    title: "Ukuran notch",
+                    note: "Cuma notch tertutup, kartu tetap",
+                },
+                Row::Fill {
+                    title: "Transparansi notch",
+                    note: "0 paling tembus, tetap terlihat",
+                },
+                Row::Switch {
+                    toggle: 17,
+                    title: "Notch minimal",
+                    note: "Bar hitam tipis saat tertutup, tab browser tetap kelihatan",
+                },
                 Row::Switch {
                     toggle: 11,
                     title: "Mata saat idle",
@@ -230,26 +233,6 @@ static PAGES: [Page; 12] = [
                     toggle: 5,
                     title: "Start bareng Windows",
                     note: "Drop kebuka sendiri setelah masuk Windows",
-                },
-            ],
-        }],
-    },
-    Page {
-        title: "Notch",
-        glyph: "\u{E7F4}",
-        color: 0x5e5ce6,
-        top: BATTERY_PICKER + PICKER_HEADING + TILE_HEIGHT + 10.0,
-        groups: &[Group {
-            title: "Tampilan",
-            rows: &[
-                Row::Fill {
-                    title: "Transparansi notch",
-                    note: "0 paling tembus, tetap terlihat",
-                },
-                Row::Switch {
-                    toggle: 17,
-                    title: "Notch minimal",
-                    note: "Bar hitam tipis saat tertutup, tab browser tetap kelihatan",
                 },
             ],
         }],
@@ -525,8 +508,6 @@ const SIDEBAR_FILL: u32 = 0x161616;
 const SURFACE: u32 = 0x2a2a2a;
 const FIELD: u32 = 0x3a3a3a;
 const BORDER: u32 = 0x3d3d3d;
-/// The desktop behind the previewed notch.
-const SCREEN: u32 = 0x34425e;
 const ACCENT: u32 = 0x4cc2ff;
 const SWITCH_ON: u32 = 0x30d158;
 
@@ -592,21 +573,18 @@ fn group_end(page: &Page, row_bottom: f32) -> f32 {
         .unwrap_or(row_bottom)
 }
 
-/// The closed notch's size at `size`.
-fn notch_size(size: NotchSize) -> (f32, f32) {
-    match size {
-        NotchSize::Small => COMPACT_SMALL,
-        NotchSize::Normal => COMPACT,
-        NotchSize::Large => COMPACT_LARGE,
-    }
+/// Segment `index` of the size picker at the right end of a row.
+fn size_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - SIZE_WIDTH * (SIZES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + SIZE_WIDTH, cy + 15.0)
 }
 
-/// Tile `index` of `count` in the picker whose heading starts at `top`.
-fn tile(top: f32, count: usize, index: usize) -> Rect {
-    let width = (RIGHT - LEFT - TILE_GAP * (count - 1) as f32) / count as f32;
-    let left = LEFT + index as f32 * (width + TILE_GAP);
-    let top = top + PICKER_HEADING;
-    Rect::new(left, top, left + width, top + TILE_HEIGHT)
+/// Segment `index` of the style picker at the right end of a row.
+fn style_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - STYLE_WIDTH * (STYLES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + STYLE_WIDTH, cy + 15.0)
 }
 
 /// The slider's track at the right end of a row.
@@ -674,10 +652,6 @@ struct Fonts {
     button_left: IDWriteTextFormat,
     time: IDWriteTextFormat,
     glyph: IDWriteTextFormat,
-    /// The previews' clock and percentage, in the notch's typeface.
-    notch_battery: IDWriteTextFormat,
-    notch_bold: IDWriteTextFormat,
-    dwrite: IDWriteFactory,
 }
 
 struct Window {
@@ -706,7 +680,6 @@ struct Window {
     /// The mouse is on the close button.
     close_hover: bool,
     notch_floating: bool,
-    battery_style: BatteryStyle,
     /// Kept as it was: the form does not show it.
     usage_week: bool,
     status: String,
@@ -975,7 +948,6 @@ impl Window {
             notch_size: settings.notch_size,
             notch_fill: settings.notch_fill,
             notch_floating: settings.notch_floating,
-            battery_style: settings.battery_style,
             usage_week: settings.usage_week,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
@@ -1242,7 +1214,6 @@ impl Window {
             notch_size: self.notch_size,
             notch_fill: self.notch_fill,
             notch_floating: self.notch_floating,
-            battery_style: self.battery_style,
         })
     }
 
@@ -1298,27 +1269,24 @@ impl Window {
         })
     }
 
-    /// The tile under a point in the picker at `top`, out of `count`.
-    fn tile_at(&self, top: f32, count: usize, x: f32, y: f32) -> Option<usize> {
-        if self.page != PAGE_NOTCH {
-            return None;
-        }
-        (0..count).find(|&i| tile(top, count, i).contains(x, y))
-    }
-
+    /// The size under a point on the current page.
     fn size_at(&self, x: f32, y: f32) -> Option<NotchSize> {
-        self.tile_at(SIZE_PICKER, SIZES.len(), x, y)
-            .map(|i| SIZES[i].1)
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Size { .. } => (0..SIZES.len())
+                .find(|&i| size_segment(rect, i).contains(x, y))
+                .map(|i| SIZES[i].1),
+            _ => None,
+        })
     }
 
-    fn battery_at(&self, x: f32, y: f32) -> Option<BatteryStyle> {
-        self.tile_at(BATTERY_PICKER, BATTERIES.len(), x, y)
-            .map(|i| BATTERIES[i].1)
-    }
-
+    /// The style under a point on the current page.
     fn style_at(&self, x: f32, y: f32) -> Option<bool> {
-        self.tile_at(STYLE_PICKER, STYLES.len(), x, y)
-            .map(|i| STYLES[i].1)
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Style { .. } => (0..STYLES.len())
+                .find(|&i| style_segment(rect, i).contains(x, y))
+                .map(|i| STYLES[i].1),
+            _ => None,
+        })
     }
 
     /// Moves the slider to `x` if (`x`, `y`) is on it, putting a new value
@@ -1373,10 +1341,6 @@ impl Window {
             self.notch_size = size;
             self.invalidate();
             self.apply_live();
-        } else if let Some(style) = self.battery_at(x, y) {
-            self.battery_style = style;
-            self.invalidate();
-            self.apply_live();
         } else if let Some(index) = self.toggle_at(x, y) {
             self.toggles[index] = !self.toggles[index];
             self.invalidate();
@@ -1398,7 +1362,6 @@ impl Window {
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
             || self.style_at(x, y).is_some()
-            || self.battery_at(x, y).is_some()
             || rows(&PAGES[self.page]).any(|(rect, row)| {
                 matches!(row, Row::Fill { .. }) && slider_track(rect).contains(x, y)
             })
@@ -1421,9 +1384,6 @@ impl Window {
         self.text_at(page.title, &self.fonts.title, TITLE, 0xffffff, 1.0);
         if self.page == PAGE_PRAYER {
             self.location();
-        }
-        if self.page == PAGE_NOTCH {
-            let _ = self.notch_pickers();
         }
         self.page_groups(page);
         // Fields under an open dropdown are hidden, and so is their chrome.
@@ -1529,6 +1489,11 @@ impl Window {
                 Row::Field {
                     title, note, width, ..
                 } => (*title, *note, rect.right - 32.0 - width),
+                Row::Size { title, note } => {
+                    let width = SIZE_WIDTH * SIZES.len() as f32;
+                    (*title, *note, rect.right - 32.0 - width)
+                }
+                Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
                 Row::Fill { title, note } => (*title, *note, slider_track(rect).left - 56.0),
             };
             let title_box = Rect::new(
@@ -1544,8 +1509,36 @@ impl Window {
                 rect.bottom - 5.0,
             );
             self.text_at(title, &f.body, title_box, 0xffffff, 0.95);
+            if let Row::Style { .. } = row {
+                let track = Rect {
+                    right: style_segment(rect, STYLES.len() - 1).right,
+                    ..style_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, floating)) in STYLES.iter().enumerate() {
+                    let segment = style_segment(rect, index);
+                    if *floating == self.notch_floating {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
+            }
             if let Row::Fill { .. } = row {
                 self.slider(slider_track(rect));
+            }
+            if let Row::Size { .. } = row {
+                let track = Rect {
+                    right: size_segment(rect, SIZES.len() - 1).right,
+                    ..size_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, size)) in SIZES.iter().enumerate() {
+                    let segment = size_segment(rect, index);
+                    if *size == self.notch_size {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
             }
             if let Row::Switch { toggle, .. } = row {
                 let minutes = toggle
@@ -1570,250 +1563,6 @@ impl Window {
                 self.text_at(note, &f.small, note_box, 0xffffff, 0.55);
             }
         }
-    }
-
-    /// The Notch page's three pickers: each choice a tile previewing the
-    /// closed notch with it, the others as they are set.
-    unsafe fn notch_pickers(&self) -> windows::core::Result<()> {
-        let f = &self.fonts;
-        for (top, title) in [
-            (STYLE_PICKER, "Style notch"),
-            (SIZE_PICKER, "Ukuran notch"),
-            (BATTERY_PICKER, "Baterai"),
-        ] {
-            let heading = Rect::new(LEFT + 2.0, top, RIGHT, top + PICKER_HEADING - 4.0);
-            self.text_at(title, &f.section, heading, 0xffffff, 0.7);
-        }
-        for (index, (label, floating)) in STYLES.iter().enumerate() {
-            let tile = tile(STYLE_PICKER, STYLES.len(), index);
-            self.picker_tile(tile, label, *floating == self.notch_floating);
-            let size = notch_size(self.notch_size);
-            self.mini_notch(tile, 1.0, size, *floating, self.battery_style)?;
-        }
-        for (index, (label, size)) in SIZES.iter().enumerate() {
-            let tile = tile(SIZE_PICKER, SIZES.len(), index);
-            self.picker_tile(tile, label, *size == self.notch_size);
-            let size = notch_size(*size);
-            self.mini_notch(tile, 0.75, size, self.notch_floating, self.battery_style)?;
-        }
-        for (index, (label, style)) in BATTERIES.iter().enumerate() {
-            let tile = tile(BATTERY_PICKER, BATTERIES.len(), index);
-            self.picker_tile(tile, label, *style == self.battery_style);
-            self.mini_battery(tile, *style)?;
-        }
-        Ok(())
-    }
-
-    /// A tile's frame and label, outlined when it is the one chosen.
-    unsafe fn picker_tile(&self, tile: Rect, label: &str, chosen: bool) {
-        self.rounded(tile, 10.0, if chosen { FIELD } else { SURFACE }, 1.0);
-        if chosen {
-            self.brush.SetColor(&rgb(ACCENT, 1.0));
-            self.target.DrawRoundedRectangle(
-                &D2D1_ROUNDED_RECT {
-                    rect: Rect::new(
-                        tile.left + 1.0,
-                        tile.top + 1.0,
-                        tile.right - 1.0,
-                        tile.bottom - 1.0,
-                    )
-                    .d2d(),
-                    radiusX: 9.0,
-                    radiusY: 9.0,
-                },
-                &self.brush,
-                2.0,
-                None,
-            );
-        }
-        let text = Rect::new(
-            tile.left,
-            tile.bottom - TILE_LABEL - 2.0,
-            tile.right,
-            tile.bottom - 2.0,
-        );
-        let alpha = if chosen { 1.0 } else { 0.7 };
-        self.text_at(label, &self.fonts.button, text, 0xffffff, alpha);
-    }
-
-    /// The strip of screen at a tile's top that its preview sits on.
-    fn tile_screen(tile: Rect) -> Rect {
-        Rect::new(
-            tile.left + 6.0,
-            tile.top + 6.0,
-            tile.right - 6.0,
-            tile.bottom - TILE_LABEL - 2.0,
-        )
-    }
-
-    /// The closed notch `size` big, drawn `zoom` times life size at the top
-    /// of the tile's screen, with the clock and the battery in `style`.
-    unsafe fn mini_notch(
-        &self,
-        tile: Rect,
-        zoom: f32,
-        (width, height): (f32, f32),
-        floating: bool,
-        style: BatteryStyle,
-    ) -> windows::core::Result<()> {
-        let t = &self.target;
-        let screen = Self::tile_screen(tile);
-        self.rounded(screen, 6.0, SCREEN, 1.0);
-        t.PushAxisAlignedClip(&screen.d2d(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        let cx = (screen.left + screen.right) / 2.0;
-        let gap = if floating { FLOAT_GAP } else { 0.0 };
-        let place = |scale: f32| Matrix3x2 {
-            M11: scale,
-            M12: 0.0,
-            M21: 0.0,
-            M22: scale,
-            M31: cx,
-            M32: TITLE_BAR + screen.top + gap * zoom,
-        };
-        t.SetTransform(&place(zoom));
-        let outline = render::notch_outline(&self.factory, 0.0, width, height, floating)?;
-        let opacity = Settings {
-            notch_fill: self.notch_fill,
-            ..Settings::default()
-        }
-        .notch_opacity();
-        self.brush.SetColor(&rgb(0x000000, opacity));
-        t.FillGeometry(&outline, &self.brush, None);
-
-        // Inside, at the notch's own scale as the notch draws it.
-        let scale = height / COMPACT.1;
-        t.SetTransform(&place(zoom * scale));
-        let (half, h) = (width / scale / 2.0, COMPACT.1);
-        let clock = self.fonts.measure(PREVIEW_CLOCK, &self.fonts.notch_bold);
-        let clock = Rect::new(half - 14.0 - clock, 0.0, half, h);
-        self.text_at(PREVIEW_CLOCK, &self.fonts.notch_bold, clock, 0xffffff, 1.0);
-        self.preview_battery(-half + 14.0, h / 2.0, style)?;
-
-        t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR));
-        t.PopAxisAlignedClip();
-        Ok(())
-    }
-
-    /// The battery in `style` alone, larger, on a piece of notch.
-    unsafe fn mini_battery(&self, tile: Rect, style: BatteryStyle) -> windows::core::Result<()> {
-        let t = &self.target;
-        let screen = Self::tile_screen(tile);
-        self.rounded(screen, 6.0, SCREEN, 1.0);
-        let zoom = 1.3;
-        let width = self.battery_width(style);
-        let (cx, cy) = (
-            (screen.left + screen.right) / 2.0,
-            (screen.top + screen.bottom) / 2.0,
-        );
-        let pill = Rect::new(
-            cx - (width / 2.0 + 10.0) * zoom,
-            cy - 13.0 * zoom,
-            cx + (width / 2.0 + 10.0) * zoom,
-            cy + 13.0 * zoom,
-        );
-        self.rounded(pill, 13.0 * zoom, 0x000000, 1.0);
-        t.SetTransform(&Matrix3x2 {
-            M11: zoom,
-            M12: 0.0,
-            M21: 0.0,
-            M22: zoom,
-            M31: cx,
-            M32: TITLE_BAR + cy,
-        });
-        self.preview_battery(-width / 2.0, 0.0, style)?;
-        t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR));
-        Ok(())
-    }
-
-    /// How wide the battery is drawn in `style`, at the notch's scale.
-    unsafe fn battery_width(&self, style: BatteryStyle) -> f32 {
-        let number = || {
-            self.fonts
-                .measure(&format!("{PREVIEW_PERCENT}%"), &self.fonts.notch_battery)
-        };
-        match style {
-            BatteryStyle::IconNumber => render::BATTERY_ICON.0 + 4.0 + number(),
-            BatteryStyle::Icon => render::BATTERY_ICON.0,
-            BatteryStyle::Ring => 13.0,
-            BatteryStyle::Number => number(),
-        }
-    }
-
-    /// The battery in `style`, from `x` and centred on `cy`.
-    unsafe fn preview_battery(
-        &self,
-        x: f32,
-        cy: f32,
-        style: BatteryStyle,
-    ) -> windows::core::Result<()> {
-        let t = &self.target;
-        let percent = PREVIEW_PERCENT;
-        let mut right = x;
-        match style {
-            BatteryStyle::IconNumber | BatteryStyle::Icon => {
-                render::draw_battery_icon(
-                    &self.factory,
-                    t,
-                    &self.brush,
-                    x,
-                    cy,
-                    1.0,
-                    percent,
-                    false,
-                    1.0,
-                )?;
-                right += render::BATTERY_ICON.0 + 4.0;
-            }
-            BatteryStyle::Ring => {
-                let radius = 6.5;
-                let (rx, stroke) = (x + radius, 2.0);
-                let ellipse = D2D1_ELLIPSE {
-                    point: windows_numerics::Vector2 { X: rx, Y: cy },
-                    radiusX: radius,
-                    radiusY: radius,
-                };
-                self.brush.SetColor(&rgb(0xffffff, 0.14));
-                t.DrawEllipse(&ellipse, &self.brush, stroke, None);
-                let angle = percent as f32 / 100.0 * std::f32::consts::TAU;
-                let geometry = self.factory.CreatePathGeometry()?;
-                let sink = geometry.Open()?;
-                sink.BeginFigure(
-                    windows_numerics::Vector2 {
-                        X: rx,
-                        Y: cy - radius,
-                    },
-                    D2D1_FIGURE_BEGIN_HOLLOW,
-                );
-                sink.AddArc(&D2D1_ARC_SEGMENT {
-                    point: windows_numerics::Vector2 {
-                        X: rx + radius * angle.sin(),
-                        Y: cy - radius * angle.cos(),
-                    },
-                    size: D2D_SIZE_F {
-                        width: radius,
-                        height: radius,
-                    },
-                    rotationAngle: 0.0,
-                    sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-                    arcSize: if percent > 50 {
-                        D2D1_ARC_SIZE_LARGE
-                    } else {
-                        D2D1_ARC_SIZE_SMALL
-                    },
-                });
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-                sink.Close()?;
-                self.brush.SetColor(&rgb(0xffffff, 1.0));
-                t.DrawGeometry(&geometry, &self.brush, stroke, None);
-            }
-            BatteryStyle::Number => {}
-        }
-        if matches!(style, BatteryStyle::IconNumber | BatteryStyle::Number) {
-            let label = Rect::new(right, cy - 10.0, right + 40.0, cy + 10.0);
-            let text = format!("{percent}%");
-            self.text_at(&text, &self.fonts.notch_battery, label, 0xffffff, 0.9);
-        }
-        Ok(())
     }
 
     unsafe fn preview_card(&self) {
@@ -2095,27 +1844,6 @@ impl Fonts {
         let make = |weight: DWRITE_FONT_WEIGHT, size: f32, align: DWRITE_TEXT_ALIGNMENT| {
             make_in(w!("Segoe UI Variable Text"), weight, size, align)
         };
-        let bundled = render::bundled_font(&dwrite).ok();
-        let notch = |weight: DWRITE_FONT_WEIGHT, size: f32, align: DWRITE_TEXT_ALIGNMENT| {
-            let family = if bundled.is_some() {
-                w!("Plus Jakarta Sans")
-            } else {
-                w!("Segoe UI Variable Display")
-            };
-            let format = dwrite.CreateTextFormat(
-                family,
-                bundled.as_ref(),
-                weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("id-id"),
-            )?;
-            format.SetTextAlignment(align)?;
-            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-            Ok::<_, windows::core::Error>(format)
-        };
         let lead = DWRITE_TEXT_ALIGNMENT_LEADING;
         Ok(Self {
             title: make(DWRITE_FONT_WEIGHT_SEMI_BOLD, 18.0, lead)?,
@@ -2135,20 +1863,7 @@ impl Fonts {
                 14.0,
                 DWRITE_TEXT_ALIGNMENT_CENTER,
             )?,
-            notch_battery: notch(DWRITE_FONT_WEIGHT_SEMI_BOLD, 11.5, lead)?,
-            notch_bold: notch(DWRITE_FONT_WEIGHT_BOLD, 13.0, lead)?,
-            dwrite,
         })
-    }
-
-    /// How wide `text` is in `format`.
-    unsafe fn measure(&self, text: &str, format: &IDWriteTextFormat) -> f32 {
-        let wide: Vec<u16> = text.encode_utf16().collect();
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        self.dwrite
-            .CreateTextLayout(&wide, format, 200.0, 50.0)
-            .and_then(|layout| layout.GetMetrics(&mut metrics))
-            .map_or(0.0, |_| metrics.width)
     }
 }
 
@@ -2354,7 +2069,7 @@ mod tests {
             .flat_map(rows)
             .filter_map(|(_, row)| match row {
                 Row::Switch { toggle, .. } => Some(*toggle),
-                Row::Field { .. } | Row::Fill { .. } => None,
+                Row::Field { .. } | Row::Size { .. } | Row::Style { .. } | Row::Fill { .. } => None,
             })
             .collect()
     }
