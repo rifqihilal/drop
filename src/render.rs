@@ -269,6 +269,15 @@ fn prayer_sky(now: u32, times: &[u32; 5]) -> Sky {
     blend(start.1, end.1, t)
 }
 
+/// "2j 15m", "45m": how long the battery lasts, short enough for the label.
+fn battery_time(minutes: u32) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}j"),
+        (h, m) => format!("{h}j {m}m"),
+    }
+}
+
 fn sky_colors(hour: u32) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
     match hour {
         4..=6 => (color(0.2, 0.25, 0.55, 1.0), color(0.85, 0.45, 0.3, 1.0)),
@@ -1111,6 +1120,8 @@ pub struct StatusScene<'a> {
     pub weather_hint: &'a str,
     /// Charge and whether it is charging; None without a battery.
     pub battery: Option<(u32, bool)>,
+    /// Minutes the battery lasts at this rate, while discharging.
+    pub battery_left: Option<u32>,
 }
 
 pub struct WeatherScene<'a> {
@@ -4225,10 +4236,12 @@ impl Renderer {
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
             self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
-            let label = if charging {
-                format!("{percent}% \u{b7} mengisi")
-            } else {
-                format!("{percent}%")
+            let label = match (charging, status.battery_left) {
+                (true, _) => format!("{percent}% \u{b7} mengisi"),
+                (false, Some(minutes)) => {
+                    format!("{percent}% \u{b7} {} lagi", battery_time(minutes))
+                }
+                (false, None) => format!("{percent}%"),
             };
             text(
                 &label,
@@ -5287,6 +5300,13 @@ fn arc(end: Vector2, radius: f32) -> D2D1_ARC_SEGMENT {
 mod tests {
     use super::*;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+    #[test]
+    fn battery_time_stays_short() {
+        assert_eq!(battery_time(135), "2j 15m");
+        assert_eq!(battery_time(120), "2j");
+        assert_eq!(battery_time(45), "45m");
+    }
 
     #[test]
     fn the_sky_follows_the_day() {

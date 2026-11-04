@@ -230,6 +230,11 @@ static PAGES: [Page; 11] = [
                     note: "Menit tanpa aktivitas, 1 sampai 120",
                 },
                 Row::Switch {
+                    toggle: 27,
+                    title: "Indikator kamera dan mic",
+                    note: "Notch kecil di kanan saat kamera atau mic dipakai",
+                },
+                Row::Switch {
                     toggle: 5,
                     title: "Start bareng Windows",
                     note: "Drop kebuka sendiri setelah masuk Windows",
@@ -284,22 +289,17 @@ static PAGES: [Page; 11] = [
                 Row::Switch {
                     toggle: 2,
                     title: "Battery",
-                    note: "Kabarin saat dicas, dilepas, dan baterai hampir habis",
+                    note: "Kabarin saat dicas, dilepas, penuh, dan hampir habis",
+                },
+                Row::Switch {
+                    toggle: 28,
+                    title: "Ingatkan di 80%",
+                    note: "Saran cabut charger biar baterai awet",
                 },
                 Row::Switch {
                     toggle: 26,
                     title: "Mic mute dan unmute",
                     note: "Kabarin saat mikrofon dimatikan atau dinyalakan",
-                },
-                Row::Switch {
-                    toggle: 27,
-                    title: "Indikator kamera dan mic",
-                    note: "Notch kecil di kanan saat kamera atau mic dipakai",
-                },
-                Row::Switch {
-                    toggle: 28,
-                    title: "Sembunyikan flyout ASUS",
-                    note: "Tutup AsusOSD, flyout tombol ASUS lain ikut hilang",
                 },
                 Row::Switch {
                     toggle: 19,
@@ -938,7 +938,7 @@ impl Window {
                 settings.follow_dnd,
                 settings.notify_mic,
                 settings.privacy_dots,
-                settings.hide_asus_flyout,
+                settings.charge_limit,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -1189,7 +1189,7 @@ impl Window {
             follow_dnd: self.toggles[25],
             notify_mic: self.toggles[26],
             privacy_dots: self.toggles[27],
-            hide_asus_flyout: self.toggles[28],
+            charge_limit: self.toggles[28],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),

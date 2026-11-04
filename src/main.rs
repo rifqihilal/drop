@@ -2170,11 +2170,7 @@ impl App {
     /// a new prayer location with a notice.
     fn apply_settings(&mut self, announce: bool) {
         let before = self.settings.prayer();
-        let flyout_hidden = self.settings.hide_asus_flyout;
         self.settings = Settings::load();
-        if self.settings.hide_asus_flyout && !flyout_hidden {
-            system::close_asus_flyout();
-        }
         let moved = self.settings.prayer() != before;
         dragdrop::set_accepting(self.settings.module_shelf);
         self.notch.bounce = self.settings.card_bounce;
@@ -2498,6 +2494,14 @@ impl App {
                     return;
                 };
                 let on_battery = self.on_ac == Some(false);
+                let crossed = |level: u32| previous < level && percent >= level;
+                if self.on_ac == Some(true) && self.settings.notify_battery {
+                    if crossed(100) {
+                        self.notify(notices::battery_full());
+                    } else if crossed(80) && self.settings.charge_limit {
+                        self.notify(notices::battery_limit(percent));
+                    }
+                }
                 if on_battery
                     && self.settings.notify_battery
                     && LOW_BATTERY
@@ -2689,6 +2693,7 @@ impl App {
                 weather_hint: self.weather_hint(),
                 // A cheap call, and drawing happens only on changes.
                 battery: system::battery_status(),
+                battery_left: system::battery_minutes_left(),
             },
         };
         let _ = self.renderer.present(self.hwnd, self.origin(), &scene);
@@ -3280,6 +3285,33 @@ mod notices {
         }
     }
 
+    /// Charged to 80%, where stopping keeps the battery healthy longer.
+    pub fn battery_limit(percent: u32) -> Notice {
+        Notice {
+            icon: glyph::battery(percent),
+            motion: Motion::Flash,
+            accent: Accent::Green,
+            progress: percent as f32 / 100.0,
+            title: format!("Battery {percent}%"),
+            subtitle: "Cabut charger biar baterai awet".to_string(),
+            trailing: Trailing::Text(format!("{percent}%")),
+            dim: false,
+        }
+    }
+
+    pub fn battery_full() -> Notice {
+        Notice {
+            icon: glyph::battery(100),
+            motion: Motion::Flash,
+            accent: Accent::Green,
+            progress: 1.0,
+            title: "Battery penuh".to_string(),
+            subtitle: "Charger boleh dicabut".to_string(),
+            trailing: Trailing::Text("100%".to_string()),
+            dim: false,
+        }
+    }
+
     pub fn low_battery(percent: u32) -> Notice {
         Notice {
             icon: glyph::battery(percent),
@@ -3369,7 +3401,9 @@ mod notices {
 
     /// `--demo` cycles through sample notices to preview their look.
     pub fn demo(index: usize) -> Notice {
-        match index % 12 {
+        match index % 14 {
+            12 => battery_limit(80),
+            13 => battery_full(),
             10 => charger(true, 62),
             11 => charger(false, 62),
             9 => health(Kind::Stretch, 50),
