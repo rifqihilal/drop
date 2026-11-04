@@ -18,15 +18,16 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, ID2D1GradientStopCollection,
-    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
-    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_ROUND,
-    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
-    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND,
-    D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE,
+    D2D1_ARC_SIZE_SMALL, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_CAP_STYLE_FLAT,
+    D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_CUSTOM, D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_GAMMA_2_2,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_LINE_JOIN_ROUND, D2D1_QUADRATIC_BEZIER_SEGMENT,
+    D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteTextFormat,
@@ -65,6 +66,7 @@ use crate::anim::{
     CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, IDLE, LEVEL, LYRIC_CARD_EXTRA, LYRIC_STRIP_MAX,
     NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
+use crate::config::BatteryStyle;
 use crate::media::Command;
 use crate::notifications::AppNotice;
 use crate::todo::Task;
@@ -182,6 +184,92 @@ fn greeting(hour: u32) -> &'static str {
 }
 
 /// The sky at `hour`, top to bottom, for the home panel.
+/// The prayer page's sky: its top and its foot, and how much it is night.
+#[derive(Debug)]
+struct Sky {
+    top: D2D1_COLOR_F,
+    bottom: D2D1_COLOR_F,
+    night: f32,
+}
+
+/// Stars on the night sky: across, down (0..1 of the sky above the
+/// horizon), and size.
+const STARS: [(f32, f32, f32); 12] = [
+    (0.08, 0.55, 0.8),
+    (0.18, 0.18, 1.0),
+    (0.27, 0.62, 0.7),
+    (0.36, 0.3, 0.9),
+    (0.46, 0.12, 0.7),
+    (0.52, 0.5, 1.0),
+    (0.63, 0.22, 0.8),
+    (0.7, 0.6, 0.7),
+    (0.78, 0.38, 1.0),
+    (0.86, 0.15, 0.7),
+    (0.92, 0.48, 0.9),
+    (0.4, 0.75, 0.6),
+];
+
+/// The sky at `now`, eased between colours set around today's prayer
+/// `times` (Subuh, Dzuhur, Ashar, Maghrib, Isya, in minutes).
+fn prayer_sky(now: u32, times: &[u32; 5]) -> Sky {
+    let rgb = |r: f32, g: f32, b: f32| [r, g, b];
+    let night = (rgb(0.03, 0.05, 0.16), rgb(0.1, 0.12, 0.3), 1.0);
+    let [subuh, dzuhur, ashar, maghrib, isya] = times.map(|time| time as f32);
+    // Sunrise comes about an hour and a quarter after Subuh.
+    let keys = [
+        (subuh - 50.0, night),
+        (subuh, (rgb(0.1, 0.1, 0.32), rgb(0.42, 0.25, 0.48), 0.7)),
+        (
+            subuh + 70.0,
+            (rgb(0.22, 0.32, 0.62), rgb(0.95, 0.55, 0.36), 0.0),
+        ),
+        (
+            subuh + 150.0,
+            (rgb(0.17, 0.45, 0.85), rgb(0.5, 0.74, 0.95), 0.0),
+        ),
+        (dzuhur, (rgb(0.06, 0.4, 0.86), rgb(0.3, 0.62, 0.98), 0.0)),
+        (ashar, (rgb(0.14, 0.42, 0.8), rgb(0.62, 0.72, 0.82), 0.0)),
+        (
+            maghrib - 30.0,
+            (rgb(0.24, 0.32, 0.62), rgb(0.98, 0.6, 0.32), 0.0),
+        ),
+        (maghrib, (rgb(0.26, 0.2, 0.5), rgb(0.95, 0.42, 0.34), 0.1)),
+        (
+            maghrib + 25.0,
+            (rgb(0.12, 0.1, 0.34), rgb(0.48, 0.22, 0.44), 0.6),
+        ),
+        (isya, night),
+    ];
+    let now = now as f32;
+    let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let blend = |from: ([f32; 3], [f32; 3], f32), to: ([f32; 3], [f32; 3], f32), t: f32| {
+        let t = t * t * (3.0 - 2.0 * t);
+        let pick = |a: [f32; 3], b: [f32; 3]| {
+            color(
+                mix(a[0], b[0], t),
+                mix(a[1], b[1], t),
+                mix(a[2], b[2], t),
+                1.0,
+            )
+        };
+        Sky {
+            top: pick(from.0, to.0),
+            bottom: pick(from.1, to.1),
+            night: mix(from.2, to.2, t),
+        }
+    };
+    if now <= keys[0].0 || now >= keys[keys.len() - 1].0 {
+        return blend(night, night, 0.0);
+    }
+    let after = keys
+        .iter()
+        .position(|key| key.0 > now)
+        .unwrap_or(keys.len() - 1);
+    let (start, end) = (keys[after - 1], keys[after]);
+    let t = ((now - start.0) / (end.0 - start.0).max(1.0)).clamp(0.0, 1.0);
+    blend(start.1, end.1, t)
+}
+
 fn sky_colors(hour: u32) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
     match hour {
         4..=6 => (color(0.2, 0.25, 0.55, 1.0), color(0.85, 0.45, 0.3, 1.0)),
@@ -378,7 +466,7 @@ fn visible_square(pixels: &[u8], width: usize, height: usize) -> (usize, usize, 
 static FONT: &[u8] = include_bytes!("../assets/fonts/PlusJakartaSans.ttf");
 
 /// Makes the carried typeface available to DirectWrite, from memory.
-unsafe fn bundled_font(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+pub unsafe fn bundled_font(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
     let factory: IDWriteFactory5 = dwrite.cast()?;
     let loader = factory.CreateInMemoryFontFileLoader()?;
     factory.RegisterFontFileLoader(&loader)?;
@@ -889,6 +977,10 @@ pub struct PrayerScene {
     pub progress: f32,
     /// The sun's place on its path: 0 at Subuh, 4 at Isya.
     pub sun: f32,
+    /// Minutes since midnight now, and today's five times in minutes, which
+    /// set the sky's colour.
+    pub now: u32,
+    pub minutes: [u32; 5],
 }
 
 pub struct ShelfScene<'a> {
@@ -1073,7 +1165,6 @@ pub struct Renderer {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     target: ID2D1DCRenderTarget,
-    text: IDWriteTextFormat,
     small_text: IDWriteTextFormat,
     title_text: IDWriteTextFormat,
     subtitle_text: IDWriteTextFormat,
@@ -1090,6 +1181,12 @@ pub struct Renderer {
     tile_text: IDWriteTextFormat,
     /// Bold left-aligned line: reminders and the lyric strip.
     bold_left: IDWriteTextFormat,
+    /// The battery's percentage beside its icon.
+    battery_text: IDWriteTextFormat,
+    /// The prayer page's next prayer, and the time under each point.
+    prayer_name: IDWriteTextFormat,
+    prayer_time: IDWriteTextFormat,
+    prayer_next: IDWriteTextFormat,
     /// Wrapped lyrics: the line being sung, and those around it.
     lyric_text: IDWriteTextFormat,
     lyric_next: IDWriteTextFormat,
@@ -1110,6 +1207,7 @@ pub struct Renderer {
     round_caps: ID2D1StrokeStyle,
     /// The page's margin on each side of the open card.
     card_side: f32,
+    battery_style: BatteryStyle,
     /// Album art of the current track, decoded once per song.
     art: Option<ID2D1Bitmap>,
     /// The art's main colour, for the music card's background.
@@ -1123,6 +1221,8 @@ pub struct Renderer {
     usage_icons: UsageIcons,
     /// Dashed outline of the drop zone.
     dashes: ID2D1StrokeStyle,
+    /// Round dots, for the sun's path still ahead.
+    dots: ID2D1StrokeStyle,
     dc: HDC,
     bitmap: HBITMAP,
     previous: HGDIOBJ,
@@ -1194,6 +1294,18 @@ impl Renderer {
                 },
                 None,
             )?;
+            let dots = factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_CUSTOM,
+                    dashOffset: 0.0,
+                },
+                Some(&[0.0, 3.0]),
+            )?;
             let round_caps = factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -1246,7 +1358,6 @@ impl Renderer {
                 )?;
                 Ok(format)
             };
-            let text = format(font, DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
             let small_text = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0)?;
             let icons = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 15.0)?;
             let title_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.5)?;
@@ -1255,6 +1366,10 @@ impl Renderer {
             let small_left = line(DWRITE_FONT_WEIGHT_NORMAL, 11.5)?;
             let text_left = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?;
             let bold_left = line(DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
+            let battery_text = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 11.5)?;
+            let prayer_name = line(DWRITE_FONT_WEIGHT_BOLD, 18.0)?;
+            let prayer_time = format(font, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.5)?;
+            let prayer_next = format(font, DWRITE_FONT_WEIGHT_BOLD, 14.0)?;
             let big_clock = line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?;
             let tiny = format(font, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?;
             let tile_text = line(DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
@@ -1278,7 +1393,6 @@ impl Renderer {
                 factory,
                 dwrite,
                 target,
-                text,
                 small_text,
                 title_text,
                 subtitle_text,
@@ -1289,6 +1403,10 @@ impl Renderer {
                 tiny,
                 tile_text,
                 bold_left,
+                battery_text,
+                prayer_name,
+                prayer_time,
+                prayer_next,
                 lyric_text,
                 lyric_next,
                 close_glyph,
@@ -1301,6 +1419,7 @@ impl Renderer {
                 accent,
                 round_caps,
                 card_side: CARD_SIDE,
+                battery_style: BatteryStyle::default(),
                 art: None,
                 art_tint: None,
                 strip_stops: RefCell::new(None),
@@ -1308,6 +1427,7 @@ impl Renderer {
                 logos: Vec::new(),
                 usage_icons: Vec::new(),
                 dashes,
+                dots,
                 dc,
                 bitmap,
                 previous,
@@ -1319,6 +1439,11 @@ impl Renderer {
     /// Whether the open card keeps room for its side arrows.
     pub fn set_arrows(&mut self, arrows: bool) {
         self.card_side = if arrows { CARD_SIDE } else { CARD_SIDE_BARE };
+    }
+
+    /// How the closed notch and the card's header show the battery.
+    pub fn set_battery_style(&mut self, style: BatteryStyle) {
+        self.battery_style = style;
     }
 
     /// A point on the open card (its `y`, and the card's `width`) as the page
@@ -1373,39 +1498,7 @@ impl Renderer {
         let cx = CANVAS.0 / 2.0;
         let (w, h) = (scene.width, scene.height);
         let (x0, x1) = (cx - w / 2.0, cx + w / 2.0);
-        let r = (h / 2.0).min(24.0);
-        let ear = EAR.min(h - r);
-
-        let geometry = self.factory.CreatePathGeometry()?;
-        let sink = geometry.Open()?;
-        if scene.floating {
-            sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-            sink.AddLine(pt(x1 - r, 0.0));
-            sink.AddArc(&arc(pt(x1, r), r));
-        } else {
-            sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-            sink.AddLine(pt(x1 + ear, 0.0));
-            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-                point1: pt(x1, 0.0),
-                point2: pt(x1, ear),
-            });
-        }
-        sink.AddLine(pt(x1, h - r));
-        sink.AddArc(&arc(pt(x1 - r, h), r));
-        sink.AddLine(pt(x0 + r, h));
-        sink.AddArc(&arc(pt(x0, h - r), r));
-        if scene.floating {
-            sink.AddLine(pt(x0, r));
-            sink.AddArc(&arc(pt(x0 + r, 0.0), r));
-        } else {
-            sink.AddLine(pt(x0, ear));
-            sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-                point1: pt(x0, 0.0),
-                point2: pt(x0 - ear, 0.0),
-            });
-        }
-        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink.Close()?;
+        let geometry = notch_outline(&self.factory, cx, w, h, scene.floating)?;
 
         self.black.SetOpacity(scene.notch_opacity);
         self.target.FillGeometry(&geometry, &self.black, None);
@@ -2319,16 +2412,15 @@ impl Renderer {
         let (Some(date), Some(time)) = (date, time) else {
             return;
         };
-        let ring = if scene.status.battery.is_some() {
-            20.0
-        } else {
-            0.0
-        };
-        let total = ring + date.width + 8.0 + time.width;
+        let battery = scene.status.battery;
+        let mark = battery.map_or(0.0, |(percent, charging)| {
+            self.battery_mark(0.0, cy, 6.0, percent, charging, 0.0) + 8.0
+        });
+        let total = mark + date.width + 8.0 + time.width;
         let mut x = (x0 + x1) / 2.0 - total / 2.0;
-        if let Some((percent, charging)) = scene.status.battery {
-            self.draw_battery(x + 6.0, cy, 6.0, percent, charging, alpha);
-            x += ring;
+        if let Some((percent, charging)) = battery {
+            self.battery_mark(x, cy, 6.0, percent, charging, alpha);
+            x += mark;
         }
         self.draw_layout(&date.layout, x, cy - date.height / 2.0, 0.75 * alpha);
         x += date.width + 8.0;
@@ -3303,7 +3395,7 @@ impl Renderer {
     }
 
     /// Tells the closed notch there are notifications to see: a bell in the
-    /// temperature's place, or only the dot where the notch shows other things.
+    /// middle, or only the dot where the notch shows other things.
     unsafe fn draw_unread(&self, scene: &Scene) {
         let alpha = (1.0 - scene.banner_visible.max(scene.card_visible) * 1.6).clamp(0.0, 1.0);
         if !scene.inbox.unread || alpha <= 0.0 {
@@ -3319,7 +3411,9 @@ impl Renderer {
         if scene.peek_visible > 0.01 && scene.music.is_some() {
             self.draw_red_dot(cx - width / 2.0 + 38.0, height / 2.0, 3.0, alpha);
         } else if unread_bell(scene) {
-            let (x, y) = (right - 22.0, height / 2.0);
+            // Widened, the clock comes to the middle and the bell gives way.
+            let alpha = alpha * (1.0 - scene.peek_visible).clamp(0.0, 1.0);
+            let (x, y) = (cx, height / 2.0);
             self.light.SetOpacity(0.9 * alpha);
             // It swings from its top.
             self.tilted_at(x, y - 6.0, scene.bell_angle, || {
@@ -3762,147 +3856,227 @@ impl Renderer {
         }
     }
 
-    /// The next prayer and the wait for it on the left; today's times along
-    /// the sun's path on the right.
+    /// The whole page is a sky in the colours of the hour. The next prayer
+    /// and its wait sit at the top, the sun's path through today's five in
+    /// the middle, and their names and times in a row under the horizon.
     unsafe fn draw_prayer_card(&self, prayer: &PrayerScene, x0: f32, x1: f32, alpha: f32) {
-        let left = x0 + 16.0;
-        let caption = if prayer.next_today.is_none() {
-            "Next, besok"
-        } else {
-            "Next"
-        };
-        if let Some(text) = self.text_layout(caption, &self.subtitle_text, 150.0) {
-            self.draw_layout(&text.layout, left, 14.0, 0.55 * alpha);
+        let panel = rect(x0 + 6.0, 2.0, x1 - 6.0, 144.0);
+        let sky = prayer_sky(prayer.now, &prayer.minutes);
+        if let Ok(fill) = self.gradient(
+            pt(0.0, panel.top),
+            pt(0.0, panel.bottom),
+            &[(0.0, sky.top), (0.72, sky.bottom), (1.0, sky.bottom)],
+        ) {
+            fill.SetOpacity(alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: panel,
+                    radiusX: 16.0,
+                    radiusY: 16.0,
+                },
+                &fill,
+            );
         }
-        if let Some(text) = self.text_layout(prayer.next_name, &self.big_clock, 150.0) {
-            self.draw_layout(&text.layout, left, 30.0, alpha);
-        }
-        self.accent.SetColor(&accent_color(Accent::Blue));
-        self.accent.SetOpacity(alpha);
-        if let Some(time) = self.text_layout(&prayer.next_time, &self.text_left, 60.0) {
-            let cy = 84.0;
-            self.draw_layout(&time.layout, left, cy - time.height / 2.0, alpha);
-            let wait = format!("dalam {}", prayer.wait);
-            if let Some(text) = self.text_layout(&wait, &self.small_left, 104.0) {
-                self.target.DrawTextLayout(
-                    pt(left + time.width + 8.0, cy - text.height / 2.0),
-                    &text.layout,
-                    &self.accent,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+        self.target
+            .PushAxisAlignedClip(&panel, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+        // Stars come out at night.
+        if sky.night > 0.01 {
+            for (fx, fy, size) in STARS {
+                self.light.SetOpacity(0.7 * sky.night * alpha);
+                let (x, y) = (
+                    panel.left + fx * (panel.right - panel.left),
+                    panel.top + fy * 90.0,
+                );
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x, y),
+                        radiusX: size,
+                        radiusY: size,
+                    },
+                    &self.light,
                 );
             }
         }
-        let bar = |right: f32, brush: &ID2D1SolidColorBrush| {
-            self.target.FillRoundedRectangle(
-                &D2D1_ROUNDED_RECT {
-                    rect: rect(left, 104.0, right, 108.0),
-                    radiusX: 2.0,
-                    radiusY: 2.0,
-                },
-                brush,
-            );
-        };
-        self.light.SetOpacity(0.14 * alpha);
-        bar(left + 150.0, &self.light);
-        bar(left + 150.0 * prayer.progress.clamp(0.0, 1.0), &self.accent);
 
-        // The sun's path, one evenly spaced column per prayer.
-        let first = x0 + 176.0;
-        let column = (x1 - 16.0 - first) / 5.0;
-        let at_x = |position: f32| first + column * (position + 0.5);
-        let (base, rise) = (100.0, 68.0);
+        // The ground under the horizon, a little darker than the sky.
+        let base = 96.0;
+        self.black.SetOpacity(0.22 * alpha);
+        self.target.FillRectangle(
+            &rect(panel.left, base, panel.right, panel.bottom),
+            &self.black,
+        );
+        self.black.SetOpacity(1.0);
+        self.light.SetOpacity(0.3 * alpha);
+        self.target.FillRectangle(
+            &rect(panel.left, base, panel.right, base + 1.0),
+            &self.light,
+        );
+
+        // The sun's path: walked solid, still ahead dotted.
+        let (first, last) = (panel.left + 34.0, panel.right - 34.0);
+        let at_x = |position: f32| first + (last - first) * position / 4.0;
+        let rise = 46.0;
         let at_y = |position: f32| base - rise * sun_arc(position);
-        let _ = self.draw_sun_path(&at_x, &at_y, base, base - rise, alpha);
+        let _ = self.draw_sun_path(&at_x, &at_y, prayer.sun, alpha);
+
         for index in 0..5 {
             let position = index as f32;
-            let opacity = if position <= prayer.sun { 0.95 } else { 0.5 };
+            let (x, y) = (at_x(position), at_y(position));
+            let next = prayer.next_today == Some(index);
+            let passed = position <= prayer.sun && !next;
+            let opacity = if passed || next { 0.95 } else { 0.55 };
             self.light.SetOpacity(opacity * alpha);
+            let radius = if next { 4.0 } else { 3.0 };
             self.target.FillEllipse(
                 &D2D1_ELLIPSE {
-                    point: pt(at_x(position), at_y(position)),
-                    radiusX: 3.0,
-                    radiusY: 3.0,
-                },
-                &self.light,
-            );
-        }
-        // The sun itself, softly glowing.
-        self.accent.SetColor(&color(1.0, 0.82, 0.45, 1.0));
-        for (radius, opacity) in [(13.0, 0.14), (9.0, 0.3), (5.5, 1.0)] {
-            self.accent.SetOpacity(opacity * alpha);
-            self.target.FillEllipse(
-                &D2D1_ELLIPSE {
-                    point: pt(at_x(prayer.sun), at_y(prayer.sun)),
+                    point: pt(x, y),
                     radiusX: radius,
                     radiusY: radius,
                 },
-                &self.accent,
+                &self.light,
             );
+            if next {
+                self.light.SetOpacity(0.6 * alpha);
+                self.target.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x, y),
+                        radiusX: 7.5,
+                        radiusY: 7.5,
+                    },
+                    &self.light,
+                    1.4,
+                    None,
+                );
+            }
+            // Under the horizon, in the point's column; the next one bright.
+            let label = if next {
+                1.0
+            } else if passed {
+                0.5
+            } else {
+                0.75
+            };
+            let name_box = rect(x - 34.0, base + 6.0, x + 34.0, base + 20.0);
+            let time_box = rect(x - 34.0, base + 20.0, x + 34.0, base + 36.0);
+            self.draw_text(
+                prayer::NAMES[index],
+                &self.tiny,
+                name_box,
+                0.85 * label * alpha,
+            );
+            let format = if next {
+                &self.prayer_next
+            } else {
+                &self.prayer_time
+            };
+            self.draw_text(&prayer.times[index], format, time_box, label * alpha);
         }
 
-        // Today's five, the next one brightest, past ones faded.
-        for (index, name) in prayer::NAMES.iter().enumerate() {
-            let center = at_x(index as f32);
-            let opacity = match prayer.next_today {
-                Some(next) if index == next => 1.0,
-                Some(next) if index > next => 0.75,
-                _ => 0.45,
-            };
-            let name_box = rect(center - 26.0, 110.0, center + 26.0, 125.0);
-            let time_box = rect(name_box.left, 125.0, name_box.right, 140.0);
-            self.draw_text(name, &self.tiny, name_box, 0.8 * opacity * alpha);
-            self.draw_text(&prayer.times[index], &self.tiny, time_box, opacity * alpha);
+        // The sun by day, the moon by night.
+        let (sx, sy) = (at_x(prayer.sun), at_y(prayer.sun));
+        if sky.night < 0.99 {
+            self.accent.SetColor(&color(1.0, 0.84, 0.45, 1.0));
+            for (radius, opacity) in [(15.0, 0.16), (10.0, 0.32), (6.5, 1.0)] {
+                self.accent.SetOpacity(opacity * alpha * (1.0 - sky.night));
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(sx, sy),
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &self.accent,
+                );
+            }
         }
+        if sky.night > 0.01 {
+            let (mx, my) = ((first + last) / 2.0 + 40.0, 30.0);
+            self.accent.SetColor(&color(0.97, 0.95, 0.86, 1.0));
+            self.accent.SetOpacity(0.18 * sky.night * alpha);
+            let disc = |x: f32, y: f32, radius: f32, brush: &ID2D1SolidColorBrush| {
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(x, y),
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    brush,
+                );
+            };
+            disc(mx, my, 14.0, &self.accent);
+            self.accent.SetOpacity(sky.night * alpha);
+            disc(mx, my, 8.0, &self.accent);
+            // The dark side, in the sky's colour there, makes the crescent.
+            let t = ((my - panel.top) / (panel.bottom - panel.top) / 0.72).clamp(0.0, 1.0);
+            let mix = |a: f32, b: f32| a + (b - a) * t;
+            self.accent.SetColor(&color(
+                mix(sky.top.r, sky.bottom.r),
+                mix(sky.top.g, sky.bottom.g),
+                mix(sky.top.b, sky.bottom.b),
+                1.0,
+            ));
+            disc(mx + 3.5, my - 2.5, 7.0, &self.accent);
+        }
+
+        // The next prayer on the left, the wait for it on the right.
+        let left = panel.left + 14.0;
+        let caption = if prayer.next_today.is_none() {
+            "Berikutnya, besok"
+        } else {
+            "Berikutnya"
+        };
+        if let Some(text) = self.text_layout(caption, &self.small_left, 150.0) {
+            self.draw_layout(&text.layout, left, 9.0, 0.8 * alpha);
+        }
+        let mut x = left;
+        if let Some(name) = self.text_layout(prayer.next_name, &self.prayer_name, 150.0) {
+            self.draw_layout(&name.layout, x, 23.0, alpha);
+            x += name.width + 7.0;
+            if let Some(time) = self.text_layout(&prayer.next_time, &self.prayer_name, 80.0) {
+                self.draw_layout(&time.layout, x, 23.0, 0.75 * alpha);
+            }
+        }
+        let wait = format!("{} lagi", prayer.wait);
+        if let Some(text) = self.text_layout(&wait, &self.text_left, 150.0) {
+            let x = panel.right - 14.0 - text.width;
+            self.draw_layout(&text.layout, x, 12.0, alpha);
+        }
+
+        self.target.PopAxisAlignedClip();
     }
 
-    /// The curve and the glow under it, from Subuh to Isya.
+    /// The sun's path from Subuh to Isya: solid up to `sun`, dotted after.
     unsafe fn draw_sun_path(
         &self,
         at_x: &dyn Fn(f32) -> f32,
         at_y: &dyn Fn(f32) -> f32,
-        base: f32,
-        top: f32,
+        sun: f32,
         alpha: f32,
     ) -> Result<()> {
         const STEPS: u32 = 48;
-        let point = |step: u32| {
-            let position = step as f32 * 4.0 / STEPS as f32;
-            pt(at_x(position), at_y(position))
+        let point = |position: f32| pt(at_x(position), at_y(position));
+        let path = |from: f32, to: f32| -> Result<ID2D1PathGeometry> {
+            let geometry = self.factory.CreatePathGeometry()?;
+            let sink = geometry.Open()?;
+            sink.BeginFigure(point(from), D2D1_FIGURE_BEGIN_HOLLOW);
+            for step in 1..=STEPS {
+                sink.AddLine(point(from + (to - from) * step as f32 / STEPS as f32));
+            }
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            Ok(geometry)
         };
-        let area = self.factory.CreatePathGeometry()?;
-        let sink = area.Open()?;
-        sink.BeginFigure(pt(at_x(0.0), base), D2D1_FIGURE_BEGIN_FILLED);
-        (0..=STEPS).for_each(|step| sink.AddLine(point(step)));
-        sink.AddLine(pt(at_x(4.0), base));
-        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink.Close()?;
-        let curve = self.factory.CreatePathGeometry()?;
-        let sink = curve.Open()?;
-        sink.BeginFigure(point(0), D2D1_FIGURE_BEGIN_HOLLOW);
-        (1..=STEPS).for_each(|step| sink.AddLine(point(step)));
-        sink.EndFigure(D2D1_FIGURE_END_OPEN);
-        sink.Close()?;
-
-        let blue = color(0.3, 0.55, 1.0, 1.0);
-        let violet = color(0.62, 0.42, 1.0, 1.0);
-        let glow = self.gradient(
-            pt(0.0, top),
-            pt(0.0, base),
-            &[
-                (0.0, color(0.3, 0.55, 1.0, 0.38)),
-                (1.0, color(0.3, 0.55, 1.0, 0.0)),
-            ],
-        )?;
-        glow.SetOpacity(alpha);
-        self.target.FillGeometry(&area, &glow, None);
-        let line = self.gradient(
-            pt(at_x(0.0), 0.0),
-            pt(at_x(4.0), 0.0),
-            &[(0.0, blue), (1.0, violet)],
-        )?;
-        line.SetOpacity(alpha);
-        self.target
-            .DrawGeometry(&curve, &line, 2.2, &self.round_caps);
+        let sun = sun.clamp(0.0, 4.0);
+        if sun > 0.01 {
+            self.light.SetOpacity(0.85 * alpha);
+            self.target
+                .DrawGeometry(&path(0.0, sun)?, &self.light, 2.0, &self.round_caps);
+        }
+        if sun < 3.99 {
+            self.light.SetOpacity(0.45 * alpha);
+            self.target
+                .DrawGeometry(&path(sun, 4.0)?, &self.light, 1.6, &self.dots);
+        }
         Ok(())
     }
 
@@ -4013,7 +4187,24 @@ impl Renderer {
         text(status.date, &self.subtitle_text, left, 63.0, room, 0.85);
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
-            self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
+            match self.battery_style {
+                BatteryStyle::Ring | BatteryStyle::Number => {
+                    self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha)
+                }
+                BatteryStyle::IconNumber | BatteryStyle::Icon => {
+                    let _ = draw_battery_icon(
+                        &self.factory,
+                        &self.target,
+                        &self.accent,
+                        left,
+                        cy,
+                        0.75,
+                        percent,
+                        charging,
+                        alpha,
+                    );
+                }
+            }
             let label = if charging {
                 format!("{percent}% \u{b7} mengisi")
             } else {
@@ -4556,6 +4747,11 @@ impl Renderer {
 
     /// A page icon, emboldened by DirectWrite: the icon font has one weight.
     unsafe fn draw_nav_icon(&self, icon: &str, cx: f32, cy: f32, brush: &ID2D1SolidColorBrush) {
+        // The icon fonts have no mosque, so the prayer page's is drawn.
+        if icon == glyph::PRAYER {
+            self.scaled_at(cx, cy, 0.7, || self.fill_mosque(cx, cy, brush));
+            return;
+        }
         let wide: Vec<u16> = icon.encode_utf16().collect();
         self.target.DrawText(
             &wide,
@@ -4725,6 +4921,66 @@ impl Renderer {
         }
 
         self.target.PopAxisAlignedClip();
+    }
+
+    /// The battery in the chosen style, from `x` and centred on `cy`, with
+    /// the ring at `radius`. Returns its width; at zero `alpha` it only measures.
+    unsafe fn battery_mark(
+        &self,
+        x: f32,
+        cy: f32,
+        radius: f32,
+        percent: u32,
+        charging: bool,
+        alpha: f32,
+    ) -> f32 {
+        let style = self.battery_style;
+        let icon = matches!(style, BatteryStyle::IconNumber | BatteryStyle::Icon);
+        let mut width = 0.0;
+        if icon {
+            if alpha > 0.0 {
+                let _ = draw_battery_icon(
+                    &self.factory,
+                    &self.target,
+                    &self.accent,
+                    x,
+                    cy,
+                    1.0,
+                    percent,
+                    charging,
+                    alpha,
+                );
+            }
+            width = BATTERY_ICON.0;
+        } else if style == BatteryStyle::Ring {
+            if alpha > 0.0 {
+                self.draw_battery(x + radius, cy, radius, percent, charging, alpha);
+            }
+            width = 2.0 * radius;
+        }
+        if matches!(style, BatteryStyle::IconNumber | BatteryStyle::Number) {
+            let gap = if icon { 4.0 } else { 0.0 };
+            let label = format!("{percent}%");
+            if let Some(text) = self.text_layout(&label, &self.battery_text, 40.0) {
+                if alpha > 0.0 {
+                    let (fill, opacity) = if percent <= 20 && !charging {
+                        (accent_color(Accent::Red), 1.0)
+                    } else {
+                        (color(1.0, 1.0, 1.0, 1.0), 0.9)
+                    };
+                    self.accent.SetColor(&fill);
+                    self.accent.SetOpacity(opacity * alpha);
+                    self.target.DrawTextLayout(
+                        pt(x + width + gap, cy - text.height / 2.0),
+                        &text.layout,
+                        &self.accent,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    );
+                }
+                width += gap + text.width;
+            }
+        }
+        width
     }
 
     /// The charge as a ring: green, with a bolt inside while charging, and
@@ -4946,7 +5202,14 @@ impl Renderer {
             scene.height / scene.closed_scale,
         );
         let bounds = rect(cx - width / 2.0, 0.0, cx + width / 2.0, height);
-        self.draw_text(scene.clock, &self.text, bounds, alpha);
+        // At rest the clock sits on the right; widened or with music it moves
+        // to the middle.
+        let middle = peek.max(scene.music_visible).clamp(0.0, 1.0);
+        if let Some(clock) = self.text_layout(scene.clock, &self.bold_left, 80.0) {
+            let side = bounds.right - 14.0 - clock.width;
+            let x = side + (cx - clock.width / 2.0 - side) * middle;
+            self.draw_layout(&clock.layout, x, (height - clock.height) / 2.0, alpha);
+        }
         // Widened with music on, the notch offers the controls.
         if let Some(music) = scene.music.as_ref().filter(|_| peek > 0.01) {
             let (x0, x1, cy) = (bounds.left, bounds.right, height / 2.0);
@@ -4954,47 +5217,30 @@ impl Renderer {
             return;
         }
 
-        // With nothing live beside it, the clock sits between the battery and
-        // the temperature.
+        // With nothing live beside it, the battery sits on the left.
         let alpha = alpha * (1.0 - scene.music_visible).clamp(0.0, 1.0);
         if alpha <= 0.01 {
             return;
         }
         let cy = height / 2.0;
         if let Some((percent, charging)) = scene.status.battery {
-            self.draw_battery(bounds.left + 21.0, cy, 6.5, percent, charging, alpha);
+            self.battery_mark(bounds.left + 14.0, cy, 6.5, percent, charging, alpha);
         }
-        // On the right the temperature. Widened, the weather joins it, or a
-        // prayer close at hand takes its place with its name and wait.
-        let weather = scene
-            .status
-            .weather
-            .as_ref()
-            .map(|weather| (weather.temperature.as_str(), weather.description));
+        // Widened, a prayer close at hand shows on the right, where the clock
+        // was, with its name and wait.
         let prayer = scene
             .prayer_soon
             .as_ref()
             .map(|(name, wait)| (wait.as_str(), *name));
-        let right = if peek >= 0.5 {
-            prayer.or(weather)
-        } else {
-            weather
-        };
-        // The temperature fades out as the prayer fades in.
-        let fade = if prayer.is_some() {
-            (2.0 * peek - 1.0).abs()
-        } else {
-            1.0
-        };
-        if let Some((value, label)) = right.filter(|_| !(scene.inbox.unread && unread_bell(scene)))
-        {
+        let fade = (2.0 * peek - 1.0).max(0.0);
+        if let Some((value, label)) = prayer.filter(|_| peek >= 0.5) {
             if let Some(text) = self.text_layout(value, &self.bold_left, 56.0) {
                 let x = bounds.right - 14.0 - text.width;
                 self.draw_layout(&text.layout, x, cy - text.height / 2.0, 0.6 * alpha * fade);
-                if let Some(sky) = self.text_layout(label, &self.small_left, 90.0) {
-                    let x = x - 7.0 - sky.width;
+                if let Some(name) = self.text_layout(label, &self.small_left, 90.0) {
+                    let x = x - 7.0 - name.width;
                     let opacity = 0.75 * alpha * peek * peek * fade;
-                    self.draw_layout(&sky.layout, x, cy - sky.height / 2.0, opacity);
+                    self.draw_layout(&name.layout, x, cy - name.height / 2.0, opacity);
                 }
             }
         }
@@ -5049,11 +5295,167 @@ fn pt(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
 }
 
+/// Size of the battery icon at scale 1, its tip included.
+pub const BATTERY_ICON: (f32, f32) = (20.5, 9.0);
+
+/// The charge's colour: green, yellow from half down, red when low; green
+/// while charging.
+pub fn battery_color(percent: u32, charging: bool) -> D2D1_COLOR_F {
+    if charging || percent > 50 {
+        accent_color(Accent::Green)
+    } else if percent > 20 {
+        color(1.0, 0.8, 0.04, 1.0)
+    } else {
+        accent_color(Accent::Red)
+    }
+}
+
+/// An outlined battery filled to `percent`, from `x` and centred on `cy`,
+/// with a bolt over it while charging. `brush` is recoloured.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn draw_battery_icon(
+    factory: &ID2D1Factory,
+    target: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    x: f32,
+    cy: f32,
+    scale: f32,
+    percent: u32,
+    charging: bool,
+    alpha: f32,
+) -> Result<()> {
+    let (width, height) = (18.0 * scale, BATTERY_ICON.1 * scale);
+    let body = rect(x, cy - height / 2.0, x + width, cy + height / 2.0);
+    brush.SetColor(&color(1.0, 1.0, 1.0, 1.0));
+    brush.SetOpacity(0.45 * alpha);
+    target.DrawRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect: rect(
+                body.left + 0.5,
+                body.top + 0.5,
+                body.right - 0.5,
+                body.bottom - 0.5,
+            ),
+            radiusX: 2.6 * scale,
+            radiusY: 2.6 * scale,
+        },
+        brush,
+        1.1 * scale.max(1.0),
+        None,
+    );
+    let tip = 1.8 * scale;
+    target.FillRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect: rect(
+                body.right + 0.8,
+                cy - 2.0 * scale,
+                body.right + 0.8 + tip,
+                cy + 2.0 * scale,
+            ),
+            radiusX: tip / 2.0,
+            radiusY: tip / 2.0,
+        },
+        brush,
+    );
+    let inset = 2.0 * scale;
+    let full = width - 2.0 * inset;
+    let level = full * (percent.min(100) as f32 / 100.0).max(0.08);
+    brush.SetColor(&battery_color(percent, charging));
+    brush.SetOpacity(alpha);
+    target.FillRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect: rect(
+                body.left + inset,
+                body.top + inset,
+                body.left + inset + level,
+                body.bottom - inset,
+            ),
+            radiusX: 1.2 * scale,
+            radiusY: 1.2 * scale,
+        },
+        brush,
+    );
+    if charging {
+        const BOLT: [(f32, f32); 6] = [
+            (0.25, -1.0),
+            (-0.6, 0.18),
+            (-0.05, 0.18),
+            (-0.25, 1.0),
+            (0.6, -0.18),
+            (0.05, -0.18),
+        ];
+        let size = height * 0.62;
+        let (bx, by) = (body.left + width / 2.0, cy);
+        let geometry = factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        let point = |(px, py): (f32, f32)| pt(bx + px * size, by + py * size);
+        sink.BeginFigure(point(BOLT[0]), D2D1_FIGURE_BEGIN_FILLED);
+        BOLT[1..]
+            .iter()
+            .for_each(|&corner| sink.AddLine(point(corner)));
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
+        brush.SetColor(&color(0.0, 0.0, 0.0, 1.0));
+        brush.SetOpacity(0.85 * alpha);
+        target.DrawGeometry(&geometry, brush, 1.6 * scale, None);
+        brush.SetColor(&color(1.0, 1.0, 1.0, 1.0));
+        brush.SetOpacity(alpha);
+        target.FillGeometry(&geometry, brush, None);
+    }
+    Ok(())
+}
+
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
 
 /// Quarter-circle corner, drawn clockwise.
+/// The notch's outline, `w` by `h` and centred on `cx` from the top. Joined
+/// to the screen's edge it flares out into it; floating it is a pill.
+pub unsafe fn notch_outline(
+    factory: &ID2D1Factory,
+    cx: f32,
+    w: f32,
+    h: f32,
+    floating: bool,
+) -> Result<ID2D1PathGeometry> {
+    let (x0, x1) = (cx - w / 2.0, cx + w / 2.0);
+    let r = (h / 2.0).min(24.0);
+    let ear = EAR.min(h - r);
+
+    let geometry = factory.CreatePathGeometry()?;
+    let sink = geometry.Open()?;
+    if floating {
+        sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddLine(pt(x1 - r, 0.0));
+        sink.AddArc(&arc(pt(x1, r), r));
+    } else {
+        sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddLine(pt(x1 + ear, 0.0));
+        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+            point1: pt(x1, 0.0),
+            point2: pt(x1, ear),
+        });
+    }
+    sink.AddLine(pt(x1, h - r));
+    sink.AddArc(&arc(pt(x1 - r, h), r));
+    sink.AddLine(pt(x0 + r, h));
+    sink.AddArc(&arc(pt(x0, h - r), r));
+    if floating {
+        sink.AddLine(pt(x0, r));
+        sink.AddArc(&arc(pt(x0 + r, 0.0), r));
+    } else {
+        sink.AddLine(pt(x0, ear));
+        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+            point1: pt(x0, 0.0),
+            point2: pt(x0 - ear, 0.0),
+        });
+    }
+    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink.Close()?;
+    Ok(geometry)
+}
+
 fn arc(end: Vector2, radius: f32) -> D2D1_ARC_SEGMENT {
     D2D1_ARC_SEGMENT {
         point: end,
@@ -5071,6 +5473,21 @@ fn arc(end: Vector2, radius: f32) -> D2D1_ARC_SEGMENT {
 mod tests {
     use super::*;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+    #[test]
+    fn the_sky_follows_the_day() {
+        let times = [277, 722, 921, 1086, 1157];
+        let brightness = |sky: &Sky| sky.top.r + sky.top.g + sky.top.b;
+        let midnight = prayer_sky(0, &times);
+        let noon = prayer_sky(722, &times);
+        assert_eq!(midnight.night, 1.0);
+        assert_eq!(noon.night, 0.0);
+        assert!(brightness(&noon) > 2.0 * brightness(&midnight));
+        // Sunset glows warm at the horizon.
+        let sunset = prayer_sky(1070, &times);
+        assert!(sunset.bottom.r > sunset.bottom.b);
+        assert_eq!(prayer_sky(1300, &times).night, 1.0);
+    }
 
     #[test]
     fn decodes_jpeg_album_art() {
