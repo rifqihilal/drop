@@ -63,8 +63,8 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::anim::{
     Accent, Content, LevelKind, Notice, Pose, Trailing, AGENDA_ROWS, APP_BANNER, CARD, CARD_BOUNCE,
-    CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, IDLE, LEVEL, LYRIC_CARD_EXTRA, LYRIC_STRIP_MAX,
-    NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
+    CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, FLOAT_GAP, IDLE, LEVEL, LYRIC_CARD_EXTRA,
+    LYRIC_STRIP_MAX, NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
 use crate::media::Command;
 use crate::notifications::AppNotice;
@@ -431,7 +431,8 @@ pub const CANVAS: (f32, f32) = (
         APP_BANNER.1,
         CARD_NAV.1,
         DROP_ZONE.1,
-    ]) + CARD_BOUNCE.1,
+    ]) + CARD_BOUNCE.1
+        + FLOAT_GAP,
 );
 
 /// Album art is decoded at most this many pixels square.
@@ -965,6 +966,10 @@ pub struct Scene<'a> {
     pub notch_opacity: f32,
     /// The notch floats, rounded all round, instead of joining the top edge.
     pub floating: bool,
+    /// How far it has come away from the edge, 0..1: the bar a floating
+    /// notch rests as keeps to the edge and lifts off as it opens. Everything
+    /// is drawn this much of [`FLOAT_GAP`] lower.
+    pub lift: f32,
     /// The open card shows its side arrows.
     pub arrows: bool,
     /// The closed notch's bell's tilt in degrees.
@@ -1600,6 +1605,7 @@ impl Renderer {
             let t = &self.target;
             t.BeginDraw();
             t.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
+            t.SetTransform(&Matrix3x2::translation(0.0, FLOAT_GAP * scene.lift));
             self.draw_shape(scene)?;
             self.draw_eyes(scene)?;
             self.draw_banner(scene);
@@ -1609,6 +1615,7 @@ impl Renderer {
                 self.draw_clock(scene);
                 self.draw_unread(scene);
             });
+            t.SetTransform(&Matrix3x2::identity());
             t.EndDraw(None, None)?;
 
             let blend = BLENDFUNCTION {
@@ -1637,14 +1644,26 @@ impl Renderer {
         let (w, h) = (scene.width, scene.height);
         let (x0, x1) = (cx - w / 2.0, cx + w / 2.0);
         let r = (h / 2.0).min(24.0);
-        let ear = EAR.min(h - r);
+        // Lifting off the edge, the ears shrink away and then the top
+        // corners round, so the shape never jumps.
+        let (ear, top) = if scene.floating {
+            let lift = scene.lift.clamp(0.0, 1.0);
+            (
+                EAR * (1.0 - 2.0 * lift).max(0.0),
+                r * (2.0 * lift - 1.0).max(0.0),
+            )
+        } else {
+            (EAR, 0.0)
+        };
+        let ear = ear.min(h - r);
+        let joined = ear > 0.0 || top <= 0.0;
 
         let geometry = self.factory.CreatePathGeometry()?;
         let sink = geometry.Open()?;
-        if scene.floating {
-            sink.BeginFigure(pt(x0 + r, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-            sink.AddLine(pt(x1 - r, 0.0));
-            sink.AddArc(&arc(pt(x1, r), r));
+        if !joined {
+            sink.BeginFigure(pt(x0 + top, 0.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(x1 - top, 0.0));
+            sink.AddArc(&arc(pt(x1, top), top));
         } else {
             sink.BeginFigure(pt(x0 - ear, 0.0), D2D1_FIGURE_BEGIN_FILLED);
             sink.AddLine(pt(x1 + ear, 0.0));
@@ -1657,9 +1676,9 @@ impl Renderer {
         sink.AddArc(&arc(pt(x1 - r, h), r));
         sink.AddLine(pt(x0 + r, h));
         sink.AddArc(&arc(pt(x0, h - r), r));
-        if scene.floating {
-            sink.AddLine(pt(x0, r));
-            sink.AddArc(&arc(pt(x0 + r, 0.0), r));
+        if !joined {
+            sink.AddLine(pt(x0, top));
+            sink.AddArc(&arc(pt(x0 + top, 0.0), top));
         } else {
             sink.AddLine(pt(x0, ear));
             sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
@@ -2701,33 +2720,21 @@ impl Renderer {
             M31: CANVAS.0 / 2.0 * (1.0 - scale),
             M32: 0.0,
         };
-        self.target.SetTransform(&scaled);
+        let mut current = Matrix3x2::default();
+        self.target.GetTransform(&mut current);
+        self.target.SetTransform(&(scaled * current));
         draw();
-        self.target.SetTransform(&Matrix3x2 {
-            M11: 1.0,
-            M22: 1.0,
-            M31: 0.0,
-            ..scaled
-        });
+        self.target.SetTransform(&current);
     }
 
     /// Draws with everything shifted `dx` to the right and `dy` down.
     unsafe fn with_offset(&self, dx: f32, dy: f32, draw: impl FnOnce()) {
-        let shifted = Matrix3x2 {
-            M11: 1.0,
-            M12: 0.0,
-            M21: 0.0,
-            M22: 1.0,
-            M31: dx,
-            M32: dy,
-        };
-        self.target.SetTransform(&shifted);
+        let shifted = Matrix3x2::translation(dx, dy);
+        let mut current = Matrix3x2::default();
+        self.target.GetTransform(&mut current);
+        self.target.SetTransform(&(shifted * current));
         draw();
-        self.target.SetTransform(&Matrix3x2 {
-            M31: 0.0,
-            M32: 0.0,
-            ..shifted
-        });
+        self.target.SetTransform(&Matrix3x2 { ..current });
     }
 
     /// The phase's progress as a small ring and the time left. With a song

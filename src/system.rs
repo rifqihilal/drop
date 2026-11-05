@@ -16,7 +16,8 @@ use windows::Win32::Foundation::{
     GlobalFree, GENERIC_READ, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, BITMAPINFOHEADER, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MonitorFromWindow, BITMAPINFOHEADER, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory,
@@ -56,9 +57,9 @@ use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState, DROPFILES, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, PostMessageW, SetWindowPos,
-    DEVICE_NOTIFY_WINDOW_HANDLE, EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST, PBT_POWERSETTINGCHANGE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WINEVENT_OUTOFCONTEXT, WM_APP,
+    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, IsZoomed, PostMessageW,
+    SetWindowPos, DEVICE_NOTIFY_WINDOW_HANDLE, EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST,
+    PBT_POWERSETTINGCHANGE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WINEVENT_OUTOFCONTEXT, WM_APP,
 };
 
 /// Volume changed. WPARAM: level in per mille, LPARAM: 1 when muted.
@@ -417,30 +418,48 @@ pub fn stay_on_top(hwnd: HWND) {
     }
 }
 
-/// True while another app fills the notch's monitor (a game, a full-screen
-/// video, a presentation), so the notch can step aside.
-pub fn fullscreen_app(own: HWND) -> bool {
+/// The window in front and its monitor, when it is another app's on the
+/// notch's monitor: not the notch, the taskbar or the desktop.
+fn app_in_front(own: HWND) -> Option<(HWND, HMONITOR)> {
     unsafe {
-        if SHQueryUserNotificationState().is_ok_and(|state| {
-            state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
-        }) {
-            return true;
-        }
         let window = GetForegroundWindow();
         if window.is_invalid() || window == own || window == GetShellWindow() {
-            return false;
+            return None;
         }
         // The desktop itself covers the screen too.
         let mut class = [0u16; 16];
         let length = GetClassNameW(window, &mut class).max(0) as usize;
         let class = String::from_utf16_lossy(&class[..length]);
         if class == "WorkerW" || class == "Progman" {
-            return false;
+            return None;
         }
         let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
-        if monitor != MonitorFromWindow(own, MONITOR_DEFAULTTONEAREST) {
-            return false;
+        (monitor == MonitorFromWindow(own, MONITOR_DEFAULTTONEAREST)).then_some((window, monitor))
+    }
+}
+
+/// True while a game runs in exclusive full screen or Windows is in
+/// presentation mode, when nothing should draw over the screen.
+pub fn exclusive_fullscreen() -> bool {
+    unsafe { SHQueryUserNotificationState() }
+        .is_ok_and(|state| state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE)
+}
+
+/// True while another app's window is maximized on the notch's monitor.
+pub fn maximized_app(own: HWND) -> bool {
+    app_in_front(own).is_some_and(|(window, _)| unsafe { IsZoomed(window).as_bool() })
+}
+
+/// True while another app fills the notch's monitor (a game, a full-screen
+/// video, a presentation), so the notch can step aside.
+pub fn fullscreen_app(own: HWND) -> bool {
+    unsafe {
+        if exclusive_fullscreen() {
+            return true;
         }
+        let Some((window, monitor)) = app_in_front(own) else {
+            return false;
+        };
         let mut info = MONITORINFO {
             cbSize: size_of::<MONITORINFO>() as u32,
             ..Default::default()

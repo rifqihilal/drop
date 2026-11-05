@@ -61,7 +61,7 @@ use windows::Win32::System::SystemServices::MK_LBUTTON;
 
 use windows_numerics::Matrix3x2;
 
-use crate::config::{self, NotchSize, Settings};
+use crate::config::{self, AutoHide, NotchSize, Settings};
 use crate::geo::{self, Place};
 use crate::{autostart, prayer, tray, update};
 
@@ -154,6 +154,11 @@ enum Row {
         title: &'static str,
         note: &'static str,
     },
+    /// When the notch hides for the app in front, picked from [`HIDES`].
+    Hide {
+        title: &'static str,
+        note: &'static str,
+    },
     /// The second clock's zone, picked from [`ZONES`].
     Zone {
         title: &'static str,
@@ -190,6 +195,12 @@ const ZONES: [(&str, Option<f64>); 4] = [
     ("WIT", Some(9.0)),
 ];
 const ZONE_WIDTH: f32 = 58.0;
+const HIDES: [(&str, AutoHide); 3] = [
+    ("Mati", AutoHide::Never),
+    ("Fullscreen", AutoHide::Fullscreen),
+    ("Maximize", AutoHide::Maximized),
+];
+const HIDE_WIDTH: f32 = 80.0;
 const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
 const STYLE_WIDTH: f32 = 90.0;
 /// The slider's track, and the steps its value moves in.
@@ -234,7 +245,11 @@ static PAGES: [Page; 12] = [
                 Row::Switch {
                     toggle: 17,
                     title: "Notch minimal",
-                    note: "Bar hitam tipis saat tertutup, tab browser tetap kelihatan",
+                    note: "Bar hitam tipis yang menempel di atas, tab browser tetap kelihatan",
+                },
+                Row::Hide {
+                    title: "Sembunyi otomatis",
+                    note: "Jadi bar tipis, tidak hilang",
                 },
                 Row::Switch {
                     toggle: 11,
@@ -625,6 +640,12 @@ fn group_end(page: &Page, row_bottom: f32) -> f32 {
 }
 
 /// Segment `index` of the size picker at the right end of a row.
+fn hide_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - HIDE_WIDTH * (HIDES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + HIDE_WIDTH, cy + 15.0)
+}
+
 fn zone_segment(row: Rect, index: usize) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
     let left = row.right - 16.0 - ZONE_WIDTH * (ZONES.len() - index) as f32;
@@ -739,6 +760,7 @@ struct Window {
     notch_floating: bool,
     /// Hours from UTC of the second clock on Home.
     second_zone: Option<f64>,
+    auto_hide: AutoHide,
     /// Kept as it was: the form does not show it.
     usage_week: bool,
     status: String,
@@ -1020,6 +1042,7 @@ impl Window {
             notch_fill: settings.notch_fill,
             notch_floating: settings.notch_floating,
             second_zone: settings.second_zone,
+            auto_hide: settings.auto_hide,
             usage_week: settings.usage_week,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
@@ -1341,6 +1364,7 @@ impl Window {
             notch_fill: self.notch_fill,
             notch_floating: self.notch_floating,
             second_zone: self.second_zone,
+            auto_hide: self.auto_hide,
         })
     }
 
@@ -1397,6 +1421,16 @@ impl Window {
     }
 
     /// The size under a point on the current page.
+    /// The auto-hide choice under a point on the current page.
+    fn hide_at(&self, x: f32, y: f32) -> Option<AutoHide> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Hide { .. } => (0..HIDES.len())
+                .find(|&i| hide_segment(rect, i).contains(x, y))
+                .map(|i| HIDES[i].1),
+            _ => None,
+        })
+    }
+
     /// The second clock's zone under a point on the current page.
     fn zone_at(&self, x: f32, y: f32) -> Option<Option<f64>> {
         rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
@@ -1536,6 +1570,10 @@ impl Window {
             self.invalidate();
             self.apply_live();
         } else if self.slide(x, y) {
+        } else if let Some(hide) = self.hide_at(x, y) {
+            self.auto_hide = hide;
+            self.invalidate();
+            self.apply_live();
         } else if let Some(zone) = self.zone_at(x, y) {
             self.second_zone = zone;
             self.invalidate();
@@ -1569,6 +1607,7 @@ impl Window {
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
             || self.zone_at(x, y).is_some()
+            || self.hide_at(x, y).is_some()
             || self.style_at(x, y).is_some()
             || rows(&PAGES[self.page]).any(|(rect, row)| {
                 matches!(row, Row::Fill { .. }) && slider_track(rect).contains(x, y)
@@ -1731,6 +1770,7 @@ impl Window {
                     (*title, *note, rect.right - 32.0 - width)
                 }
                 Row::Zone { title, note } => (*title, *note, zone_segment(rect, 0).left - 8.0),
+                Row::Hide { title, note } => (*title, *note, hide_segment(rect, 0).left - 8.0),
                 Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
                 Row::Fill { title, note } => (*title, *note, slider_track(rect).left - 56.0),
             };
@@ -1763,6 +1803,20 @@ impl Window {
             }
             if let Row::Fill { .. } = row {
                 self.slider(slider_track(rect));
+            }
+            if let Row::Hide { .. } = row {
+                let track = Rect {
+                    right: hide_segment(rect, HIDES.len() - 1).right,
+                    ..hide_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, hide)) in HIDES.iter().enumerate() {
+                    let segment = hide_segment(rect, index);
+                    if *hide == self.auto_hide {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
             }
             if let Row::Zone { .. } = row {
                 let track = Rect {
@@ -2393,6 +2447,7 @@ mod tests {
                 Row::Field { .. }
                 | Row::Size { .. }
                 | Row::Zone { .. }
+                | Row::Hide { .. }
                 | Row::Style { .. }
                 | Row::Fill { .. } => None,
             })

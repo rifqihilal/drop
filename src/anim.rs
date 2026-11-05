@@ -9,6 +9,8 @@ pub const COMPACT: (f32, f32) = (156.0, 28.0);
 /// The closed notch at the small and large settings.
 pub const COMPACT_SMALL: (f32, f32) = (136.0, 24.0);
 pub const COMPACT_LARGE: (f32, f32) = (184.0, 34.0);
+/// Logical pixels between the floating notch and the screen's top.
+pub const FLOAT_GAP: f32 = 8.0;
 /// Notch size in the minimal setting: a thin bar that leaves browser tabs free.
 pub const MINIMAL: (f32, f32) = (120.0, 6.0);
 /// Notch size while hovered in click-to-open mode: widened for the date.

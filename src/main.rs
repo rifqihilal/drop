@@ -82,12 +82,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
-    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, LYRIC_CARD_EXTRA, LYRIC_STRIP,
-    LYRIC_STRIP_MAX, MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
+    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, FLOAT_GAP, LYRIC_CARD_EXTRA,
+    LYRIC_STRIP, LYRIC_STRIP_MAX, MINIMAL, MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
-use config::{NotchSize, PrayerSettings, Settings};
+use config::{AutoHide, NotchSize, PrayerSettings, Settings};
 use frames::Pacer;
 use health::Health;
 use ical::{Event, IcalWatch};
@@ -116,8 +116,6 @@ const FRAME_MS: u32 = 16;
 const BUSY_MS: u32 = 100;
 /// Wake-up interval while compact: only the idle check and the clock need it.
 const COMPACT_MS: u32 = 500;
-/// Logical pixels between the floating notch and the screen's top.
-const FLOAT_GAP: f32 = 8.0;
 const MENU_QUIT: usize = 1;
 const MENU_AUTOSTART: usize = 2;
 const MENU_MINIMAL: usize = 4;
@@ -241,6 +239,10 @@ struct App {
     month_offset: i32,
     /// The notch is showing (it hides while another app is full screen).
     shown: bool,
+    /// Tucked into the thin bar for a full-screen or maximized app in front.
+    tucked: bool,
+    /// The closed notch's size for the size setting.
+    resting: (f32, f32),
     /// A page switch in progress on the open card.
     page_switch: Option<PageSwitch>,
     /// The page on the open card and when it came into view, for the prayer
@@ -467,6 +469,8 @@ fn main() -> Result<()> {
             page_switch: None,
             page_shown: None,
             shown: true,
+            tucked: false,
+            resting: COMPACT,
             pacer: Pacer::start(hwnd),
             shelf: Shelf::load(),
             drag_over: false,
@@ -582,9 +586,7 @@ impl App {
             }
         }
 
-        let idle = self.settings.module_eyes
-            && !self.settings.notch_minimal
-            && idle_ms() >= self.idle_after_ms;
+        let idle = self.settings.module_eyes && !self.bar() && idle_ms() >= self.idle_after_ms;
         self.notch.set_idle(idle, now);
         if self
             .wifi_lost
@@ -807,7 +809,7 @@ impl App {
     /// timer first, then music that is playing.
     fn strip(&self) -> Strip {
         let modules = &self.settings;
-        if modules.notch_minimal {
+        if self.bar() {
             Strip::None
         } else if modules.module_calendar && self.live_timer().is_some() {
             Strip::Timer
@@ -1431,7 +1433,7 @@ impl App {
         let scale = window_scale(self.hwnd);
         (
             (lparam.0 & 0xffff) as i16 as f32 / scale,
-            ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale,
+            ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale - FLOAT_GAP * self.lift(),
         )
     }
 
@@ -1476,7 +1478,7 @@ impl App {
     fn step_bell(&mut self, now: Instant) -> bool {
         let n = &self.notch;
         let shown = self.unread
-            && !self.settings.notch_minimal
+            && !self.bar()
             && n.banner_visible.value < 0.01
             && n.card_visible.value < 0.01
             && n.music_visible.value < 0.01
@@ -1534,7 +1536,20 @@ impl App {
     fn step_aside_for_fullscreen(&mut self) {
         let banner =
             self.notch.banner_visible.target > 0.0 || self.notch.banner_visible.value > 0.01;
-        let show = banner || !system::fullscreen_app(self.hwnd);
+        // A game or a presentation running exclusively gets the screen alone.
+        let show = banner || !system::exclusive_fullscreen();
+        // For the rest the notch tucks into the thin bar, out of the way.
+        let tucked = match self.settings.auto_hide {
+            AutoHide::Never => false,
+            AutoHide::Fullscreen => system::fullscreen_app(self.hwnd),
+            AutoHide::Maximized => {
+                system::fullscreen_app(self.hwnd) || system::maximized_app(self.hwnd)
+            }
+        };
+        if tucked != self.tucked {
+            self.tucked = tucked;
+            self.notch.set_resting(self.resting, self.bar());
+        }
         if show != self.shown {
             self.shown = show;
             unsafe {
@@ -1975,6 +1990,26 @@ impl App {
         }
     }
 
+    /// Whether the notch rests as the thin bar: set so, or tucked away for
+    /// the app in front.
+    fn bar(&self) -> bool {
+        self.settings.notch_minimal || self.tucked
+    }
+
+    /// How far a floating notch has come away from the screen's edge, 0..1.
+    /// As the bar it keeps to the edge, and lifts off as it opens.
+    fn lift(&self) -> f32 {
+        if !self.settings.notch_floating {
+            return 0.0;
+        }
+        if !self.bar() {
+            return 1.0;
+        }
+        let n = &self.notch;
+        let closed = COMPACT.1 * n.scale;
+        ((n.height.value - MINIMAL.1) / (closed - MINIMAL.1)).clamp(0.0, 1.0)
+    }
+
     /// The camera or microphone icon under the mouse, on their small notch.
     fn privacy_at(&self, (x, y): (f32, f32)) -> Option<usize> {
         if self.notch.card_visible.value > 0.1 || !self.settings.privacy_dots {
@@ -2235,12 +2270,12 @@ impl App {
         self.notch.bounce = self.settings.card_bounce;
         self.renderer.set_arrows(self.settings.card_arrows);
         self.aim_usage_switch();
-        let resting = match self.settings.notch_size {
+        self.resting = match self.settings.notch_size {
             NotchSize::Small => COMPACT_SMALL,
             NotchSize::Normal => COMPACT,
             NotchSize::Large => COMPACT_LARGE,
         };
-        self.notch.set_resting(resting, self.settings.notch_minimal);
+        self.notch.set_resting(self.resting, self.bar());
         let place = self.settings.latitude.zip(self.settings.longitude);
         let weather_place = place.filter(|_| self.settings.weather);
         if weather_place.is_none() {
@@ -2706,9 +2741,10 @@ impl App {
             notice_beat: n.notice_beat,
             notch_opacity: self.settings.notch_opacity(),
             floating: self.settings.notch_floating,
+            lift: self.lift(),
             arrows: self.settings.card_arrows,
             bell_angle: self.bell.angle,
-            minimal: self.settings.notch_minimal,
+            minimal: self.bar(),
             place: &self.settings.city,
             shelf: ShelfScene {
                 items: self.shelf.items(),
@@ -2779,11 +2815,8 @@ impl App {
         let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
         POINT {
             x: (screen_w - self.renderer.size().cx) / 2,
-            y: if self.settings.notch_floating {
-                (FLOAT_GAP * window_scale(self.hwnd)).round() as i32
-            } else {
-                0
-            },
+            // A floating notch is drawn lower in the window instead.
+            y: 0,
         }
     }
 

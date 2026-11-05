@@ -32,6 +32,27 @@ impl NotchSize {
     }
 }
 
+/// When the notch steps aside for the app in front.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum AutoHide {
+    Never,
+    /// A game, a full-screen video or a presentation.
+    #[default]
+    Fullscreen,
+    /// Those, and any maximized window.
+    Maximized,
+}
+
+impl AutoHide {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Never => "tidak",
+            Self::Fullscreen => "fullscreen",
+            Self::Maximized => "maximize",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     /// Place name shown with prayer times.
@@ -92,6 +113,7 @@ pub struct Settings {
     pub notch_fill: u32,
     /// The notch floats below the screen's top edge instead of joining it.
     pub notch_floating: bool,
+    pub auto_hide: AutoHide,
     /// Hours from UTC of a second clock in the card's header, such as 7 for
     /// WIB; None for none.
     pub second_zone: Option<f64>,
@@ -146,6 +168,7 @@ impl Default for Settings {
             notch_size: NotchSize::Normal,
             notch_fill: 100,
             notch_floating: false,
+            auto_hide: AutoHide::Fullscreen,
             second_zone: None,
             ical_urls: Default::default(),
             water: true,
@@ -275,6 +298,8 @@ impl Settings {
              transparansi = {}\n\
              ; Notch mengambang di bawah tepi atas layar, tidak menempel.\n\
              notch_mengambang = {}\n\
+             ; Sembunyikan notch saat app di depan fullscreen, juga saat di-maximize, atau tidak.\n\
+             sembunyi_otomatis = {}\n\
              ; Jam daerah lain di Home: selisih jam dari UTC (7 WIB, 8 WITA, 9 WIT); kosong = mati.\n\
              zona_kedua = {}\n\
              \n\
@@ -330,6 +355,7 @@ impl Settings {
             self.notch_size.name(),
             self.notch_fill,
             flag(self.notch_floating),
+            self.auto_hide.name(),
             number(self.second_zone),
             self.ical_urls[0],
             self.ical_urls[1],
@@ -451,6 +477,13 @@ fn parse(text: &str) -> Settings {
             }
             "transparansi" => s.notch_fill = number().map_or(100, |v| v.clamp(0.0, 100.0) as u32),
             "notch_mengambang" => s.notch_floating = flag(false),
+            "sembunyi_otomatis" => {
+                s.auto_hide = match value.to_lowercase().as_str() {
+                    "tidak" => AutoHide::Never,
+                    "maximize" => AutoHide::Maximized,
+                    _ => AutoHide::Fullscreen,
+                }
+            }
             "zona_kedua" => s.second_zone = number().filter(|&v| valid_zone(v)),
             "ical" => s.ical_urls[0] = value.to_string(),
             "ical2" => s.ical_urls[1] = value.to_string(),
@@ -517,6 +550,7 @@ mod tests {
             notch_size: NotchSize::Large,
             notch_fill: 40,
             notch_floating: true,
+            auto_hide: AutoHide::Maximized,
             second_zone: Some(5.5),
             ical_urls: [
                 "https://calendar.google.com/calendar/ical/x%40gmail.com/private-ab=cd/basic.ics"
