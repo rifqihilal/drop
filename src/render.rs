@@ -114,6 +114,7 @@ fn page_title<'a>(
         Page::Calendar => (month, year, Accent::Red),
         Page::Pomodoro => ("Fokus", "Timer", Accent::Red),
         Page::Todo => ("Daftar", "Tugas", Accent::Green),
+        Page::Calculator => ("Hitung", "Cepat", Accent::Teal),
         Page::Usage => ("Screen", "Time", Accent::Teal),
         Page::Shelf => ("Shelf", "Berkas", Accent::Teal),
         // Their own headings name them, so the header stays empty.
@@ -130,6 +131,7 @@ fn page_glyph(page: Page) -> &'static str {
         Page::Calendar => glyph::CALENDAR,
         Page::Pomodoro => glyph::TIMER,
         Page::Todo => glyph::CHECK,
+        Page::Calculator => glyph::CALCULATOR,
         Page::Usage => glyph::SCREEN,
         Page::Shelf => glyph::FILE,
         Page::Notifications => glyph::BELL,
@@ -275,6 +277,84 @@ fn battery_time(minutes: u32) -> String {
         (0, m) => format!("{m}m"),
         (h, 0) => format!("{h}j"),
         (h, m) => format!("{h}j {m}m"),
+    }
+}
+
+/// The camera and microphone's small notch right of the main one, `width`
+/// by `scale` (the main notch's): its bounds, and each icon's bit and centre.
+/// None while neither is in use.
+fn privacy_pill(
+    width: f32,
+    scale: f32,
+    floating: bool,
+    visible: f32,
+    privacy: usize,
+) -> Option<(D2D_RECT_F, Vec<(usize, f32)>)> {
+    const SIDE: f32 = 17.0;
+    const STEP: f32 = 20.0;
+    const GAP: f32 = 8.0;
+    let bits: Vec<usize> = [crate::privacy::CAMERA, crate::privacy::MIC]
+        .into_iter()
+        .filter(|bit| privacy & bit != 0)
+        .collect();
+    if bits.is_empty() {
+        return None;
+    }
+    let h = PRIVACY_HEIGHT * scale;
+    let ear = if floating { 0.0 } else { EAR };
+    // It slides out from behind the main notch.
+    let left = CANVAS.0 / 2.0 + width / 2.0 + ear + GAP - 14.0 * (1.0 - visible.clamp(0.0, 1.0));
+    let pill_width = 2.0 * SIDE + (bits.len() - 1) as f32 * STEP;
+    // Against the top edge only the lower corners show, as on the notch.
+    let top = if floating { 0.0 } else { -h };
+    let icons = bits
+        .into_iter()
+        .enumerate()
+        .map(|(index, bit)| (bit, left + SIDE + index as f32 * STEP))
+        .collect();
+    Some((rect(left, top, left + pill_width, h), icons))
+}
+
+/// The calculator page between `x0` and `x1`: the display on the left, the
+/// keys on the right.
+struct CalcLayout {
+    display: D2D_RECT_F,
+    /// Top-left of the keys.
+    keys: (f32, f32),
+}
+
+impl CalcLayout {
+    const KEY: (f32, f32) = (46.0, 21.0);
+    const GAP: f32 = 4.0;
+
+    fn new(x0: f32, x1: f32) -> Self {
+        let width = 4.0 * Self::KEY.0 + 3.0 * Self::GAP;
+        let left = x1 - 12.0 - width;
+        Self {
+            display: rect(x0 + 12.0, 12.0, left - 12.0, 133.0),
+            keys: (left, 12.0),
+        }
+    }
+
+    /// Every key with its label and bounds, the display's Salin among them.
+    fn keys(&self) -> impl Iterator<Item = (CalcKey, &'static str, D2D_RECT_F)> + '_ {
+        let (left, top) = self.keys;
+        let pad = CALC_KEYS
+            .iter()
+            .map(move |&(key, label, row, column, span)| {
+                let x = left + column as f32 * (Self::KEY.0 + Self::GAP);
+                let y = top + row as f32 * (Self::KEY.1 + Self::GAP);
+                let width = span as f32 * Self::KEY.0 + (span - 1) as f32 * Self::GAP;
+                (key, label, rect(x, y, x + width, y + Self::KEY.1))
+            });
+        let display = self.display;
+        let copy = rect(
+            display.left + 14.0,
+            display.bottom - 14.0 - Self::KEY.1,
+            display.left + 14.0 + 64.0,
+            display.bottom - 14.0,
+        );
+        pad.chain([(CalcKey::Copy, "Salin", copy)])
     }
 }
 
@@ -784,6 +864,7 @@ pub mod glyph {
     pub const COPY: &str = "\u{E8C8}";
     pub const BOLT: &str = "\u{E945}";
     pub const SCREEN: &str = "\u{E7F4}";
+    pub const CALCULATOR: &str = "\u{E8EF}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -828,6 +909,9 @@ pub struct Scene<'a> {
     pub hop: f32,
     pub greeting: f32,
     pub clock: &'a str,
+    /// Home's second clock: the time in another zone and where, such as
+    /// "13:28" and "Jakarta (WIB)".
+    pub second_clock: Option<(&'a str, &'a str)>,
     pub banner_visible: f32,
     pub banner: Option<&'a Content>,
     pub music: Option<MusicScene<'a>>,
@@ -848,6 +932,8 @@ pub struct Scene<'a> {
     /// their small notch has come out, 0..1.
     pub privacy: usize,
     pub privacy_visible: f32,
+    /// The default microphone is muted.
+    pub mic_muted: bool,
     /// How far the notch has widened to show the date, 0..1.
     pub peek_visible: f32,
     /// The closed notch's size relative to the usual one.
@@ -862,6 +948,7 @@ pub struct Scene<'a> {
     pub shelf: ShelfScene<'a>,
     pub inbox: InboxScene<'a>,
     pub todo: TodoScene<'a>,
+    pub calc: CalcScene<'a>,
     pub usage: UsageScene<'a>,
     /// The next events, whatever their month.
     pub agenda: Vec<AgendaItem<'a>>,
@@ -941,6 +1028,53 @@ pub enum Page {
     Todo,
     Usage,
     Pomodoro,
+    Calculator,
+}
+
+/// A key on the calculator page.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CalcKey {
+    Digit(char),
+    Comma,
+    /// +, -, × or ÷.
+    Op(char),
+    Percent,
+    Clear,
+    Back,
+    Equals,
+    Copy,
+}
+
+/// The calculator's keys as a phone lays them out: each with what it shows,
+/// its row and column, and how many columns it spans.
+const CALC_KEYS: [(CalcKey, &str, usize, usize, usize); 19] = [
+    (CalcKey::Clear, "C", 0, 0, 1),
+    (CalcKey::Back, "\u{232B}", 0, 1, 1),
+    (CalcKey::Percent, "%", 0, 2, 1),
+    (CalcKey::Op('÷'), "÷", 0, 3, 1),
+    (CalcKey::Digit('7'), "7", 1, 0, 1),
+    (CalcKey::Digit('8'), "8", 1, 1, 1),
+    (CalcKey::Digit('9'), "9", 1, 2, 1),
+    (CalcKey::Op('×'), "×", 1, 3, 1),
+    (CalcKey::Digit('4'), "4", 2, 0, 1),
+    (CalcKey::Digit('5'), "5", 2, 1, 1),
+    (CalcKey::Digit('6'), "6", 2, 2, 1),
+    (CalcKey::Op('-'), "\u{2212}", 2, 3, 1),
+    (CalcKey::Digit('1'), "1", 3, 0, 1),
+    (CalcKey::Digit('2'), "2", 3, 1, 1),
+    (CalcKey::Digit('3'), "3", 3, 2, 1),
+    (CalcKey::Op('+'), "+", 3, 3, 1),
+    (CalcKey::Digit('0'), "0", 4, 0, 2),
+    (CalcKey::Comma, ",", 4, 2, 1),
+    (CalcKey::Equals, "=", 4, 3, 1),
+];
+
+/// The calculator page: what has been typed, and the result it comes to.
+pub struct CalcScene<'a> {
+    pub text: &'a str,
+    pub result: Option<&'a str>,
+    /// The key last pressed, lit for a moment.
+    pub pressed: Option<CalcKey>,
 }
 
 /// One upcoming event beside the month.
@@ -1629,37 +1763,44 @@ impl Renderer {
         Ok(stops)
     }
 
+    /// Which of the camera and microphone's icons is at (`x`, `y`), taking
+    /// the whole small notch as theirs; None off it. `width` and `scale` are
+    /// the main notch's, `visible` how far the small one has slid out.
+    pub fn privacy_at(
+        &self,
+        (x, y): (f32, f32),
+        (width, scale): (f32, f32),
+        floating: bool,
+        visible: f32,
+        privacy: usize,
+    ) -> Option<usize> {
+        let (pill, icons) = privacy_pill(width, scale, floating, visible, privacy)?;
+        let inside = x >= pill.left && x <= pill.right && y <= pill.bottom;
+        let nearest = icons
+            .iter()
+            .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))?;
+        inside.then_some(nearest.0)
+    }
+
     /// A small notch of its own right of the main one, with an icon for each
-    /// of the camera and microphone in use.
+    /// of the camera and microphone in use; the microphone's crossed out
+    /// while it is muted.
     unsafe fn draw_privacy(&self, scene: &Scene) {
-        const SIDE: f32 = 17.0;
-        const STEP: f32 = 20.0;
-        const GAP: f32 = 8.0;
         let alpha = scene.privacy_visible.clamp(0.0, 1.0)
             * (1.0 - scene.card_visible * 1.6).clamp(0.0, 1.0);
-        let icons: Vec<(&str, D2D1_COLOR_F)> = [
-            (
-                crate::privacy::CAMERA,
-                glyph::CAMERA,
-                accent_color(Accent::Green),
-            ),
-            (crate::privacy::MIC, glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
-        ]
-        .into_iter()
-        .filter(|(bit, _, _)| scene.privacy & bit != 0)
-        .map(|(_, icon, tint)| (icon, tint))
-        .collect();
-        if icons.is_empty() || alpha <= 0.01 {
+        let Some((pill, icons)) = privacy_pill(
+            scene.width,
+            scene.closed_scale,
+            scene.floating,
+            scene.privacy_visible,
+            scene.privacy,
+        ) else {
+            return;
+        };
+        if alpha <= 0.01 {
             return;
         }
-        let h = PRIVACY_HEIGHT * scene.closed_scale;
-        let ear = if scene.floating { 0.0 } else { EAR };
-        // It slides out from behind the main notch.
-        let left = CANVAS.0 / 2.0 + scene.width / 2.0 + ear + GAP
-            - 14.0 * (1.0 - scene.privacy_visible.clamp(0.0, 1.0));
-        let width = 2.0 * SIDE + (icons.len() - 1) as f32 * STEP;
-        // Against the top edge only the lower corners show, as on the notch.
-        let top = if scene.floating { 0.0 } else { -h };
+        let (left, top, width, h) = (pill.left, pill.top, pill.right - pill.left, pill.bottom);
         self.black.SetOpacity(scene.notch_opacity * alpha);
         self.target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
@@ -1670,10 +1811,14 @@ impl Renderer {
             &self.black,
         );
         self.black.SetOpacity(1.0);
-        for (index, (icon, tint)) in icons.iter().enumerate() {
-            self.accent.SetColor(tint);
+        for (bit, cx) in icons {
+            let (icon, tint) = match bit {
+                crate::privacy::CAMERA => (glyph::CAMERA, accent_color(Accent::Green)),
+                _ if scene.mic_muted => (glyph::MIC_OFF, accent_color(Accent::Red)),
+                _ => (glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
+            };
+            self.accent.SetColor(&tint);
             self.accent.SetOpacity(alpha);
-            let cx = left + SIDE + index as f32 * STEP;
             self.draw_small_glyph_at(icon, cx, h / 2.0, &self.accent);
         }
     }
@@ -2504,6 +2649,7 @@ impl Renderer {
                 self.draw_notifications_card(&scene.inbox, x0, x1, alpha)
             }
             (Page::Todo, _, _) => self.draw_todo_card(&scene.todo, x0, x1, alpha),
+            (Page::Calculator, _, _) => self.draw_calc_card(&scene.calc, x0, x1, alpha),
             (Page::Usage, _, _) => self.draw_usage_card(&scene.usage, x0, x1, alpha),
             (Page::Prayer, _, _) if scene.prayer.is_some() => {
                 if let Some(prayer) = &scene.prayer {
@@ -3867,6 +4013,103 @@ impl Renderer {
         }
     }
 
+    /// The calculator: a display on the left with the sum so far, the result
+    /// it comes to above it and a button to copy it; the keys on the right.
+    unsafe fn draw_calc_card(&self, calc: &CalcScene, x0: f32, x1: f32, alpha: f32) {
+        let layout = CalcLayout::new(x0, x1);
+        let display = layout.display;
+        self.light.SetOpacity(0.06 * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: display,
+                radiusX: 16.0,
+                radiusY: 16.0,
+            },
+            &self.light,
+        );
+        let (left, right) = (display.left + 16.0, display.right - 16.0);
+        self.target.PushAxisAlignedClip(
+            &rect(left, display.top, right, display.bottom),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        );
+        if let Some(result) = calc.result {
+            if let Some(text) = self.text_layout(result, &self.subtitle_text, 400.0) {
+                self.draw_layout(
+                    &text.layout,
+                    right - text.width,
+                    display.top + 14.0,
+                    0.55 * alpha,
+                );
+            }
+        }
+        // A long sum keeps its end in view.
+        let shown = if calc.text.is_empty() {
+            "0".to_string()
+        } else {
+            calc.text.replace('-', "\u{2212}")
+        };
+        let format = if shown.chars().count() > 10 {
+            &self.prayer_name
+        } else {
+            &self.big_clock
+        };
+        if let Some(text) = self.text_layout(&shown, format, 1000.0) {
+            let y = display.top + 34.0;
+            self.draw_layout(&text.layout, right - text.width, y, alpha);
+        }
+        self.target.PopAxisAlignedClip();
+
+        for (key, label, bounds) in layout.keys() {
+            let lit = calc.pressed == Some(key);
+            let (fill, opacity, text) = match key {
+                CalcKey::Equals => (accent_color(Accent::Teal), 1.0, color(0.0, 0.0, 0.0, 1.0)),
+                CalcKey::Op(_) => (accent_color(Accent::Teal), 0.22, accent_color(Accent::Teal)),
+                CalcKey::Clear => (accent_color(Accent::Red), 0.2, accent_color(Accent::Red)),
+                CalcKey::Back | CalcKey::Percent | CalcKey::Copy => {
+                    (color(1.0, 1.0, 1.0, 1.0), 0.16, color(1.0, 1.0, 1.0, 1.0))
+                }
+                _ => (color(1.0, 1.0, 1.0, 1.0), 0.09, color(1.0, 1.0, 1.0, 1.0)),
+            };
+            let opacity = if lit {
+                (opacity * 2.0_f32).min(1.0)
+            } else {
+                opacity
+            };
+            let radius = (bounds.bottom - bounds.top) / 2.0;
+            self.accent.SetColor(&fill);
+            self.accent.SetOpacity(opacity * alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: bounds,
+                    radiusX: radius,
+                    radiusY: radius,
+                },
+                &self.accent,
+            );
+            self.accent.SetColor(&text);
+            self.accent.SetOpacity(alpha);
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            self.target.DrawText(
+                &wide,
+                &self.small_text,
+                &bounds,
+                &self.accent,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    }
+
+    /// The calculator key at (`x`, `y`) on the open card.
+    pub fn calc_key_at(&self, x: f32, y: f32, width: f32) -> Option<CalcKey> {
+        let (y, width) = self.on_page(y, width);
+        let cx = CANVAS.0 / 2.0;
+        CalcLayout::new(cx - width / 2.0, cx + width / 2.0)
+            .keys()
+            .find(|(_, _, r)| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
+            .map(|(key, _, _)| key)
+    }
+
     /// What sits at (`x`, `y`) on the task card.
     pub fn todo_hit(&self, x: f32, y: f32, width: f32, todo: &TodoScene) -> Option<TodoHit> {
         let (y, width) = self.on_page(y, width);
@@ -4233,6 +4476,17 @@ impl Renderer {
         text(greeting(hour), &self.subtitle_text, left, 4.0, room, 0.9);
         text(scene.clock, &self.big_clock, left, 21.0, room, 1.0);
         text(status.date, &self.subtitle_text, left, 63.0, room, 0.85);
+        // Another zone's time under the date: "13:28 di Jakarta (WIB)".
+        if let Some((time, place)) = scene.second_clock {
+            text(
+                &format!("{time} di {place}"),
+                &self.small_left,
+                left,
+                86.0,
+                room,
+                0.75,
+            );
+        }
         if let Some((percent, charging)) = status.battery {
             let cy = 122.0;
             self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);

@@ -219,6 +219,15 @@ impl Audio {
             .map(|muted| muted.as_bool())
     }
 
+    /// Mutes or unmutes the default microphone.
+    pub fn set_mic_muted(&self, muted: bool) {
+        if let Some((volume, _)) = &self.mic {
+            unsafe {
+                let _ = volume.SetMute(muted, std::ptr::null());
+            }
+        }
+    }
+
     /// Master volume of the default device, 0..1.
     pub fn volume(&self) -> Option<f32> {
         let (volume, _) = self.endpoint.as_ref()?;

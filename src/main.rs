@@ -11,6 +11,7 @@
 mod anim;
 mod autostart;
 mod bluetooth;
+mod calc;
 mod calendar;
 mod clipboard;
 mod config;
@@ -37,6 +38,7 @@ mod system;
 mod timers;
 mod todo;
 mod tray;
+mod update;
 mod usage;
 mod watch;
 mod weather;
@@ -93,9 +95,10 @@ use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
 use render::{
-    glyph, zoom, AgendaItem, CalendarControl, CalendarScene, DownloadScene, InboxRow, InboxScene,
-    MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene, StatusScene, Strip,
-    TimerControl, TimerKind, TimerScene, TodoHit, TodoScene, UsageScene, WeatherScene,
+    glyph, zoom, AgendaItem, CalcKey, CalcScene, CalendarControl, CalendarScene, DownloadScene,
+    InboxRow, InboxScene, MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene,
+    StatusScene, Strip, TimerControl, TimerKind, TimerScene, TodoHit, TodoScene, UsageScene,
+    WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -162,6 +165,8 @@ const APP_BANNER_SHOWN: Duration = Duration::from_secs(4);
 const DRAG_THRESHOLD: f32 = 6.0;
 /// Length of the cross-fade between card pages.
 const PAGE_SWITCH: Duration = Duration::from_millis(260);
+/// How long a calculator key stays lit after a press.
+const CALC_PRESS: Duration = Duration::from_millis(140);
 /// How long the prayer page's sun takes to travel to its place.
 const PAGE_REVEAL: Duration = Duration::from_millis(700);
 /// A prayer's arrival is still announced this many minutes after its time,
@@ -316,6 +321,7 @@ struct App {
     /// The Screen Time switch's thumb, from today (0) to the week (1).
     usage_switch: Spring,
     todo: Todo,
+    calc: Calculator,
     /// Task under the mouse.
     todo_hover: Option<usize>,
     /// A new task being typed.
@@ -479,6 +485,7 @@ fn main() -> Result<()> {
             bell: Bell::new(Instant::now()),
             inbox_hover: None,
             todo: Todo::load(),
+            calc: Calculator::default(),
             todo_hover: None,
             editing: None,
             press: None,
@@ -845,6 +852,9 @@ impl App {
         }
         if modules.module_todo {
             pages.push(Page::Todo);
+        }
+        if modules.module_calc {
+            pages.push(Page::Calculator);
         }
         if modules.module_usage {
             pages.push(Page::Usage);
@@ -1225,6 +1235,22 @@ impl App {
         self.card_until = Some(Instant::now() + LEAVE_GRACE);
     }
 
+    /// A key pressed on the calculator page.
+    fn on_calc_key(&mut self, key: CalcKey) {
+        if key == CalcKey::Copy {
+            if let Some(result) = self.calc.answer() {
+                if system::copy_text(self.hwnd, &result) {
+                    self.notify_silently(notices::calculated(&result), anim::NOTICE_DURATION);
+                }
+            }
+        } else {
+            self.calc.press(key);
+        }
+        self.calc.pressed = Some((key, Instant::now()));
+        self.draw();
+        self.schedule(CALC_PRESS.as_millis() as u32 + 20);
+    }
+
     /// A typed character while a new task is being written. Enter adds the
     /// task and starts the next one, Escape stops.
     fn on_char(&mut self, unit: u16) {
@@ -1270,6 +1296,9 @@ impl App {
 
     /// Whether (`x`, `y`) is over something clickable on the open card.
     fn clickable_at(&self, x: f32, y: f32) -> bool {
+        if self.privacy_at((x, y)) == Some(privacy::MIC) {
+            return true;
+        }
         if self.notch.app_banner().is_some() {
             return true;
         }
@@ -1308,6 +1337,7 @@ impl App {
                         .is_some()
             }
             Page::Todo => self.todo_hit(x, y).is_some(),
+            Page::Calculator => self.renderer.calc_key_at(x, y, width).is_some(),
             Page::Usage => self.renderer.usage_switch_at(x, y, width).is_some(),
             Page::Status | Page::Prayer => false,
         }
@@ -1945,7 +1975,30 @@ impl App {
         }
     }
 
+    /// The camera or microphone icon under the mouse, on their small notch.
+    fn privacy_at(&self, (x, y): (f32, f32)) -> Option<usize> {
+        if self.notch.card_visible.value > 0.1 || !self.settings.privacy_dots {
+            return None;
+        }
+        self.renderer.privacy_at(
+            (x, y),
+            (self.notch.width.value, self.notch.scale),
+            self.settings.notch_floating,
+            self.privacy_slide.value,
+            self.privacy_shown,
+        )
+    }
+
     fn on_click(&mut self, lparam: LPARAM) {
+        // A click on the microphone's icon mutes or unmutes it.
+        if let Some(bit) = self.privacy_at(self.logical_point(lparam)) {
+            if bit == privacy::MIC {
+                if let (Some(audio), Some(muted)) = (self.audio.as_ref(), self.mic_muted) {
+                    audio.set_mic_muted(!muted);
+                }
+            }
+            return;
+        }
         let (x, y) = self.logical_point(lparam);
         if self.volume_drag {
             self.volume_drag = false;
@@ -2009,6 +2062,12 @@ impl App {
         }
         if self.shown_page() == Page::Todo {
             self.on_todo_click(x, y);
+            return;
+        }
+        if self.shown_page() == Page::Calculator {
+            if let Some(key) = self.renderer.calc_key_at(x, y, self.notch.width.value) {
+                self.on_calc_key(key);
+            }
             return;
         }
         if self.shown_page() == Page::Usage {
@@ -2431,6 +2490,7 @@ impl App {
         if before.is_some_and(|before| before != muted) && self.settings.notify_mic {
             self.notify_silently(notices::mic(muted), anim::NOTICE_DURATION);
         }
+        self.draw();
     }
 
     /// The Downloads folder changed: files still arriving, and those that
@@ -2566,6 +2626,8 @@ impl App {
     fn draw(&self) {
         let n = &self.notch;
         let date = date_text();
+        let second = self.settings.second_zone.and_then(second_clock);
+        let calc_result = self.calc.preview();
         let scene = Scene {
             width: n.width.value,
             height: n.height.value,
@@ -2578,6 +2640,9 @@ impl App {
             hop: n.eyes.hop,
             greeting: n.eyes.greeting,
             clock: &self.clock,
+            second_clock: second
+                .as_ref()
+                .map(|(time, place)| (time.as_str(), place.as_str())),
             banner_visible: n.banner_visible.value,
             banner: n.banner.as_ref().map(|banner| &banner.content),
             music: self.track.as_ref().map(|track| MusicScene {
@@ -2608,6 +2673,7 @@ impl App {
             banner_hover: self.banner_hover,
             privacy: self.privacy_shown,
             privacy_visible: self.privacy_slide.value,
+            mic_muted: self.mic_muted == Some(true),
             peek_visible: n.peek_visible.value,
             closed_scale: n.scale,
             calendar: {
@@ -2655,6 +2721,15 @@ impl App {
             },
             inbox: self.inbox_scene(),
             todo: self.todo_scene(),
+            calc: CalcScene {
+                text: &self.calc.text,
+                result: calc_result.as_deref(),
+                pressed: self
+                    .calc
+                    .pressed
+                    .filter(|(_, at)| at.elapsed() < CALC_PRESS)
+                    .map(|(key, _)| key),
+            },
             usage: UsageScene {
                 apps: self.usage_apps(),
                 week: self.settings.usage_week,
@@ -2789,7 +2864,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEMOVE => {
             let drag = with_app(|app| {
-                app.on_hover(true);
+                // The camera and microphone's small notch is not the notch:
+                // over it the card stays shut, so its icons can be clicked.
+                app.on_hover(app.privacy_at(app.logical_point(lparam)).is_none());
                 app.on_move(lparam)
             });
             // Outside the app borrow: dragging runs its own message loop.
@@ -3078,6 +3155,35 @@ fn today_number() -> i64 {
     calendar::days_from_civil(year as i32, month as u32, day as u32)
 }
 
+/// Home's second clock, `zone` hours from UTC: the time there and the
+/// place it is, "13:28" and "Jakarta (WIB)". None in the computer's own zone.
+fn second_clock(zone: f64) -> Option<(String, String)> {
+    let local = prayer::utc_offset_hours();
+    if (zone - local).abs() < 0.01 {
+        return None;
+    }
+    let shift = ((zone - local) * 60.0).round() as i64;
+    let minutes = (minutes_now() as i64 + shift).rem_euclid(24 * 60);
+    let time = format!("{:02}:{:02}", minutes / 60, minutes % 60);
+    Some((time, zone_name(zone)))
+}
+
+/// Indonesia's zones by a city in them, others by their offset.
+fn zone_name(zone: f64) -> String {
+    match zone {
+        7.0 => "Jakarta (WIB)".to_string(),
+        8.0 => "Makassar (WITA)".to_string(),
+        9.0 => "Jayapura (WIT)".to_string(),
+        _ => {
+            let (hours, minutes) = (zone.trunc() as i64, (zone.fract().abs() * 60.0).round());
+            match minutes as i64 {
+                0 => format!("UTC{hours:+}"),
+                m => format!("UTC{hours:+}:{m:02}"),
+            }
+        }
+    }
+}
+
 /// Local minutes after midnight.
 fn minutes_now() -> u32 {
     let time = unsafe { GetLocalTime() };
@@ -3347,6 +3453,20 @@ mod notices {
         }
     }
 
+    /// A sum's result, now on the clipboard.
+    pub fn calculated(result: &str) -> Notice {
+        Notice {
+            icon: glyph::COPY,
+            motion: Motion::Pulse,
+            accent: Accent::Teal,
+            progress: 1.0,
+            title: "Hasil disalin".to_string(),
+            subtitle: "Tinggal paste di mana saja".to_string(),
+            trailing: Trailing::Text(result.to_string()),
+            dim: false,
+        }
+    }
+
     /// The event's title, how soon it starts, and its time on the right.
     pub fn event(summary: &str, minutes_left: u32, start: u32) -> Notice {
         Notice {
@@ -3431,5 +3551,134 @@ fn open_file(path: &Path) {
             None,
             SW_SHOWNORMAL,
         );
+    }
+}
+
+/// What has been typed on the calculator page.
+#[derive(Default)]
+struct Calculator {
+    text: String,
+    /// The text is a result just worked out: a digit starts a new sum.
+    answered: bool,
+    pressed: Option<(CalcKey, Instant)>,
+}
+
+impl Calculator {
+    /// The longest sum the display takes.
+    const MAX: usize = 40;
+
+    fn press(&mut self, key: CalcKey) {
+        let fresh = std::mem::take(&mut self.answered);
+        match key {
+            CalcKey::Digit(digit) => {
+                if fresh {
+                    self.text.clear();
+                }
+                self.push(digit);
+            }
+            CalcKey::Comma => {
+                if fresh {
+                    self.text.clear();
+                }
+                // One comma to a number.
+                let number = self.text.rsplit(['+', '-', '×', '÷']).next().unwrap_or("");
+                if !number.contains(',') {
+                    if number.is_empty() {
+                        self.push('0');
+                    }
+                    self.push(',');
+                }
+            }
+            CalcKey::Op(op) => {
+                // A second operator in a row replaces the first, but a minus
+                // may start a negative number.
+                match self.text.chars().last() {
+                    Some('+' | '-' | '×' | '÷') if op != '-' => {
+                        self.text.pop();
+                    }
+                    None if op != '-' => return,
+                    _ => {}
+                }
+                self.push(op);
+            }
+            CalcKey::Percent => {
+                if self.text.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+                    self.push('%');
+                }
+            }
+            CalcKey::Clear => self.text.clear(),
+            CalcKey::Back => {
+                if !fresh {
+                    self.text.pop();
+                } else {
+                    self.text.clear();
+                }
+            }
+            CalcKey::Equals => {
+                if let Some(result) = self.answer() {
+                    self.text = result;
+                    self.answered = true;
+                }
+            }
+            CalcKey::Copy => {}
+        }
+    }
+
+    fn push(&mut self, c: char) {
+        if self.text.chars().count() < Self::MAX {
+            self.text.push(c);
+        }
+    }
+
+    /// The sum's value, written as the display shows numbers.
+    fn answer(&self) -> Option<String> {
+        let value = calc::evaluate(&self.text)?;
+        Some(calc::format(value, true))
+    }
+
+    /// The result shown above the display while a sum is typed.
+    fn preview(&self) -> Option<String> {
+        let has_op = self.text.chars().skip(1).any(|c| "+-×÷%".contains(c));
+        (has_op && !self.answered)
+            .then(|| self.answer())
+            .flatten()
+            .map(|result| format!("= {result}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_calculator_works_out_a_sum() {
+        let mut calc = Calculator::default();
+        for key in [
+            CalcKey::Digit('1'),
+            CalcKey::Digit('2'),
+            CalcKey::Op('×'),
+            CalcKey::Op('+'),
+            CalcKey::Digit('3'),
+            CalcKey::Comma,
+            CalcKey::Digit('5'),
+        ] {
+            calc.press(key);
+        }
+        assert_eq!(calc.text, "12+3,5");
+        assert_eq!(calc.preview().as_deref(), Some("= 15,5"));
+        calc.press(CalcKey::Equals);
+        assert_eq!(calc.text, "15,5");
+        // A digit after the result starts over.
+        calc.press(CalcKey::Digit('7'));
+        assert_eq!(calc.text, "7");
+    }
+
+    #[test]
+    fn names_the_second_zone() {
+        assert_eq!(zone_name(7.0), "Jakarta (WIB)");
+        assert_eq!(zone_name(9.0), "Jayapura (WIT)");
+        assert_eq!(zone_name(5.5), "UTC+5:30");
+        assert_eq!(zone_name(-3.0), "UTC-3");
+        assert_eq!(zone_name(0.0), "UTC+0");
     }
 }

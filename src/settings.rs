@@ -17,9 +17,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
@@ -30,6 +30,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -41,6 +42,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetWindowTextLengthW, GetWindowTextW, IsChild, IsDialogMessageW, LoadCursorW, PostMessageW,
@@ -50,9 +52,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCMOUSEMOVE, WM_PAINT,
-    WM_SETCURSOR, WM_SETFONT, WM_SETICON, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST,
+    WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SETICON, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
 use windows::Win32::System::SystemServices::MK_LBUTTON;
@@ -61,12 +63,14 @@ use windows_numerics::Matrix3x2;
 
 use crate::config::{self, NotchSize, Settings};
 use crate::geo::{self, Place};
-use crate::{autostart, prayer, tray};
+use crate::{autostart, prayer, tray, update};
 
 /// Sent to the notch window after the settings were saved.
 pub const SAVED_MSG: u32 = WM_APP + 6;
 /// Place search finished. LPARAM: `Box<Result<Vec<Place>, String>>`.
 const SEARCH_DONE_MSG: u32 = WM_APP + 7;
+/// The update check finished. LPARAM: `Box<Option<String>>`, the latest version.
+const UPDATE_DONE_MSG: u32 = WM_APP + 23;
 
 const CLIENT: (f32, f32) = (680.0, 560.0);
 /// The title bar above the page, whose coordinates start under it.
@@ -130,12 +134,13 @@ const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
 /// by click, and what comes after those as added.
-const TOGGLE_COUNT: usize = 29;
+const TOGGLE_COUNT: usize = 30;
 /// First health reminder switch.
 const FIRST_HEALTH: usize = 14;
 
 const PAGE_GENERAL: usize = 0;
 const PAGE_PRAYER: usize = 8;
+const PAGE_ABOUT: usize = 11;
 
 enum Row {
     Switch {
@@ -146,6 +151,11 @@ enum Row {
     Field {
         id: usize,
         width: f32,
+        title: &'static str,
+        note: &'static str,
+    },
+    /// The second clock's zone, picked from [`ZONES`].
+    Zone {
         title: &'static str,
         note: &'static str,
     },
@@ -172,6 +182,14 @@ const SIZES: [(&str, NotchSize); 3] = [
     ("Besar", NotchSize::Large),
 ];
 const SIZE_WIDTH: f32 = 60.0;
+/// Indonesia's three zones, as hours from UTC, or none.
+const ZONES: [(&str, Option<f64>); 4] = [
+    ("Mati", None),
+    ("WIB", Some(7.0)),
+    ("WITA", Some(8.0)),
+    ("WIT", Some(9.0)),
+];
+const ZONE_WIDTH: f32 = 58.0;
 const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
 const STYLE_WIDTH: f32 = 90.0;
 /// The slider's track, and the steps its value moves in.
@@ -192,7 +210,7 @@ struct Page {
     groups: &'static [Group],
 }
 
-static PAGES: [Page; 11] = [
+static PAGES: [Page; 12] = [
     Page {
         title: "General",
         glyph: "\u{E713}",
@@ -230,11 +248,6 @@ static PAGES: [Page; 11] = [
                     note: "Menit tanpa aktivitas, 1 sampai 120",
                 },
                 Row::Switch {
-                    toggle: 27,
-                    title: "Indikator kamera dan mic",
-                    note: "Notch kecil di kanan saat kamera atau mic dipakai",
-                },
-                Row::Switch {
                     toggle: 5,
                     title: "Start bareng Windows",
                     note: "Drop kebuka sendiri setelah masuk Windows",
@@ -264,6 +277,10 @@ static PAGES: [Page; 11] = [
                     toggle: 24,
                     title: "Panah halaman",
                     note: "Panah kiri dan kanan di kartu buat ganti halaman",
+                },
+                Row::Zone {
+                    title: "Jam daerah lain",
+                    note: "Tampil di Home, misal jam Jakarta",
                 },
             ],
         }],
@@ -300,6 +317,11 @@ static PAGES: [Page; 11] = [
                     toggle: 26,
                     title: "Mic mute dan unmute",
                     note: "Kabarin saat mikrofon dimatikan atau dinyalakan",
+                },
+                Row::Switch {
+                    toggle: 27,
+                    title: "Indikator kamera dan mic",
+                    note: "Notch kecil di kanan saat kamera atau mic dipakai, klik mic buat mute",
                 },
                 Row::Switch {
                     toggle: 19,
@@ -361,11 +383,18 @@ static PAGES: [Page; 11] = [
         top: CONTENT_TOP,
         groups: &[Group {
             title: "Modul",
-            rows: &[Row::Switch {
-                toggle: 12,
-                title: "To-do",
-                note: "To-do list di notch",
-            }],
+            rows: &[
+                Row::Switch {
+                    toggle: 12,
+                    title: "To-do",
+                    note: "To-do list di notch",
+                },
+                Row::Switch {
+                    toggle: 29,
+                    title: "Kalkulator",
+                    note: "Halaman kalkulator sederhana di kartu",
+                },
+            ],
         }],
     },
     Page {
@@ -500,7 +529,29 @@ static PAGES: [Page; 11] = [
             ],
         }],
     },
+    // Drawn by hand: the version and the update check.
+    Page {
+        title: "About",
+        glyph: "\u{E946}",
+        color: 0x64d2ff,
+        top: CONTENT_TOP,
+        groups: &[],
+    },
 ];
+
+/// The About page's card, and its button.
+const ABOUT_CARD: Rect = Rect::new(LEFT, 50.0, RIGHT, 158.0);
+const UPDATE_BUTTON: Rect = Rect::new(RIGHT - 16.0 - 150.0, 66.0, RIGHT - 16.0, 96.0);
+
+/// Where the update check stands.
+enum UpdateCheck {
+    NotYet,
+    Checking,
+    Latest,
+    /// A newer version, such as "0.2.0".
+    Newer(String),
+    Failed,
+}
 
 // Windows 11 dark palette, as 0xRRGGBB.
 const BACKGROUND: u32 = 0x1e1e1e;
@@ -574,6 +625,12 @@ fn group_end(page: &Page, row_bottom: f32) -> f32 {
 }
 
 /// Segment `index` of the size picker at the right end of a row.
+fn zone_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - ZONE_WIDTH * (ZONES.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + ZONE_WIDTH, cy + 15.0)
+}
+
 fn size_segment(row: Rect, index: usize) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
     let left = row.right - 16.0 - SIZE_WIDTH * (SIZES.len() - index) as f32;
@@ -680,12 +737,17 @@ struct Window {
     /// The mouse is on the close button.
     close_hover: bool,
     notch_floating: bool,
+    /// Hours from UTC of the second clock on Home.
+    second_zone: Option<f64>,
     /// Kept as it was: the form does not show it.
     usage_week: bool,
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
     preview: Option<prayer::Schedule>,
+    update: UpdateCheck,
+    /// How far the page is scrolled down, in logical pixels.
+    scroll: f32,
 }
 
 thread_local! {
@@ -824,6 +886,14 @@ impl Window {
             &caption as *const COLORREF as *const c_void,
             4,
         );
+        // Rounded corners, which a window drawing over its own frame can lose.
+        let round = DWMWCP_ROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &round as *const _ as *const c_void,
+            4,
+        );
 
         let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
         let target = factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
@@ -939,6 +1009,7 @@ impl Window {
                 settings.notify_mic,
                 settings.privacy_dots,
                 settings.charge_limit,
+                settings.module_calc,
             ],
             health_minutes: [
                 settings.water_minutes,
@@ -948,11 +1019,14 @@ impl Window {
             notch_size: settings.notch_size,
             notch_fill: settings.notch_fill,
             notch_floating: settings.notch_floating,
+            second_zone: settings.second_zone,
             usage_week: settings.usage_week,
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
             preview: None,
+            update: UpdateCheck::NotYet,
+            scroll: 0.0,
         })
     }
 
@@ -994,6 +1068,7 @@ impl Window {
         self.places.clear();
         if index != self.page {
             self.page = index;
+            self.scroll = 0.0;
             self.focused = None;
             unsafe {
                 let _ = SetFocus(Some(self.hwnd));
@@ -1011,13 +1086,62 @@ impl Window {
     /// Child windows always draw on top of the parent's painting.
     fn show_fields(&self) {
         let dropdown = !self.places.is_empty();
-        for (id, hwnd, _, page) in &self.fields {
-            let visible = *page == self.page && !(dropdown && COVERED_FIELDS.contains(id));
-            let command = if visible { SW_SHOW } else { SW_HIDE };
+        for (id, hwnd, rect, page) in &self.fields {
+            let shown = Rect::new(
+                rect.left,
+                rect.top - self.scroll,
+                rect.right,
+                rect.bottom - self.scroll,
+            );
+            let in_view = shown.top >= CONTENT_TOP - 10.0 && shown.bottom <= FOOTER_TOP;
+            let visible =
+                *page == self.page && in_view && !(dropdown && COVERED_FIELDS.contains(id));
+            let edit = edit_rect(shown);
             unsafe {
-                let _ = ShowWindow(*hwnd, command);
+                if *page == self.page {
+                    let _ = SetWindowPos(
+                        *hwnd,
+                        None,
+                        (edit.left * self.scale).round() as i32,
+                        ((edit.top + TITLE_BAR) * self.scale).round() as i32,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                let _ = ShowWindow(*hwnd, if visible { SW_SHOW } else { SW_HIDE });
             }
         }
+    }
+
+    /// The bottom of the current page's content.
+    fn page_bottom(&self) -> f32 {
+        let rows = rows(&PAGES[self.page])
+            .map(|(rect, _)| rect.bottom)
+            .fold(TITLE.bottom, f32::max);
+        match self.page {
+            PAGE_PRAYER => rows.max(PREVIEW.bottom),
+            PAGE_ABOUT => rows.max(ABOUT_CARD.bottom),
+            _ => rows,
+        }
+    }
+
+    /// Scrolls a page taller than the window by a wheel's `delta`.
+    fn wheel(&mut self, delta: i16) {
+        let most = (self.page_bottom() + 16.0 - FOOTER_TOP).max(0.0);
+        let scroll = (self.scroll - f32::from(delta) / 120.0 * ROW).clamp(0.0, most);
+        if scroll != self.scroll {
+            self.scroll = scroll;
+            self.hide_results();
+            self.show_fields();
+            self.invalidate();
+        }
+    }
+
+    /// A point in the page's own coordinates: below the window's top, the
+    /// content area moves with the scroll. None on the footer.
+    fn on_page(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        (y < FOOTER_TOP).then_some((x, y + self.scroll))
     }
 
     fn set_status(&mut self, text: &str, error: bool) {
@@ -1109,6 +1233,7 @@ impl Window {
             self.close_hover = on_close(x, y);
             self.invalidate();
         }
+        let y = y + self.scroll;
         if let Some(index) = self.result_at(x, y).filter(|&i| i != self.hover) {
             self.hover = index;
             self.invalidate();
@@ -1190,6 +1315,7 @@ impl Window {
             notify_mic: self.toggles[26],
             privacy_dots: self.toggles[27],
             charge_limit: self.toggles[28],
+            module_calc: self.toggles[29],
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),
@@ -1214,6 +1340,7 @@ impl Window {
             notch_size: self.notch_size,
             notch_fill: self.notch_fill,
             notch_floating: self.notch_floating,
+            second_zone: self.second_zone,
         })
     }
 
@@ -1270,6 +1397,16 @@ impl Window {
     }
 
     /// The size under a point on the current page.
+    /// The second clock's zone under a point on the current page.
+    fn zone_at(&self, x: f32, y: f32) -> Option<Option<f64>> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Zone { .. } => (0..ZONES.len())
+                .find(|&i| zone_segment(rect, i).contains(x, y))
+                .map(|i| ZONES[i].1),
+            _ => None,
+        })
+    }
+
     fn size_at(&self, x: f32, y: f32) -> Option<NotchSize> {
         rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
             Row::Size { .. } => (0..SIZES.len())
@@ -1308,6 +1445,60 @@ impl Window {
         true
     }
 
+    fn update_button(&self, x: f32, y: f32) -> bool {
+        self.page == PAGE_ABOUT && UPDATE_BUTTON.contains(x, y)
+    }
+
+    /// The About page's button: asks GitHub for the latest version, or once
+    /// a newer one is known, opens its download page.
+    fn press_update(&mut self) {
+        match self.update {
+            UpdateCheck::Checking => return,
+            UpdateCheck::Newer(_) => {
+                unsafe {
+                    ShellExecuteW(
+                        None,
+                        w!("open"),
+                        &HSTRING::from(update::RELEASES),
+                        None,
+                        None,
+                        SW_SHOWNORMAL,
+                    );
+                }
+                return;
+            }
+            _ => {}
+        }
+        self.update = UpdateCheck::Checking;
+        self.invalidate();
+        let target = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let payload = Box::into_raw(Box::new(update::latest()));
+            unsafe {
+                let posted = PostMessageW(
+                    Some(HWND(target as *mut c_void)),
+                    UPDATE_DONE_MSG,
+                    WPARAM(0),
+                    LPARAM(payload as isize),
+                );
+                if posted.is_err() {
+                    drop(Box::from_raw(payload));
+                }
+            }
+        });
+    }
+
+    fn show_update(&mut self, latest: Option<String>) {
+        self.update = match latest {
+            Some(version) if update::is_newer(&version, update::CURRENT) => {
+                UpdateCheck::Newer(version)
+            }
+            Some(_) => UpdateCheck::Latest,
+            None => UpdateCheck::Failed,
+        };
+        self.invalidate();
+    }
+
     fn search_button(&self, x: f32, y: f32) -> bool {
         self.page == PAGE_PRAYER && SEARCH_BUTTON.contains(x, y)
     }
@@ -1321,6 +1512,12 @@ impl Window {
             self.set_page(index);
             return;
         }
+        if x < SIDEBAR {
+            return;
+        }
+        let Some((x, y)) = self.on_page(x, y) else {
+            return;
+        };
         // An open dropdown takes the click: a row picks it, anywhere else closes it.
         if !self.places.is_empty() && !SEARCH_BUTTON.contains(x, y) {
             match self.result_at(x, y) {
@@ -1330,13 +1527,19 @@ impl Window {
             }
             return;
         }
-        if self.search_button(x, y) {
+        if self.update_button(x, y) {
+            self.press_update();
+        } else if self.search_button(x, y) {
             self.start_search();
         } else if let Some(floating) = self.style_at(x, y) {
             self.notch_floating = floating;
             self.invalidate();
             self.apply_live();
         } else if self.slide(x, y) {
+        } else if let Some(zone) = self.zone_at(x, y) {
+            self.second_zone = zone;
+            self.invalidate();
+            self.apply_live();
         } else if let Some(size) = self.size_at(x, y) {
             self.notch_size = size;
             self.invalidate();
@@ -1355,12 +1558,17 @@ impl Window {
         if (0..PAGES.len()).any(|i| nav_row(i).contains(x, y)) {
             return true;
         }
+        let Some((x, y)) = self.on_page(x, y).filter(|_| x >= SIDEBAR) else {
+            return false;
+        };
         if !self.places.is_empty() {
             return self.result_at(x, y).is_some() || SEARCH_BUTTON.contains(x, y);
         }
         self.search_button(x, y)
+            || self.update_button(x, y)
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
+            || self.zone_at(x, y).is_some()
             || self.style_at(x, y).is_some()
             || rows(&PAGES[self.page]).any(|(rect, row)| {
                 matches!(row, Row::Fill { .. }) && slider_track(rect).contains(x, y)
@@ -1380,10 +1588,18 @@ impl Window {
 
         self.title_bar();
         self.sidebar();
+        t.PushAxisAlignedClip(
+            &Rect::new(SIDEBAR, 0.0, CLIENT.0, FOOTER_TOP).d2d(),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        );
+        t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR - self.scroll));
         let page = &PAGES[self.page];
         self.text_at(page.title, &self.fonts.title, TITLE, 0xffffff, 1.0);
         if self.page == PAGE_PRAYER {
             self.location();
+        }
+        if self.page == PAGE_ABOUT {
+            self.about();
         }
         self.page_groups(page);
         // Fields under an open dropdown are hidden, and so is their chrome.
@@ -1396,6 +1612,9 @@ impl Window {
         if self.page == PAGE_PRAYER {
             self.results_dropdown();
         }
+        t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR));
+        t.PopAxisAlignedClip();
+        self.scroll_bar();
 
         // Footer.
         self.brush.SetColor(&rgb(BORDER, 1.0));
@@ -1412,6 +1631,24 @@ impl Window {
         self.text_at(footer, &self.fonts.small, FOOTER_STATUS, color, alpha);
 
         let _ = t.EndDraw(None, None);
+    }
+
+    /// A thin bar at the right edge on a page taller than the window.
+    unsafe fn scroll_bar(&self) {
+        let view = FOOTER_TOP - CONTENT_TOP;
+        let content = self.page_bottom() + 16.0 - CONTENT_TOP;
+        if content <= view {
+            return;
+        }
+        let height = (view * view / content).max(24.0);
+        let most = content - view;
+        let top = CONTENT_TOP + (view - height) * (self.scroll / most).clamp(0.0, 1.0);
+        self.rounded(
+            Rect::new(CLIENT.0 - 7.0, top, CLIENT.0 - 3.0, top + height),
+            2.0,
+            0xffffff,
+            0.25,
+        );
     }
 
     unsafe fn sidebar(&self) {
@@ -1493,6 +1730,7 @@ impl Window {
                     let width = SIZE_WIDTH * SIZES.len() as f32;
                     (*title, *note, rect.right - 32.0 - width)
                 }
+                Row::Zone { title, note } => (*title, *note, zone_segment(rect, 0).left - 8.0),
                 Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
                 Row::Fill { title, note } => (*title, *note, slider_track(rect).left - 56.0),
             };
@@ -1525,6 +1763,20 @@ impl Window {
             }
             if let Row::Fill { .. } = row {
                 self.slider(slider_track(rect));
+            }
+            if let Row::Zone { .. } = row {
+                let track = Rect {
+                    right: zone_segment(rect, ZONES.len() - 1).right,
+                    ..zone_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, zone)) in ZONES.iter().enumerate() {
+                    let segment = zone_segment(rect, index);
+                    if *zone == self.second_zone {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
             }
             if let Row::Size { .. } = row {
                 let track = Rect {
@@ -1563,6 +1815,65 @@ impl Window {
                 self.text_at(note, &f.small, note_box, 0xffffff, 0.55);
             }
         }
+    }
+
+    /// The About page: the name, the version running, and the update check.
+    unsafe fn about(&self) {
+        let f = &self.fonts;
+        self.rounded(ABOUT_CARD, 10.0, SURFACE, 1.0);
+        let left = ABOUT_CARD.left + 16.0;
+        let text_right = UPDATE_BUTTON.left - 12.0;
+        self.text_at(
+            "Drop",
+            &f.time,
+            Rect::new(left, 62.0, text_right, 84.0),
+            0xffffff,
+            1.0,
+        );
+        let version = format!("Versi {}", update::CURRENT);
+        self.text_at(
+            &version,
+            &f.small,
+            Rect::new(left, 84.0, text_right, 102.0),
+            0xffffff,
+            0.6,
+        );
+        let label = match &self.update {
+            UpdateCheck::Checking => "Mengecek…".to_string(),
+            UpdateCheck::Newer(version) => format!("Unduh {version}"),
+            _ => "Cek pembaruan".to_string(),
+        };
+        let newer = matches!(self.update, UpdateCheck::Newer(_));
+        self.button(&label, UPDATE_BUTTON, newer);
+        let (status, color, alpha) = match &self.update {
+            UpdateCheck::NotYet => (
+                "Cek manual, Drop tidak mengecek sendiri".to_string(),
+                0xffffff,
+                0.55,
+            ),
+            UpdateCheck::Checking => ("Bertanya ke GitHub…".to_string(), 0xffffff, 0.55),
+            UpdateCheck::Latest => ("Sudah versi terbaru".to_string(), SWITCH_ON, 1.0),
+            UpdateCheck::Newer(version) => (
+                format!("Versi {version} tersedia, unduh dari GitHub"),
+                ACCENT,
+                1.0,
+            ),
+            UpdateCheck::Failed => ("Gagal mengecek, coba lagi nanti".to_string(), 0xff99a4, 1.0),
+        };
+        self.text_at(
+            &status,
+            &f.small,
+            Rect::new(left, 112.0, ABOUT_CARD.right - 16.0, 130.0),
+            color,
+            alpha,
+        );
+        self.text_at(
+            "github.com/rifqihilal/drop",
+            &f.small,
+            Rect::new(left, 130.0, ABOUT_CARD.right - 16.0, 148.0),
+            0xffffff,
+            0.4,
+        );
     }
 
     unsafe fn preview_card(&self) {
@@ -1922,10 +2233,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_window(|window| {
                 let (x, y) = (x / window.scale, y / window.scale - TITLE_BAR);
                 if held {
-                    window.slide(x, y);
+                    window.slide(x, y + window.scroll);
                 }
                 window.hover_at(x, y);
             });
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            let delta = (wparam.0 >> 16) as i16;
+            with_window(|window| window.wheel(delta));
             LRESULT(0)
         }
         WM_SETCURSOR => {
@@ -1978,6 +2294,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 (ID_LATITUDE | ID_LONGITUDE | ID_ELEVATION, EN_CHANGE) => window.update_preview(),
                 _ => {}
             });
+            LRESULT(0)
+        }
+        UPDATE_DONE_MSG => {
+            let latest = *Box::from_raw(lparam.0 as *mut Option<String>);
+            with_window(|window| window.show_update(latest));
             LRESULT(0)
         }
         SEARCH_DONE_MSG => {
@@ -2069,7 +2390,11 @@ mod tests {
             .flat_map(rows)
             .filter_map(|(_, row)| match row {
                 Row::Switch { toggle, .. } => Some(*toggle),
-                Row::Field { .. } | Row::Size { .. } | Row::Style { .. } | Row::Fill { .. } => None,
+                Row::Field { .. }
+                | Row::Size { .. }
+                | Row::Zone { .. }
+                | Row::Style { .. }
+                | Row::Fill { .. } => None,
             })
             .collect()
     }
@@ -2079,17 +2404,6 @@ mod tests {
         let mut found = switches();
         found.sort_unstable();
         assert_eq!(found, (0..TOGGLE_COUNT).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn rows_stay_above_the_footer() {
-        for page in &PAGES {
-            assert!(
-                rows(page).all(|(rect, _)| rect.bottom <= FOOTER_TOP),
-                "{}",
-                page.title
-            );
-        }
     }
 
     #[test]
