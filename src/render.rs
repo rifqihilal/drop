@@ -1784,7 +1784,8 @@ impl Renderer {
 
     /// A small notch of its own right of the main one, with an icon for each
     /// of the camera and microphone in use; the microphone's crossed out
-    /// while it is muted.
+    /// while it is muted. While the eyes show it gives way to a coloured dot
+    /// for each, inside the notch beside them.
     unsafe fn draw_privacy(&self, scene: &Scene) {
         let alpha = scene.privacy_visible.clamp(0.0, 1.0)
             * (1.0 - scene.card_visible * 1.6).clamp(0.0, 1.0);
@@ -1800,6 +1801,33 @@ impl Renderer {
         if alpha <= 0.01 {
             return;
         }
+        let tint = |bit: usize| match bit {
+            crate::privacy::CAMERA => (glyph::CAMERA, accent_color(Accent::Green)),
+            _ if scene.mic_muted => (glyph::MIC_OFF, accent_color(Accent::Red)),
+            _ => (glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
+        };
+        let idle = scene.eyes_visible.clamp(0.0, 1.0);
+        if idle > 0.01 {
+            let right = CANVAS.0 / 2.0 + scene.width / 2.0 - 16.0;
+            for (index, (bit, _)) in icons.iter().rev().enumerate() {
+                self.accent.SetColor(&tint(*bit).1);
+                for (radius, opacity) in [(6.0, 0.25), (3.2, 1.0)] {
+                    self.accent.SetOpacity(opacity * idle * alpha);
+                    self.target.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: pt(right - index as f32 * 11.0, scene.height / 2.0),
+                            radiusX: radius,
+                            radiusY: radius,
+                        },
+                        &self.accent,
+                    );
+                }
+            }
+        }
+        let alpha = alpha * (1.0 - idle);
+        if alpha <= 0.01 {
+            return;
+        }
         let (left, top, width, h) = (pill.left, pill.top, pill.right - pill.left, pill.bottom);
         self.black.SetOpacity(scene.notch_opacity * alpha);
         self.target.FillRoundedRectangle(
@@ -1812,12 +1840,8 @@ impl Renderer {
         );
         self.black.SetOpacity(1.0);
         for (bit, cx) in icons {
-            let (icon, tint) = match bit {
-                crate::privacy::CAMERA => (glyph::CAMERA, accent_color(Accent::Green)),
-                _ if scene.mic_muted => (glyph::MIC_OFF, accent_color(Accent::Red)),
-                _ => (glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
-            };
-            self.accent.SetColor(&tint);
+            let (icon, color) = tint(bit);
+            self.accent.SetColor(&color);
             self.accent.SetOpacity(alpha);
             self.draw_small_glyph_at(icon, cx, h / 2.0, &self.accent);
         }
