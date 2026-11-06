@@ -6,6 +6,7 @@ use std::time::SystemTime;
 
 use crate::health;
 use crate::prayer::Location;
+use crate::render::Page;
 
 /// How many calendar links the agenda takes.
 pub const FEEDS: usize = 3;
@@ -120,6 +121,10 @@ pub struct Settings {
     /// Links to iCalendar feeds for the agenda; each slot has its colour,
     /// and an empty one is unused.
     pub ical_urls: [String; FEEDS],
+    /// Every card page, in the order the card shows them.
+    pub page_order: Vec<Page>,
+    /// Pages kept off the card. Home is never among them.
+    pub pages_hidden: Vec<Page>,
     /// Health reminders, each after its minutes of use.
     pub water: bool,
     pub water_minutes: u32,
@@ -171,6 +176,8 @@ impl Default for Settings {
             auto_hide: AutoHide::Fullscreen,
             second_zone: None,
             ical_urls: Default::default(),
+            page_order: Page::ALL.to_vec(),
+            pages_hidden: Vec::new(),
             water: true,
             water_minutes: 60,
             eyes: false,
@@ -310,6 +317,13 @@ impl Settings {
              ical2 = {}\n\
              ical3 = {}\n\
              \n\
+             [halaman]\n\
+             ; Urutan halaman kartu, dipisah koma: musik, home, notifikasi, sholat, kalender,\n\
+             ; pomodoro, tugas, kalkulator, screen_time, shelf. Yang tidak disebut ditaruh di akhir.\n\
+             urutan_halaman = {}\n\
+             ; Halaman yang tidak tampil di kartu, dipisah koma. Home selalu tampil.\n\
+             halaman_sembunyi = {}\n\
+             \n\
              [kesehatan]\n\
              ; Pengingat setelah sekian menit memakai komputer; menjauh dari\n\
              ; komputer {} menit atau lebih memulai hitungan dari awal.\n\
@@ -360,6 +374,8 @@ impl Settings {
             self.ical_urls[0],
             self.ical_urls[1],
             self.ical_urls[2],
+            page_keys(&self.page_order),
+            page_keys(&self.pages_hidden),
             health::BREAK_MINUTES,
             flag(self.water),
             self.water_minutes,
@@ -376,6 +392,36 @@ impl Settings {
     pub fn notch_opacity(&self) -> f32 {
         MIN_OPACITY + (1.0 - MIN_OPACITY) * self.notch_fill.min(100) as f32 / 100.0
     }
+}
+
+fn page_keys(pages: &[Page]) -> String {
+    pages
+        .iter()
+        .map(|page| page.key())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Pages named in a comma-separated list, each once, unknown names skipped.
+fn pages_named(text: &str) -> Vec<Page> {
+    let mut pages = Vec::new();
+    for page in text.split(',').filter_map(Page::from_key) {
+        if !pages.contains(&page) {
+            pages.push(page);
+        }
+    }
+    pages
+}
+
+/// A full page order: the pages named, then the rest in their default order.
+pub fn page_order(text: &str) -> Vec<Page> {
+    let mut pages = pages_named(text);
+    for page in Page::ALL {
+        if !pages.contains(&page) {
+            pages.push(page);
+        }
+    }
+    pages
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -488,6 +534,13 @@ fn parse(text: &str) -> Settings {
             "ical" => s.ical_urls[0] = value.to_string(),
             "ical2" => s.ical_urls[1] = value.to_string(),
             "ical3" => s.ical_urls[2] = value.to_string(),
+            "urutan_halaman" => s.page_order = page_order(value),
+            "halaman_sembunyi" => {
+                s.pages_hidden = pages_named(value)
+                    .into_iter()
+                    .filter(|&page| page != Page::Status)
+                    .collect()
+            }
             "minum_air" => s.water = flag(true),
             "minum_air_menit" => s.water_minutes = minutes(60.0),
             "istirahat_mata" => s.eyes = flag(false),
@@ -558,6 +611,8 @@ mod tests {
                 String::new(),
                 "https://example.com/kerja.ics".to_string(),
             ],
+            page_order: page_order("shelf, home, tugas"),
+            pages_hidden: vec![Page::Usage, Page::Music],
             water: false,
             water_minutes: 45,
             eyes: true,
@@ -581,6 +636,20 @@ mod tests {
         assert_eq!(at(0), MIN_OPACITY);
         assert_eq!(parse("transparansi = 500\n").notch_fill, 100);
         assert_eq!(Settings::default().notch_fill, 100);
+    }
+
+    #[test]
+    fn page_order_is_always_complete() {
+        let order = page_order("tugas, apa_ini, tugas, HOME");
+        assert_eq!(order.len(), Page::ALL.len());
+        assert_eq!(&order[..3], &[Page::Todo, Page::Status, Page::Music]);
+        assert_eq!(page_order(""), Page::ALL.to_vec());
+        let hidden = parse(
+            "halaman_sembunyi = home, shelf
+",
+        )
+        .pages_hidden;
+        assert_eq!(hidden, vec![Page::Shelf]);
     }
 
     #[test]

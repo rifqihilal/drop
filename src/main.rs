@@ -834,40 +834,33 @@ impl App {
         self.track.as_ref().filter(|_| self.settings.module_music)
     }
 
-    /// The card's pages, in wheel order: those whose module is on, and of
-    /// those, music only when something plays.
+    /// The card's pages, in wheel order: the order set in Settings, minus
+    /// pages hidden there or whose module is off, and music only when
+    /// something plays. Home is always there.
     fn pages(&self) -> Vec<Page> {
         let modules = &self.settings;
-        let mut pages = Vec::with_capacity(9);
-        if self.music().is_some() {
-            pages.push(Page::Music);
-        }
-        pages.push(Page::Status);
-        if modules.notify_apps {
-            pages.push(Page::Notifications);
-        }
-        if modules.module_prayer && self.prayer.is_some() {
-            pages.push(Page::Prayer);
-        }
-        if modules.module_calendar || modules.ical_urls.iter().any(|url| !url.is_empty()) {
-            pages.push(Page::Calendar);
-        }
-        if modules.module_calendar {
-            pages.push(Page::Pomodoro);
-        }
-        if modules.module_todo {
-            pages.push(Page::Todo);
-        }
-        if modules.module_calc {
-            pages.push(Page::Calculator);
-        }
-        if modules.module_usage {
-            pages.push(Page::Usage);
-        }
-        if modules.module_shelf {
-            pages.push(Page::Shelf);
-        }
-        pages
+        let available = |page: Page| match page {
+            Page::Status => true,
+            Page::Music => self.music().is_some(),
+            Page::Notifications => modules.notify_apps,
+            Page::Prayer => modules.module_prayer && self.prayer.is_some(),
+            Page::Calendar => {
+                modules.module_calendar || modules.ical_urls.iter().any(|url| !url.is_empty())
+            }
+            Page::Pomodoro => modules.module_calendar,
+            Page::Todo => modules.module_todo,
+            Page::Calculator => modules.module_calc,
+            Page::Usage => modules.module_usage,
+            Page::Shelf => modules.module_shelf,
+        };
+        modules
+            .page_order
+            .iter()
+            .copied()
+            .filter(|&page| {
+                page == Page::Status || (available(page) && !modules.pages_hidden.contains(&page))
+            })
+            .collect()
     }
 
     fn on_drag(&mut self, over: bool) {
@@ -2278,7 +2271,9 @@ impl App {
         let before = self.settings.prayer();
         self.settings = Settings::load();
         let moved = self.settings.prayer() != before;
-        dragdrop::set_accepting(self.settings.module_shelf);
+        dragdrop::set_accepting(
+            self.settings.module_shelf && !self.settings.pages_hidden.contains(&Page::Shelf),
+        );
         self.notch.bounce = self.settings.card_bounce;
         self.renderer.set_arrows(self.settings.card_arrows);
         self.aim_usage_switch();

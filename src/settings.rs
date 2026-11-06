@@ -63,6 +63,7 @@ use windows_numerics::Matrix3x2;
 
 use crate::config::{self, AutoHide, NotchSize, Settings};
 use crate::geo::{self, Place};
+use crate::render::{self, Page as CardPage};
 use crate::{autostart, prayer, tray, update};
 
 /// Sent to the notch window after the settings were saved.
@@ -139,8 +140,9 @@ const TOGGLE_COUNT: usize = 30;
 const FIRST_HEALTH: usize = 14;
 
 const PAGE_GENERAL: usize = 0;
-const PAGE_PRAYER: usize = 8;
-const PAGE_ABOUT: usize = 11;
+const PAGE_ORDER: usize = 2;
+const PAGE_PRAYER: usize = 9;
+const PAGE_ABOUT: usize = 12;
 
 enum Row {
     Switch {
@@ -221,7 +223,7 @@ struct Page {
     groups: &'static [Group],
 }
 
-static PAGES: [Page; 12] = [
+static PAGES: [Page; 13] = [
     Page {
         title: "General",
         glyph: "\u{E713}",
@@ -299,6 +301,14 @@ static PAGES: [Page; 12] = [
                 },
             ],
         }],
+    },
+    // Drawn by hand: the card's pages, to show or hide and put in order.
+    Page {
+        title: "Halaman",
+        glyph: "\u{E8FD}",
+        color: 0xac8e68,
+        top: CONTENT_TOP,
+        groups: &[],
     },
     Page {
         title: "Notifikasi",
@@ -554,6 +564,45 @@ static PAGES: [Page; 12] = [
     },
 ];
 
+/// The Halaman page's list: a heading, then one row per card page.
+const ORDER_ROW: f32 = 42.0;
+
+fn order_row(index: usize) -> Rect {
+    let top = CONTENT_TOP + HEADING + index as f32 * ORDER_ROW;
+    Rect::new(LEFT, top, RIGHT, top + ORDER_ROW)
+}
+
+/// The button that moves a row's page up, or down, left of its switch.
+fn order_button(row: Rect, down: bool) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let right = row.right - 72.0 - if down { 0.0 } else { 32.0 };
+    Rect::new(right - 28.0, cy - 14.0, right, cy + 14.0)
+}
+
+/// What a click on the Halaman page's list does, by row.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum OrderClick {
+    Up(usize),
+    Down(usize),
+    Show(usize),
+}
+
+/// Each card page's colour in the Halaman list.
+fn card_color(page: CardPage) -> u32 {
+    match page {
+        CardPage::Music => 0xff375f,
+        CardPage::Status => 0x8e8e93,
+        CardPage::Notifications => 0x32ade6,
+        CardPage::Prayer => 0x00c7be,
+        CardPage::Calendar => 0xff453a,
+        CardPage::Pomodoro => 0xff9f0a,
+        CardPage::Todo => 0x30d158,
+        CardPage::Calculator => 0x64d2ff,
+        CardPage::Usage => 0x5e5ce6,
+        CardPage::Shelf => 0xffb340,
+    }
+}
+
 /// The About page's card, and its button.
 const ABOUT_CARD: Rect = Rect::new(LEFT, 50.0, RIGHT, 158.0);
 const UPDATE_BUTTON: Rect = Rect::new(RIGHT - 16.0 - 150.0, 66.0, RIGHT - 16.0, 96.0);
@@ -763,6 +812,9 @@ struct Window {
     auto_hide: AutoHide,
     /// Kept as it was: the form does not show it.
     usage_week: bool,
+    /// The card's pages in order, and those kept off it.
+    page_order: Vec<CardPage>,
+    pages_hidden: Vec<CardPage>,
     status: String,
     status_is_error: bool,
     focused: Option<usize>,
@@ -1044,6 +1096,8 @@ impl Window {
             second_zone: settings.second_zone,
             auto_hide: settings.auto_hide,
             usage_week: settings.usage_week,
+            page_order: settings.page_order.clone(),
+            pages_hidden: settings.pages_hidden.clone(),
             status: SEARCH_HINT.to_string(),
             status_is_error: false,
             focused: None,
@@ -1145,6 +1199,7 @@ impl Window {
         match self.page {
             PAGE_PRAYER => rows.max(PREVIEW.bottom),
             PAGE_ABOUT => rows.max(ABOUT_CARD.bottom),
+            PAGE_ORDER => rows.max(order_row(self.page_order.len() - 1).bottom),
             _ => rows,
         }
     }
@@ -1342,6 +1397,8 @@ impl Window {
             sound: self.toggles[4],
             idle_minutes: idle,
             ical_urls: [ID_ICAL, ID_ICAL2, ID_ICAL3].map(|id| self.text(id).trim().to_string()),
+            page_order: self.page_order.clone(),
+            pages_hidden: self.pages_hidden.clone(),
             weather: self.toggles[6],
             module_music: self.toggles[7],
             module_calendar: self.toggles[8],
@@ -1479,6 +1536,72 @@ impl Window {
         true
     }
 
+    /// What a click at a point on the Halaman list would do. Home can't be
+    /// hidden, and the first and last rows can't move further.
+    fn order_at(&self, x: f32, y: f32) -> Option<OrderClick> {
+        if self.page != PAGE_ORDER {
+            return None;
+        }
+        let count = self.page_order.len();
+        let index = (0..count).find(|&i| order_row(i).contains(x, y))?;
+        let row = order_row(index);
+        if order_button(row, false).contains(x, y) {
+            return (index > 0).then_some(OrderClick::Up(index));
+        }
+        if order_button(row, true).contains(x, y) {
+            return (index + 1 < count).then_some(OrderClick::Down(index));
+        }
+        (self.page_order[index] != CardPage::Status).then_some(OrderClick::Show(index))
+    }
+
+    fn press_order(&mut self, click: OrderClick) {
+        match click {
+            OrderClick::Up(index) => self.page_order.swap(index, index - 1),
+            OrderClick::Down(index) => self.page_order.swap(index, index + 1),
+            OrderClick::Show(index) => {
+                let page = self.page_order[index];
+                if let Some(at) = self.pages_hidden.iter().position(|&p| p == page) {
+                    self.pages_hidden.remove(at);
+                } else {
+                    self.pages_hidden.push(page);
+                }
+            }
+        }
+        self.invalidate();
+        self.apply_live();
+    }
+
+    /// What a page shows, or why it is missing from the card although its
+    /// switch is on; false for the latter.
+    fn order_note(&self, page: CardPage) -> (&'static str, bool) {
+        let on = |toggle: usize| self.toggles[toggle];
+        let feeds = [ID_ICAL, ID_ICAL2, ID_ICAL3]
+            .iter()
+            .any(|&id| !self.text(id).is_empty());
+        match page {
+            CardPage::Status => ("Selalu tampil", true),
+            CardPage::Music if !on(7) => ("Modul mati di Music & lirik", false),
+            CardPage::Music => ("Muncul saat lagu diputar", true),
+            CardPage::Notifications if !on(19) => ("Notifikasi app mati di Notifikasi", false),
+            CardPage::Notifications => ("Pesan dari app lain", true),
+            CardPage::Prayer if !on(10) => ("Modul mati di Sholat", false),
+            CardPage::Prayer if self.preview.is_none() => ("Isi lokasi di Sholat dulu", false),
+            CardPage::Prayer => ("Jadwal sholat dan matahari", true),
+            CardPage::Calendar if !on(8) && !feeds => ("Modul mati di Kalender", false),
+            CardPage::Calendar => ("Kalender bulan ini dan agenda", true),
+            CardPage::Pomodoro if !on(8) => ("Modul mati di Kalender", false),
+            CardPage::Pomodoro => ("Fokus, timer, dan stopwatch", true),
+            CardPage::Todo if !on(12) => ("Modul mati di To-do", false),
+            CardPage::Todo => ("Daftar tugas", true),
+            CardPage::Calculator if !on(29) => ("Modul mati di To-do", false),
+            CardPage::Calculator => ("Kalkulator sederhana", true),
+            CardPage::Usage if !on(23) => ("Modul mati di Screen Time", false),
+            CardPage::Usage => ("Waktu pakai per app", true),
+            CardPage::Shelf if !on(9) => ("Modul mati di Shelf", false),
+            CardPage::Shelf => ("File, screenshot, dan copy-an", true),
+        }
+    }
+
     fn update_button(&self, x: f32, y: f32) -> bool {
         self.page == PAGE_ABOUT && UPDATE_BUTTON.contains(x, y)
     }
@@ -1561,7 +1684,9 @@ impl Window {
             }
             return;
         }
-        if self.update_button(x, y) {
+        if let Some(order) = self.order_at(x, y) {
+            self.press_order(order);
+        } else if self.update_button(x, y) {
             self.press_update();
         } else if self.search_button(x, y) {
             self.start_search();
@@ -1604,6 +1729,7 @@ impl Window {
         }
         self.search_button(x, y)
             || self.update_button(x, y)
+            || self.order_at(x, y).is_some()
             || self.toggle_at(x, y).is_some()
             || self.size_at(x, y).is_some()
             || self.zone_at(x, y).is_some()
@@ -1639,6 +1765,9 @@ impl Window {
         }
         if self.page == PAGE_ABOUT {
             self.about();
+        }
+        if self.page == PAGE_ORDER {
+            self.order_list();
         }
         self.page_groups(page);
         // Fields under an open dropdown are hidden, and so is their chrome.
@@ -1867,6 +1996,67 @@ impl Window {
                 );
             } else {
                 self.text_at(note, &f.small, note_box, 0xffffff, 0.55);
+            }
+        }
+    }
+
+    /// The Halaman page: every card page in its order, each with buttons to
+    /// move it and a switch to show it.
+    unsafe fn order_list(&self) {
+        let f = &self.fonts;
+        let count = self.page_order.len();
+        let heading = Rect::new(LEFT + 2.0, CONTENT_TOP, RIGHT, CONTENT_TOP + HEADING - 6.0);
+        self.text_at(
+            "Urutan di kartu, dari kiri ke kanan",
+            &f.section,
+            heading,
+            0xffffff,
+            0.7,
+        );
+        let card = Rect {
+            bottom: order_row(count - 1).bottom,
+            ..order_row(0)
+        };
+        self.rounded(card, 10.0, SURFACE, 1.0);
+        for (index, &page) in self.page_order.iter().enumerate() {
+            let row = order_row(index);
+            if index + 1 < count {
+                self.brush.SetColor(&rgb(BORDER, 1.0));
+                self.target.FillRectangle(
+                    &Rect::new(row.left + 50.0, row.bottom, row.right, row.bottom + 1.0).d2d(),
+                    &self.brush,
+                );
+            }
+            let shown = !self.pages_hidden.contains(&page);
+            let (note, ready) = self.order_note(page);
+            let dim = if shown { 1.0 } else { 0.4 };
+            let cy = (row.top + row.bottom) / 2.0;
+            let tile = Rect::new(row.left + 14.0, cy - 12.0, row.left + 38.0, cy + 12.0);
+            self.rounded(tile, 6.0, card_color(page), dim);
+            self.text_at(render::page_glyph(page), &f.glyph, tile, 0xffffff, dim);
+            let text_right = order_button(row, false).left - 8.0;
+            let title = Rect::new(tile.right + 12.0, row.top + 4.0, text_right, cy + 1.0);
+            let note_box = Rect::new(title.left, cy + 1.0, text_right, row.bottom - 4.0);
+            self.text_at(page.name(), &f.body, title, 0xffffff, 0.95 * dim);
+            let note_color = if ready { 0xffffff } else { 0xffb340 };
+            let note_alpha = if ready { 0.55 } else { 0.85 };
+            self.text_at(note, &f.small, note_box, note_color, note_alpha * dim);
+            for (down, glyph, enabled) in [
+                (false, "\u{E70E}", index > 0),
+                (true, "\u{E70D}", index + 1 < count),
+            ] {
+                let button = order_button(row, down);
+                if enabled {
+                    self.rounded(button, 6.0, FIELD, 1.0);
+                }
+                let alpha = if enabled { 0.9 } else { 0.2 };
+                self.text_at(glyph, &f.glyph, button, 0xffffff, alpha);
+            }
+            if page != CardPage::Status {
+                self.toggle(
+                    Rect::new(row.left, row.top, row.right - 16.0, row.bottom),
+                    shown,
+                );
             }
         }
     }
@@ -2467,6 +2657,15 @@ mod tests {
         assert_eq!(field_place(ID_REMIND).0, PAGE_PRAYER);
         assert_eq!(field_place(ID_IDLE).0, PAGE_GENERAL);
         assert!(field_place(ID_ICAL).1.right > 0.0);
+    }
+
+    #[test]
+    fn page_list_fits_without_scrolling() {
+        assert_eq!(PAGES[PAGE_ORDER].title, "Halaman");
+        assert_eq!(PAGES[PAGE_ABOUT].title, "About");
+        assert!(order_row(CardPage::ALL.len() - 1).bottom + 16.0 <= FOOTER_TOP);
+        let row = order_row(0);
+        assert!(order_button(row, false).right < order_button(row, true).left);
     }
 
     #[test]

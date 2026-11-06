@@ -123,7 +123,7 @@ fn page_title<'a>(
 }
 
 /// A page's icon in the row that opens from the page dots.
-fn page_glyph(page: Page) -> &'static str {
+pub fn page_glyph(page: Page) -> &'static str {
     match page {
         Page::Music => glyph::MUSIC,
         Page::Status => glyph::HOME,
@@ -1042,7 +1042,7 @@ impl Scene<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
     Notifications,
     Music,
@@ -1054,6 +1054,59 @@ pub enum Page {
     Usage,
     Pomodoro,
     Calculator,
+}
+
+impl Page {
+    /// Every card page, in the order the card shows them by default.
+    pub const ALL: [Page; 10] = [
+        Page::Music,
+        Page::Status,
+        Page::Notifications,
+        Page::Prayer,
+        Page::Calendar,
+        Page::Pomodoro,
+        Page::Todo,
+        Page::Calculator,
+        Page::Usage,
+        Page::Shelf,
+    ];
+
+    /// The page's name in `drop.ini`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Music => "musik",
+            Page::Status => "home",
+            Page::Notifications => "notifikasi",
+            Page::Prayer => "sholat",
+            Page::Calendar => "kalender",
+            Page::Pomodoro => "pomodoro",
+            Page::Todo => "tugas",
+            Page::Calculator => "kalkulator",
+            Page::Usage => "screen_time",
+            Page::Shelf => "shelf",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Page> {
+        let key = key.trim().to_lowercase();
+        Page::ALL.into_iter().find(|page| page.key() == key)
+    }
+
+    /// The page's name in Settings.
+    pub fn name(self) -> &'static str {
+        match self {
+            Page::Music => "Music",
+            Page::Status => "Home",
+            Page::Notifications => "Notifikasi",
+            Page::Prayer => "Sholat",
+            Page::Calendar => "Kalender",
+            Page::Pomodoro => "Pomodoro",
+            Page::Todo => "To-do",
+            Page::Calculator => "Kalkulator",
+            Page::Usage => "Screen Time",
+            Page::Shelf => "Shelf",
+        }
+    }
 }
 
 /// A key on the calculator page.
