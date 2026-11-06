@@ -326,6 +326,8 @@ struct App {
     calc: Calculator,
     /// Task under the mouse.
     todo_hover: Option<usize>,
+    /// Which six tasks the card shows.
+    todo_view: usize,
     /// A new task being typed.
     editing: Option<Editing>,
 }
@@ -491,6 +493,7 @@ fn main() -> Result<()> {
             todo: Todo::load(),
             calc: Calculator::default(),
             todo_hover: None,
+            todo_view: 0,
             editing: None,
             press: None,
             page: Page::Music,
@@ -1114,6 +1117,10 @@ impl App {
             tasks: self.todo.tasks(),
             left: self.todo.left(),
             hover: self.todo_hover,
+            // A view emptied by removals falls back to the last one left.
+            view: self
+                .todo_view
+                .min(self.todo.tasks().len().saturating_sub(1) / todo::PER_VIEW),
             editing: self.editing.as_ref().map(|editing| editing.text.as_str()),
             caret: self.editing.as_ref().is_some_and(|editing| {
                 (editing.since.elapsed().as_millis() / CARET_BLINK).is_multiple_of(2)
@@ -1196,8 +1203,13 @@ impl App {
                 self.todo_hover = None;
             }
             Some(TodoHit::ClearDone) => self.todo.clear_done(),
+            Some(TodoHit::PreviousView) => {
+                self.todo_view = self.todo_scene().view.saturating_sub(1)
+            }
+            Some(TodoHit::NextView) => self.todo_view = self.todo_scene().view + 1,
             _ => return,
         }
+        self.todo_view = self.todo_scene().view;
         self.tick();
     }
 

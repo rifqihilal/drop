@@ -638,13 +638,32 @@ const TILE_GAP: f32 = 11.0;
 /// Tasks in each of the card's two columns.
 const TODO_COLUMN: usize = 3;
 
+/// The tasks the card's current view shows, as indexes into the list.
+fn todo_view(todo: &TodoScene) -> std::ops::Range<usize> {
+    let start = (todo.view * todo::PER_VIEW).min(todo.tasks.len());
+    start..(start + todo::PER_VIEW).min(todo.tasks.len())
+}
+
 /// Task card layout between the card's edges.
 struct TodoRects {
     x0: f32,
     x1: f32,
+    /// Two columns once the tasks no longer fit in one; one full width
+    /// before that, so their text has room.
+    columns: usize,
 }
 
 impl TodoRects {
+    fn new(x0: f32, x1: f32, tasks: usize) -> Self {
+        let columns = if tasks > TODO_COLUMN { 2 } else { 1 };
+        Self { x0, x1, columns }
+    }
+
+    /// The arrows to the views before and after, either side of "1/2".
+    fn view_arrows(&self) -> [(f32, f32); 2] {
+        [(self.x0 + 74.0, 21.0), (self.x0 + 126.0, 21.0)]
+    }
+
     /// The add button, which saves while typing.
     fn add(&self) -> D2D_RECT_F {
         rect(self.x1 - 104.0, 8.0, self.x1 - 14.0, 34.0)
@@ -661,7 +680,8 @@ impl TodoRects {
 
     fn row(&self, index: usize) -> D2D_RECT_F {
         let (column, row) = (index / TODO_COLUMN, index % TODO_COLUMN);
-        let width = (self.x1 - self.x0 - 32.0) / 2.0;
+        let columns = self.columns as f32;
+        let width = (self.x1 - self.x0 - 24.0 - 8.0 * (columns - 1.0)) / columns;
         let left = self.x0 + 12.0 + column as f32 * (width + 8.0);
         let top = 42.0 + row as f32 * TODO_ROW;
         rect(left, top, left + width, top + TODO_ROW)
@@ -1167,6 +1187,8 @@ pub struct TodoScene<'a> {
     pub left: usize,
     /// The task under the mouse.
     pub hover: Option<usize>,
+    /// Which six tasks show, counted from 0.
+    pub view: usize,
     /// Text being typed for a new task, while typing.
     pub editing: Option<&'a str>,
     /// The text cursor is lit (it blinks).
@@ -1177,6 +1199,9 @@ pub struct TodoScene<'a> {
 pub enum TodoHit {
     Add,
     ClearDone,
+    /// The arrows to the tasks before or after these six.
+    PreviousView,
+    NextView,
     Toggle(usize),
     Remove(usize),
 }
@@ -3870,10 +3895,31 @@ impl Renderer {
     /// The task list: a heading with the add button, or the field for a new
     /// task while typing, then one row per task.
     unsafe fn draw_todo_card(&self, todo: &TodoScene, x0: f32, x1: f32, alpha: f32) {
-        let layout = TodoRects { x0, x1 };
-        match todo.editing {
-            Some(text) => self.draw_todo_field(text, todo.caret, layout.field(), alpha),
-            None => {
+        let shown = todo_view(todo);
+        let layout = TodoRects::new(x0, x1, shown.len());
+        let views = todo.tasks.len().div_ceil(todo::PER_VIEW);
+        // A task too long for its row reads in full across the top while
+        // the mouse is on it.
+        let full_text = todo
+            .hover
+            .filter(|_| todo.editing.is_none())
+            .and_then(|index| Some((index, todo.tasks.get(index)?)))
+            .filter(|(index, task)| {
+                let row = layout.row(index - shown.start);
+                let room = row.right - 34.0 - (row.left + 34.0);
+                self.text_layout(&task.text, &self.subtitle_text, 1000.0)
+                    .is_some_and(|text| text.width > room)
+            });
+        match (todo.editing, full_text) {
+            (Some(text), _) => self.draw_todo_field(text, todo.caret, layout.field(), alpha),
+            (None, Some((_, task))) => {
+                if let Some(text) =
+                    self.text_layout(&task.text, &self.subtitle_text, x1 - x0 - 34.0)
+                {
+                    self.draw_layout(&text.layout, x0 + 20.0, 21.0 - text.height / 2.0, alpha);
+                }
+            }
+            (None, None) => {
                 let done = todo.tasks.len() - todo.left;
                 if !todo.tasks.is_empty() {
                     let count = format!("{done}/{}", todo.tasks.len());
@@ -3884,7 +3930,32 @@ impl Renderer {
                         } else {
                             "selesai"
                         };
-                        if let Some(label) = self.text_layout(caption, &self.small_left, 120.0) {
+                        // With more than one view, "1/2" between arrows
+                        // takes the caption's place.
+                        if views > 1 {
+                            let [previous, next] = layout.view_arrows();
+                            for ((cx, cy), icon, on) in [
+                                (previous, glyph::CHEVRON_LEFT, todo.view > 0),
+                                (next, glyph::CHEVRON_RIGHT, todo.view + 1 < views),
+                            ] {
+                                self.light.SetOpacity(if on { 0.12 } else { 0.05 } * alpha);
+                                self.target.FillEllipse(
+                                    &D2D1_ELLIPSE {
+                                        point: pt(cx, cy),
+                                        radiusX: 11.0,
+                                        radiusY: 11.0,
+                                    },
+                                    &self.light,
+                                );
+                                self.light.SetOpacity(if on { 0.9 } else { 0.3 } * alpha);
+                                self.draw_small_glyph(icon, cx, cy, &self.light);
+                            }
+                            let label = format!("{}/{views}", todo.view + 1);
+                            let between = rect(previous.0 + 11.0, 8.0, next.0 - 11.0, 34.0);
+                            self.draw_text(&label, &self.tiny, between, 0.8 * alpha);
+                        } else if let Some(label) =
+                            self.text_layout(caption, &self.small_left, 120.0)
+                        {
                             let x = x0 + 26.0 + text.width;
                             self.draw_layout(
                                 &label.layout,
@@ -3901,9 +3972,11 @@ impl Renderer {
             }
         }
 
-        // Add, or save while typing.
+        // Add, or save while typing; a task read in full covers it.
         let full = todo.tasks.len() >= todo::CAPACITY;
-        if todo.editing.is_some() {
+        if full_text.is_some() {
+            // Nothing: the task's text runs across the top.
+        } else if todo.editing.is_some() {
             self.draw_pill(
                 layout.add(),
                 glyph::CHECK,
@@ -3924,8 +3997,14 @@ impl Renderer {
                 0.5 * alpha,
             );
         }
-        for (index, task) in todo.tasks.iter().enumerate() {
-            let row = layout.row(index);
+        for (index, task) in todo
+            .tasks
+            .iter()
+            .enumerate()
+            .take(shown.end)
+            .skip(shown.start)
+        {
+            let row = layout.row(index - shown.start);
             let hovered = todo.hover == Some(index);
             if hovered {
                 self.light.SetOpacity(0.06 * alpha);
@@ -3938,7 +4017,7 @@ impl Renderer {
                     &self.light,
                 );
             }
-            let (cx, cy) = layout.check(index);
+            let (cx, cy) = layout.check(index - shown.start);
             if task.done {
                 self.accent.SetColor(&accent_color(Accent::Green));
                 self.accent.SetOpacity(alpha);
@@ -3987,7 +4066,7 @@ impl Renderer {
                 );
             }
             if hovered {
-                let (rx, ry) = layout.remove(index);
+                let (rx, ry) = layout.remove(index - shown.start);
                 self.light.SetOpacity(0.6 * alpha);
                 self.draw_small_glyph(glyph::CLOSE, rx, ry, &self.light);
             }
@@ -4145,10 +4224,8 @@ impl Renderer {
     pub fn todo_hit(&self, x: f32, y: f32, width: f32, todo: &TodoScene) -> Option<TodoHit> {
         let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
-        let layout = TodoRects {
-            x0: cx - width / 2.0,
-            x1: cx + width / 2.0,
-        };
+        let shown = todo_view(todo);
+        let layout = TodoRects::new(cx - width / 2.0, cx + width / 2.0, shown.len());
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
         if inside(layout.add()) {
             return Some(TodoHit::Add);
@@ -4156,8 +4233,21 @@ impl Renderer {
         if todo.editing.is_none() && todo.tasks.len() > todo.left && inside(layout.clear()) {
             return Some(TodoHit::ClearDone);
         }
-        let index = (0..todo.tasks.len()).find(|&index| inside(layout.row(index)))?;
-        let (rx, ry) = layout.remove(index);
+        let views = todo.tasks.len().div_ceil(todo::PER_VIEW);
+        if todo.editing.is_none() && views > 1 {
+            let [previous, next] = layout.view_arrows();
+            let near =
+                |(ax, ay): (f32, f32)| (x - ax).powi(2) + (y - ay).powi(2) <= 13.0_f32.powi(2);
+            if near(previous) {
+                return (todo.view > 0).then_some(TodoHit::PreviousView);
+            }
+            if near(next) {
+                return (todo.view + 1 < views).then_some(TodoHit::NextView);
+            }
+        }
+        let local = (0..shown.len()).find(|&index| inside(layout.row(index)))?;
+        let (rx, ry) = layout.remove(local);
+        let index = shown.start + local;
         if (x - rx).powi(2) + (y - ry).powi(2) <= 12.0_f32.powi(2) {
             Some(TodoHit::Remove(index))
         } else {

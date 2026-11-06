@@ -3,8 +3,10 @@
 
 use std::path::PathBuf;
 
-/// Tasks that fit on the card.
-pub const CAPACITY: usize = 6;
+/// Tasks the list keeps.
+pub const CAPACITY: usize = 18;
+/// Tasks the card shows at a time; more go on further views.
+pub const PER_VIEW: usize = 6;
 /// Longest task, in characters.
 pub const MAX_CHARS: usize = 60;
 
