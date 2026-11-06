@@ -19,27 +19,17 @@
 }
 
 :root {
-  --bg: #eef1f5;
-  --surface: #e2e7ee;
-  --text: #12161d;
-  --muted: #566070;
-  --line: #d0d7e0;
-  --accent: #1f6fd6;
-  --accent-text: #f7f9fc;
+  color-scheme: dark;
+  --bg: #1b2029;
+  --surface: #252b36;
+  --text: #eef1f5;
+  --muted: #a2adbd;
+  --line: #353d4a;
+  --accent: #5aaef0;
+  --accent-text: #0c1219;
   --ease: cubic-bezier(.16, 1, .3, 1);
   --spring: cubic-bezier(.3, 1.35, .45, 1);
   --radius: 16px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1b2029;
-    --surface: #252b36;
-    --text: #eef1f5;
-    --muted: #a2adbd;
-    --line: #353d4a;
-    --accent: #5aaef0;
-    --accent-text: #0c1219;
-  }
 }
 
 * { box-sizing: border-box; }
@@ -365,6 +355,7 @@ h1 {
 .hero-side { display: grid; gap: 24px; justify-items: start; }
 .hero-side p { color: var(--muted); font-size: 1.1rem; }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.downloads { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
 
 .btn {
   display: inline-flex;
@@ -575,6 +566,7 @@ footer a:hover { color: var(--text); }
       <div class="cta">
         <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.2.0/Drop-0.2.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
       </div>
+      <p class="downloads" data-downloads hidden></p>
     </div>
   </div>
 </div>
@@ -1057,14 +1049,26 @@ footer a:hover { color: var(--text); }
   setInterval(tick, 250);
 })();
 
-// Keep the download button on the newest release without editing this page.
-// The installer's name carries its version, so /releases/latest/download can't.
-fetch('https://api.github.com/repos/rifqihilal/drop/releases/latest')
+// Keep the download button on the newest release without editing this page,
+// and count the installer's downloads over every release. The installer's
+// name carries its version, so /releases/latest/download can't.
+fetch('https://api.github.com/repos/rifqihilal/drop/releases?per_page=100')
   .then(response => response.ok ? response.json() : null)
-  .then(release => {
-    const asset = release && release.assets.find(item => item.name.endsWith('.exe'));
-    if (!asset) return;
-    document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
+  .then(releases => {
+    if (!Array.isArray(releases)) return;
+    const published = releases.filter(release => !release.draft && !release.prerelease);
+    const installer = release => release.assets.filter(item => item.name.endsWith('.exe'));
+    const latest = published[0];
+    const asset = latest && installer(latest)[0];
+    if (asset) {
+      document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
+    }
+    const total = published.flatMap(installer).reduce((sum, item) => sum + item.download_count, 0);
+    const note = document.querySelector('[data-downloads]');
+    if (note && latest && total > 0) {
+      note.textContent = `Versi ${latest.tag_name.replace(/^v/, '')} \u00b7 sudah diunduh ${total.toLocaleString('id-ID')} kali`;
+      note.hidden = false;
+    }
   })
   .catch(() => {});
 

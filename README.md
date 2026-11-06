@@ -1,5 +1,8 @@
 # Drop
 
+[![Download](https://img.shields.io/github/downloads/rifqihilal/drop/total?label=download&color=2ea043)](https://github.com/rifqihilal/drop/releases)
+[![Rilis terbaru](https://img.shields.io/github/v/release/rifqihilal/drop?label=rilis)](https://github.com/rifqihilal/drop/releases/latest)
+
 Notch ringan untuk Windows 10 dan 11. Duduk di tepi atas layar, mengecil saat
 komputer dipakai, dan melebar saat ada yang perlu dilihat.
 
