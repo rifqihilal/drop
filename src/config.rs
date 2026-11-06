@@ -11,9 +11,6 @@ use crate::render::Page;
 /// How many calendar links the agenda takes.
 pub const FEEDS: usize = 3;
 
-/// How see-through the notch can get at most.
-const MIN_OPACITY: f32 = 0.45;
-
 /// How large the closed notch is; open cards keep one size.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum NotchSize {
@@ -110,8 +107,6 @@ pub struct Settings {
     /// The open card shows arrows to the pages on either side.
     pub card_arrows: bool,
     pub notch_size: NotchSize,
-    /// How solid the notch's black is, 0..100; see [`Settings::notch_opacity`].
-    pub notch_fill: u32,
     /// The notch floats below the screen's top edge instead of joining it.
     pub notch_floating: bool,
     pub auto_hide: AutoHide,
@@ -171,7 +166,6 @@ impl Default for Settings {
             card_bounce: true,
             card_arrows: true,
             notch_size: NotchSize::Normal,
-            notch_fill: 100,
             notch_floating: false,
             auto_hide: AutoHide::Fullscreen,
             second_zone: None,
@@ -301,8 +295,6 @@ impl Settings {
              panah_halaman = {}\n\
              ; Ukuran notch: kecil, normal atau besar.\n\
              ukuran_notch = {}\n\
-             ; Transparansi notch: 100 hitam penuh, 0 paling tembus tapi tetap terlihat.\n\
-             transparansi = {}\n\
              ; Notch mengambang di bawah tepi atas layar, tidak menempel.\n\
              notch_mengambang = {}\n\
              ; Sembunyikan notch saat app di depan fullscreen, juga saat di-maximize, atau tidak.\n\
@@ -367,7 +359,6 @@ impl Settings {
             flag(self.card_bounce),
             flag(self.card_arrows),
             self.notch_size.name(),
-            self.notch_fill,
             flag(self.notch_floating),
             self.auto_hide.name(),
             number(self.second_zone),
@@ -384,13 +375,6 @@ impl Settings {
             flag(self.stretch),
             self.stretch_minutes,
         )
-    }
-}
-
-impl Settings {
-    /// The notch's opacity: never below [`MIN_OPACITY`], so it stays visible.
-    pub fn notch_opacity(&self) -> f32 {
-        MIN_OPACITY + (1.0 - MIN_OPACITY) * self.notch_fill.min(100) as f32 / 100.0
     }
 }
 
@@ -521,7 +505,6 @@ fn parse(text: &str) -> Settings {
                     _ => NotchSize::Normal,
                 }
             }
-            "transparansi" => s.notch_fill = number().map_or(100, |v| v.clamp(0.0, 100.0) as u32),
             "notch_mengambang" => s.notch_floating = flag(false),
             "sembunyi_otomatis" => {
                 s.auto_hide = match value.to_lowercase().as_str() {
@@ -601,7 +584,6 @@ mod tests {
             card_bounce: false,
             card_arrows: false,
             notch_size: NotchSize::Large,
-            notch_fill: 40,
             notch_floating: true,
             auto_hide: AutoHide::Maximized,
             second_zone: Some(5.5),
@@ -621,21 +603,6 @@ mod tests {
             stretch_minutes: 90,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
-    }
-
-    #[test]
-    fn the_notch_never_turns_invisible() {
-        let at = |notch_fill| {
-            Settings {
-                notch_fill,
-                ..Settings::default()
-            }
-            .notch_opacity()
-        };
-        assert_eq!(at(100), 1.0);
-        assert_eq!(at(0), MIN_OPACITY);
-        assert_eq!(parse("transparansi = 500\n").notch_fill, 100);
-        assert_eq!(Settings::default().notch_fill, 100);
     }
 
     #[test]

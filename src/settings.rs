@@ -57,8 +57,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_CHILD, WS_CLIPCHILDREN, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 
-use windows::Win32::System::SystemServices::MK_LBUTTON;
-
 use windows_numerics::Matrix3x2;
 
 use crate::config::{self, AutoHide, NotchSize, Settings};
@@ -176,11 +174,6 @@ enum Row {
         title: &'static str,
         note: &'static str,
     },
-    /// How see-through the notch is, set on a slider.
-    Fill {
-        title: &'static str,
-        note: &'static str,
-    },
 }
 
 const SIZES: [(&str, NotchSize); 3] = [
@@ -205,9 +198,6 @@ const HIDES: [(&str, AutoHide); 3] = [
 const HIDE_WIDTH: f32 = 80.0;
 const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
 const STYLE_WIDTH: f32 = 90.0;
-/// The slider's track, and the steps its value moves in.
-const SLIDER_WIDTH: f32 = 170.0;
-const SLIDER_STEP: u32 = 5;
 
 struct Group {
     title: &'static str,
@@ -239,10 +229,6 @@ static PAGES: [Page; 13] = [
                 Row::Size {
                     title: "Ukuran notch",
                     note: "Cuma notch tertutup, kartu tetap",
-                },
-                Row::Fill {
-                    title: "Transparansi notch",
-                    note: "0 paling tembus, tetap terlihat",
                 },
                 Row::Switch {
                     toggle: 17,
@@ -714,23 +700,6 @@ fn style_segment(row: Rect, index: usize) -> Rect {
     Rect::new(left, cy - 15.0, left + STYLE_WIDTH, cy + 15.0)
 }
 
-/// The slider's track at the right end of a row.
-fn slider_track(row: Rect) -> Rect {
-    let cy = (row.top + row.bottom) / 2.0;
-    Rect::new(
-        row.right - 26.0 - SLIDER_WIDTH,
-        cy - 12.0,
-        row.right - 26.0,
-        cy + 12.0,
-    )
-}
-
-/// The slider's value at `x`, in whole steps.
-fn slider_value(track: Rect, x: f32) -> u32 {
-    let at = ((x - track.left) / (track.right - track.left)).clamp(0.0, 1.0);
-    (at * 100.0 / SLIDER_STEP as f32).round() as u32 * SLIDER_STEP
-}
-
 /// The text field at the right end of a row.
 fn row_field(row: Rect, width: f32) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
@@ -803,7 +772,6 @@ struct Window {
     /// Minutes of use before each health reminder, kept as they were.
     health_minutes: [u32; 3],
     notch_size: NotchSize,
-    notch_fill: u32,
     /// The mouse is on the close button.
     close_hover: bool,
     notch_floating: bool,
@@ -1091,7 +1059,6 @@ impl Window {
                 settings.stretch_minutes,
             ],
             notch_size: settings.notch_size,
-            notch_fill: settings.notch_fill,
             notch_floating: settings.notch_floating,
             second_zone: settings.second_zone,
             auto_hide: settings.auto_hide,
@@ -1418,7 +1385,6 @@ impl Window {
             notch_minimal: self.toggles[17],
             open_on_click: self.toggles[18],
             notch_size: self.notch_size,
-            notch_fill: self.notch_fill,
             notch_floating: self.notch_floating,
             second_zone: self.second_zone,
             auto_hide: self.auto_hide,
@@ -1515,25 +1481,6 @@ impl Window {
                 .map(|i| STYLES[i].1),
             _ => None,
         })
-    }
-
-    /// Moves the slider to `x` if (`x`, `y`) is on it, putting a new value
-    /// into effect at once. Returns whether it was on the slider.
-    fn slide(&mut self, x: f32, y: f32) -> bool {
-        let track = rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
-            Row::Fill { .. } => Some(slider_track(rect)),
-            _ => None,
-        });
-        let Some(track) = track.filter(|track| track.contains(x, y)) else {
-            return false;
-        };
-        let value = slider_value(track, x);
-        if value != self.notch_fill {
-            self.notch_fill = value;
-            self.invalidate();
-            self.apply_live();
-        }
-        true
     }
 
     /// What a click at a point on the Halaman list would do. Home can't be
@@ -1694,7 +1641,6 @@ impl Window {
             self.notch_floating = floating;
             self.invalidate();
             self.apply_live();
-        } else if self.slide(x, y) {
         } else if let Some(hide) = self.hide_at(x, y) {
             self.auto_hide = hide;
             self.invalidate();
@@ -1735,9 +1681,6 @@ impl Window {
             || self.zone_at(x, y).is_some()
             || self.hide_at(x, y).is_some()
             || self.style_at(x, y).is_some()
-            || rows(&PAGES[self.page]).any(|(rect, row)| {
-                matches!(row, Row::Fill { .. }) && slider_track(rect).contains(x, y)
-            })
     }
 
     unsafe fn paint(&self, hdc: HDC) {
@@ -1901,7 +1844,6 @@ impl Window {
                 Row::Zone { title, note } => (*title, *note, zone_segment(rect, 0).left - 8.0),
                 Row::Hide { title, note } => (*title, *note, hide_segment(rect, 0).left - 8.0),
                 Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
-                Row::Fill { title, note } => (*title, *note, slider_track(rect).left - 56.0),
             };
             let title_box = Rect::new(
                 rect.left + 16.0,
@@ -1929,9 +1871,6 @@ impl Window {
                     }
                     self.text_at(label, &f.button, segment, 0xffffff, 0.95);
                 }
-            }
-            if let Row::Fill { .. } = row {
-                self.slider(slider_track(rect));
             }
             if let Row::Hide { .. } = row {
                 let track = Rect {
@@ -2297,40 +2236,6 @@ impl Window {
         }
     }
 
-    /// The slider with its value on the left.
-    unsafe fn slider(&self, track: Rect) {
-        let cy = (track.top + track.bottom) / 2.0;
-        let line = Rect::new(track.left, cy - 2.0, track.right, cy + 2.0);
-        let knob = track.left + (track.right - track.left) * self.notch_fill as f32 / 100.0;
-        self.rounded(line, 2.0, FIELD, 1.0);
-        self.rounded(
-            Rect {
-                right: knob,
-                ..line
-            },
-            2.0,
-            ACCENT,
-            1.0,
-        );
-        self.brush.SetColor(&rgb(0xffffff, 1.0));
-        self.target.FillEllipse(
-            &D2D1_ELLIPSE {
-                point: windows_numerics::Vector2 { X: knob, Y: cy },
-                radiusX: 8.0,
-                radiusY: 8.0,
-            },
-            &self.brush,
-        );
-        let label = Rect::new(
-            track.left - 54.0,
-            track.top,
-            track.left - 12.0,
-            track.bottom,
-        );
-        let value = self.notch_fill.to_string();
-        self.text_at(&value, &self.fonts.button, label, 0xffffff, 0.95);
-    }
-
     unsafe fn rounded(&self, rect: Rect, radius: f32, color: u32, alpha: f32) {
         self.brush.SetColor(&rgb(color, alpha));
         self.target.FillRoundedRectangle(
@@ -2473,13 +2378,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEMOVE => {
             let (x, y) = (lparam.0 as i16 as f32, (lparam.0 >> 16) as i16 as f32);
-            let held = wparam.0 & MK_LBUTTON.0 as usize != 0;
             with_window(|window| {
-                let (x, y) = (x / window.scale, y / window.scale - TITLE_BAR);
-                if held {
-                    window.slide(x, y + window.scroll);
-                }
-                window.hover_at(x, y);
+                window.hover_at(x / window.scale, y / window.scale - TITLE_BAR);
             });
             LRESULT(0)
         }
@@ -2638,8 +2538,7 @@ mod tests {
                 | Row::Size { .. }
                 | Row::Zone { .. }
                 | Row::Hide { .. }
-                | Row::Style { .. }
-                | Row::Fill { .. } => None,
+                | Row::Style { .. } => None,
             })
             .collect()
     }

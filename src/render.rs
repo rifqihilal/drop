@@ -1032,8 +1032,6 @@ pub struct Scene<'a> {
     /// How far a notice's ring has filled, 0..1, and its beat while that runs.
     pub notice_meter: f32,
     pub notice_beat: Option<f32>,
-    /// How solid the notch's black is, 0..1.
-    pub notch_opacity: f32,
     /// The notch floats, rounded all round, instead of joining the top edge.
     pub floating: bool,
     /// How far it has come away from the edge, 0..1: the bar a floating
@@ -1858,9 +1856,7 @@ impl Renderer {
         sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         sink.Close()?;
 
-        self.black.SetOpacity(scene.notch_opacity);
         self.target.FillGeometry(&geometry, &self.black, None);
-        self.black.SetOpacity(1.0);
         // The idle eyes shine out of the same dark blue.
         let idle = scene.eyes_visible.clamp(0.0, 1.0);
         if idle > 0.01 {
@@ -2040,7 +2036,7 @@ impl Renderer {
             return;
         }
         let (left, top, width, h) = (pill.left, pill.top, pill.right - pill.left, pill.bottom);
-        self.black.SetOpacity(scene.notch_opacity * alpha);
+        self.black.SetOpacity(alpha);
         self.target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
                 rect: rect(left, top, left + width, h),

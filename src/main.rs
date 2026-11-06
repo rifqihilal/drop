@@ -2976,7 +2976,6 @@ impl App {
             prayer_soon: self.prayer_soon(),
             notice_meter: n.notice_meter.value,
             notice_beat: n.notice_beat,
-            notch_opacity: self.settings.notch_opacity(),
             floating: self.settings.notch_floating,
             lift: self.lift(),
             arrows: self.settings.card_arrows,
