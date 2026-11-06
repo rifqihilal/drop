@@ -1,6 +1,7 @@
 //! Place search for the settings window, using Open-Meteo's free geocoding
 //! service over WinHTTP. Only runs when the user presses "Cari".
 
+use crate::lang::tr;
 use crate::net::{self, percent_encode};
 
 const HOST: &str = "geocoding-api.open-meteo.com";
@@ -21,7 +22,10 @@ pub fn search(query: &str) -> Result<Vec<Place>, String> {
         "/v1/search?name={}&count=10&language=id&format=json",
         percent_encode(query.trim())
     );
-    let body = net::get(HOST, &path).ok_or("Tidak dapat terhubung ke layanan pencarian")?;
+    let body = net::get(HOST, &path).ok_or(tr(
+        "Tidak dapat terhubung ke layanan pencarian",
+        "Could not reach the search service",
+    ))?;
     let mut places = parse(&body)?;
     // Prayer times follow the Kemenag method, so places in Indonesia come
     // first, and only they are listed when there are any.
@@ -37,8 +41,13 @@ pub fn search(query: &str) -> Result<Vec<Place>, String> {
 }
 
 fn parse(body: &[u8]) -> Result<Vec<Place>, String> {
-    let json: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| "Jawaban layanan tidak terbaca".to_string())?;
+    let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
+        tr(
+            "Jawaban layanan tidak terbaca",
+            "The search service gave no readable answer",
+        )
+        .to_string()
+    })?;
     let results = json["results"].as_array().cloned().unwrap_or_default();
     Ok(results
         .iter()

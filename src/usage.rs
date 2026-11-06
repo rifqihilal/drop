@@ -298,8 +298,8 @@ pub fn format_time(ms: u64) -> String {
     match (minutes / 60, minutes % 60) {
         (0, 0) => "<1m".to_string(),
         (0, minutes) => format!("{minutes}m"),
-        (hours, 0) => format!("{hours}j"),
-        (hours, minutes) => format!("{hours}j {minutes}m"),
+        (hours, 0) => format!("{hours}{}", crate::lang::tr("j", "h")),
+        (hours, minutes) => format!("{hours}{} {minutes}m", crate::lang::tr("j", "h")),
     }
 }
 

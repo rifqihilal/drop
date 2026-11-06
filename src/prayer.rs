@@ -9,6 +9,16 @@ use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION
 
 /// The five prayers Drop reminds about, in order.
 pub const NAMES: [&str; 5] = ["Subuh", "Dzuhur", "Ashar", "Maghrib", "Isya"];
+const NAMES_EN: [&str; 5] = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
+
+/// The name of prayer `index` in the language in use.
+pub fn name(index: usize) -> &'static str {
+    if crate::lang::english() {
+        NAMES_EN[index]
+    } else {
+        NAMES[index]
+    }
+}
 
 const FAJR_ANGLE: f64 = 20.0;
 const ISHA_ANGLE: f64 = 18.0;
@@ -216,6 +226,10 @@ pub fn wait_progress(times: &Schedule, now: u32, next: u32) -> f32 {
 /// "1 jam 12 mnt", "12 mnt", "< 1 mnt".
 pub fn format_wait(minutes: u32) -> String {
     match (minutes / 60, minutes % 60) {
+        (0, 0) if crate::lang::english() => "< 1 min".to_string(),
+        (0, m) if crate::lang::english() => format!("{m} min"),
+        (h, 0) if crate::lang::english() => format!("{h} h"),
+        (h, m) if crate::lang::english() => format!("{h} h {m} min"),
         (0, 0) => "< 1 mnt".to_string(),
         (0, m) => format!("{m} mnt"),
         (h, 0) => format!("{h} jam"),

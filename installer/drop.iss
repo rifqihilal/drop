@@ -28,13 +28,15 @@ WizardStyle=modern
 UsedUserAreasWarning=no
 CloseApplications=no
 
+; Inno Setup ships no Indonesian wizard, so the wizard is in English and
+; so are these.
 [Languages]
-Name: "id"; MessagesFile: "compiler:Default.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-AutoStart=Mulai Drop bersama Windows
-StartNow=Jalankan Drop
-RemoveData=Hapus juga pengaturan, daftar tugas, dan Screen Time Drop?%n%nPilih No untuk menyimpannya.
+AutoStart=Start Drop with Windows
+StartNow=Run Drop
+RemoveData=Also remove Drop's settings, tasks and Screen Time?%n%nChoose No to keep them.
 
 [Tasks]
 Name: "autostart"; Description: "{cm:AutoStart}"

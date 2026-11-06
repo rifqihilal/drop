@@ -61,6 +61,7 @@ use windows_numerics::Matrix3x2;
 
 use crate::config::{self, AutoHide, NotchSize, Settings};
 use crate::geo::{self, Place};
+use crate::lang::{self, Lang};
 use crate::render::{self, Page as CardPage};
 use crate::{autostart, prayer, tray, update};
 
@@ -110,11 +111,11 @@ const SEARCH_FIELD: Rect = Rect::new(LEFT, 74.0, 584.0, 104.0);
 const SEARCH_BUTTON: Rect = Rect::new(592.0, 74.0, RIGHT, 104.0);
 const STATUS: Rect = Rect::new(LEFT, 106.0, RIGHT, 122.0);
 /// Labels above the prayer fields: text and top-left corner.
-const FIELD_LABELS: [(&str, f32, f32); 4] = [
-    ("Nama lokasi", LEFT, 124.0),
-    ("Ketinggian (meter)", 430.0, 124.0),
-    ("Lintang", LEFT, 176.0),
-    ("Bujur", 430.0, 176.0),
+const FIELD_LABELS: [(Text, f32, f32); 4] = [
+    (("Nama lokasi", "Place name"), LEFT, 124.0),
+    (("Ketinggian (meter)", "Elevation (metres)"), 430.0, 124.0),
+    (("Lintang", "Latitude"), LEFT, 176.0),
+    (("Bujur", "Longitude"), 430.0, 176.0),
 ];
 /// Search results drop down from under the search box, over these fields.
 const RESULTS_TOP: f32 = 106.0;
@@ -128,7 +129,13 @@ const PREVIEW: Rect = Rect::new(LEFT, 232.0, RIGHT, 310.0);
 /// Where the Sholat page's rows start, under the location block.
 const PRAYER_TOP: f32 = 318.0;
 
-const SEARCH_HINT: &str = "Cari kota, kabupaten, atau desa";
+fn search_hint() -> String {
+    lang::tr(
+        "Cari kota, kabupaten, atau desa",
+        "Search for a city, town or village",
+    )
+    .to_string()
+}
 
 /// Switch states, in this order: five notifications, start with Windows,
 /// eight modules, three health reminders, the minimal notch, opening the card
@@ -142,70 +149,69 @@ const PAGE_ORDER: usize = 2;
 const PAGE_PRAYER: usize = 9;
 const PAGE_ABOUT: usize = 12;
 
+/// A text in Indonesian and in English; [`lang::tr`] picks one.
+type Text = (&'static str, &'static str);
+
+fn t(text: Text) -> &'static str {
+    lang::tr(text.0, text.1)
+}
+
 enum Row {
     Switch {
         toggle: usize,
-        title: &'static str,
-        note: &'static str,
+        title: Text,
+        note: Text,
     },
     Field {
         id: usize,
         width: f32,
-        title: &'static str,
-        note: &'static str,
+        title: Text,
+        note: Text,
     },
     /// When the notch hides for the app in front, picked from [`HIDES`].
-    Hide {
-        title: &'static str,
-        note: &'static str,
-    },
+    Hide { title: Text, note: Text },
     /// The second clock's zone, picked from [`ZONES`].
-    Zone {
-        title: &'static str,
-        note: &'static str,
-    },
+    Zone { title: Text, note: Text },
     /// The notch size, picked from [`SIZES`].
-    Size {
-        title: &'static str,
-        note: &'static str,
-    },
+    Size { title: Text, note: Text },
+    /// The interface language, picked from [`LANGS`].
+    Language { title: Text, note: Text },
     /// The notch's style, picked from [`STYLES`].
-    Style {
-        title: &'static str,
-        note: &'static str,
-    },
+    Style { title: Text, note: Text },
 }
 
-const SIZES: [(&str, NotchSize); 3] = [
-    ("Kecil", NotchSize::Small),
-    ("Normal", NotchSize::Normal),
-    ("Besar", NotchSize::Large),
+const SIZES: [(Text, NotchSize); 3] = [
+    (("Kecil", "Small"), NotchSize::Small),
+    (("Normal", "Normal"), NotchSize::Normal),
+    (("Besar", "Large"), NotchSize::Large),
 ];
 const SIZE_WIDTH: f32 = 60.0;
 /// Indonesia's three zones, as hours from UTC, or none.
-const ZONES: [(&str, Option<f64>); 4] = [
-    ("Mati", None),
-    ("WIB", Some(7.0)),
-    ("WITA", Some(8.0)),
-    ("WIT", Some(9.0)),
+const ZONES: [(Text, Option<f64>); 4] = [
+    (("Mati", "Off"), None),
+    (("WIB", "WIB"), Some(7.0)),
+    (("WITA", "WITA"), Some(8.0)),
+    (("WIT", "WIT"), Some(9.0)),
 ];
 const ZONE_WIDTH: f32 = 58.0;
-const HIDES: [(&str, AutoHide); 3] = [
-    ("Mati", AutoHide::Never),
-    ("Fullscreen", AutoHide::Fullscreen),
-    ("Maximize", AutoHide::Maximized),
+const HIDES: [(Text, AutoHide); 3] = [
+    (("Mati", "Off"), AutoHide::Never),
+    (("Fullscreen", "Fullscreen"), AutoHide::Fullscreen),
+    (("Maximize", "Maximize"), AutoHide::Maximized),
 ];
 const HIDE_WIDTH: f32 = 80.0;
+const LANGS: [(&str, Lang); 2] = [("Indonesia", Lang::Indonesian), ("English", Lang::English)];
+const LANG_WIDTH: f32 = 90.0;
 const STYLES: [(&str, bool); 2] = [("Classic", false), ("Floating", true)];
 const STYLE_WIDTH: f32 = 90.0;
 
 struct Group {
-    title: &'static str,
+    title: Text,
     rows: &'static [Row],
 }
 
 struct Page {
-    title: &'static str,
+    title: Text,
     glyph: &'static str,
     color: u32,
     /// Top of the first group.
@@ -215,334 +221,338 @@ struct Page {
 
 static PAGES: [Page; 13] = [
     Page {
-        title: "General",
+        title: ("General", "General"),
         glyph: "\u{E713}",
         color: 0x8e8e93,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Notch",
+            title: ("Notch", "Notch"),
             rows: &[
+                Row::Language {
+                    title: ("Bahasa / Language", "Bahasa / Language"),
+                    note: ("Bahasa tampilan Drop", "The language Drop shows"),
+                },
                 Row::Style {
-                    title: "Style notch",
-                    note: "Menempel di tepi atas, atau mengambang",
+                    title: ("Style notch", "Notch style"),
+                    note: ("Menempel di tepi atas, atau mengambang", "Joined to the top edge, or floating"),
                 },
                 Row::Size {
-                    title: "Ukuran notch",
-                    note: "Cuma notch tertutup, kartu tetap",
+                    title: ("Ukuran notch", "Notch size"),
+                    note: ("Cuma notch tertutup, kartu tetap", "The closed notch only, cards keep their size"),
                 },
                 Row::Switch {
                     toggle: 17,
-                    title: "Notch minimal",
-                    note: "Bar hitam tipis yang menempel di atas, tab browser tetap kelihatan",
+                    title: ("Notch minimal", "Minimal notch"),
+                    note: ("Bar hitam tipis yang menempel di atas, tab browser tetap kelihatan", "A thin black bar at the top, browser tabs stay in view"),
                 },
                 Row::Hide {
-                    title: "Sembunyi otomatis",
-                    note: "Jadi bar tipis, tidak hilang",
+                    title: ("Sembunyi otomatis", "Auto-hide"),
+                    note: ("Jadi bar tipis, tidak hilang", "Turns into a thin bar, never disappears"),
                 },
                 Row::Switch {
                     toggle: 11,
-                    title: "Mata saat idle",
-                    note: "Notch kasih lihat mata saat PC didiamkan",
+                    title: ("Mata saat idle", "Eyes when idle"),
+                    note: ("Notch kasih lihat mata saat PC didiamkan", "The notch shows eyes while the PC is left alone"),
                 },
                 Row::Field {
                     id: ID_IDLE,
                     width: 64.0,
-                    title: "Mata muncul setelah",
-                    note: "Menit tanpa aktivitas, 1 sampai 120",
+                    title: ("Mata muncul setelah", "Eyes appear after"),
+                    note: ("Menit tanpa aktivitas, 1 sampai 120", "Minutes without activity, 1 to 120"),
                 },
                 Row::Switch {
                     toggle: 5,
-                    title: "Start bareng Windows",
-                    note: "Drop kebuka sendiri setelah masuk Windows",
+                    title: ("Start bareng Windows", "Start with Windows"),
+                    note: ("Drop kebuka sendiri setelah masuk Windows", "Drop opens on its own after signing in"),
                 },
             ],
         }],
     },
     Page {
-        title: "Kartu",
+        title: ("Kartu", "Cards"),
         glyph: "\u{E8A1}",
         color: 0xbf5af2,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Kartu",
+            title: ("Kartu", "Cards"),
             rows: &[
                 Row::Switch {
                     toggle: 18,
-                    title: "Klik buat buka kartu",
-                    note: "Hover cuma melebarkan notch dan kasih lihat tanggal",
+                    title: ("Klik buat buka kartu", "Click to open the card"),
+                    note: ("Hover cuma melebarkan notch dan kasih lihat tanggal", "Hovering only widens the notch and shows the date"),
                 },
                 Row::Switch {
                     toggle: 21,
-                    title: "Bounce",
-                    note: "Notch dan kartu mantul saat melebar",
+                    title: ("Bounce", "Bounce"),
+                    note: ("Notch dan kartu mantul saat melebar", "The notch and card bounce as they grow"),
                 },
                 Row::Switch {
                     toggle: 24,
-                    title: "Panah halaman",
-                    note: "Panah kiri dan kanan di kartu buat ganti halaman",
+                    title: ("Panah halaman", "Page arrows"),
+                    note: ("Panah kiri dan kanan di kartu buat ganti halaman", "Left and right arrows on the card to change pages"),
                 },
                 Row::Zone {
-                    title: "Jam daerah lain",
-                    note: "Tampil di Home, misal jam Jakarta",
+                    title: ("Jam daerah lain", "Second clock"),
+                    note: ("Tampil di Home, misal jam Jakarta", "Shown on Home, such as Jakarta time"),
                 },
             ],
         }],
     },
     // Drawn by hand: the card's pages, to show or hide and put in order.
     Page {
-        title: "Halaman",
+        title: ("Halaman", "Pages"),
         glyph: "\u{E8FD}",
         color: 0xac8e68,
         top: CONTENT_TOP,
         groups: &[],
     },
     Page {
-        title: "Notifikasi",
+        title: ("Notifikasi", "Notifications"),
         glyph: "\u{EA8F}",
         color: 0x32ade6,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Sistem",
+            title: ("Sistem", "System"),
             rows: &[
                 Row::Switch {
                     toggle: 0,
-                    title: "Wi-Fi connect dan disconnect",
-                    note: "Kabarin saat koneksi berubah",
+                    title: ("Wi-Fi connect dan disconnect", "Wi-Fi connect and disconnect"),
+                    note: ("Kabarin saat koneksi berubah", "Tell me when the connection changes"),
                 },
                 Row::Switch {
                     toggle: 1,
-                    title: "Device Bluetooth",
-                    note: "Kabarin saat device connect atau disconnect",
+                    title: ("Device Bluetooth", "Bluetooth devices"),
+                    note: ("Kabarin saat device connect atau disconnect", "Tell me when a device connects or disconnects"),
                 },
                 Row::Switch {
                     toggle: 2,
-                    title: "Battery",
-                    note: "Kabarin saat dicas, dilepas, penuh, dan hampir habis",
+                    title: ("Battery", "Battery"),
+                    note: ("Kabarin saat dicas, dilepas, penuh, dan hampir habis", "Tell me when charging, unplugged, full and nearly empty"),
                 },
                 Row::Switch {
                     toggle: 28,
-                    title: "Ingatkan di 80%",
-                    note: "Saran cabut charger biar baterai awet",
+                    title: ("Ingatkan di 80%", "Remind at 80%"),
+                    note: ("Saran cabut charger biar baterai awet", "Suggests unplugging to keep the battery healthy"),
                 },
                 Row::Switch {
                     toggle: 26,
-                    title: "Mic mute dan unmute",
-                    note: "Kabarin saat mikrofon dimatikan atau dinyalakan",
+                    title: ("Mic mute dan unmute", "Mic mute and unmute"),
+                    note: ("Kabarin saat mikrofon dimatikan atau dinyalakan", "Tell me when the microphone is muted or turned on"),
                 },
                 Row::Switch {
                     toggle: 27,
-                    title: "Indikator kamera dan mic",
-                    note: "Notch kecil di kanan saat kamera atau mic dipakai, klik mic buat mute",
+                    title: ("Indikator kamera dan mic", "Camera and mic indicator"),
+                    note: ("Notch kecil di kanan saat kamera atau mic dipakai, klik mic buat mute", "Shows while the camera or mic is in use, click the mic to mute"),
                 },
                 Row::Switch {
                     toggle: 19,
-                    title: "Notifikasi app",
-                    note: "Pesan dari app lain, kayak WhatsApp",
+                    title: ("Notifikasi app", "App notifications"),
+                    note: ("Pesan dari app lain, kayak WhatsApp", "Messages from other apps, such as WhatsApp"),
                 },
                 Row::Switch {
                     toggle: 25,
-                    title: "Ikuti Do Not Disturb",
-                    note: "Notifikasi app dan suara diam saat Do Not Disturb Windows nyala",
+                    title: ("Ikuti Do Not Disturb", "Follow Do Not Disturb"),
+                    note: ("Notifikasi app dan suara diam saat Do Not Disturb Windows nyala", "App notifications and sounds stay quiet while Windows' Do Not Disturb is on"),
                 },
                 Row::Switch {
                     toggle: 4,
-                    title: "Suara notifikasi",
-                    note: "Suara singkat saat notifikasi muncul",
+                    title: ("Suara notifikasi", "Notification sound"),
+                    note: ("Suara singkat saat notifikasi muncul", "A short sound when a notice appears"),
                 },
             ],
         }],
     },
     Page {
-        title: "Music & lirik",
+        title: ("Music & lirik", "Music & lyrics"),
         glyph: "\u{E8D6}",
         color: 0xff375f,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Modul",
+            title: ("Modul", "Module"),
             rows: &[
                 Row::Switch {
                     toggle: 7,
-                    title: "Music",
-                    note: "Kartu player dan info lagu di notch",
+                    title: ("Music", "Music"),
+                    note: ("Kartu player dan info lagu di notch", "The player card and the song in the notch"),
                 },
                 Row::Switch {
                     toggle: 13,
-                    title: "Lirik lagu",
-                    note: "Lirik sync dari LRCLIB",
+                    title: ("Lirik lagu", "Lyrics"),
+                    note: ("Lirik sync dari LRCLIB", "Synced lyrics from LRCLIB"),
                 },
             ],
         }],
     },
     Page {
-        title: "Cuaca",
+        title: ("Cuaca", "Weather"),
         glyph: "\u{E706}",
         color: 0xff9f0a,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Modul",
+            title: ("Modul", "Module"),
             rows: &[Row::Switch {
                 toggle: 6,
-                title: "Cuaca",
-                note: "Suhu di notch dan Home, pakai lokasi Sholat",
+                title: ("Cuaca", "Weather"),
+                note: ("Suhu di notch dan Home, pakai lokasi Sholat", "Temperature in the notch and on Home, for the Prayer location"),
             }],
         }],
     },
     Page {
-        title: "To-do",
+        title: ("To-do", "To-do"),
         glyph: "\u{E73E}",
         color: 0x30d158,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Modul",
+            title: ("Modul", "Module"),
             rows: &[
                 Row::Switch {
                     toggle: 12,
-                    title: "To-do",
-                    note: "To-do list di notch",
+                    title: ("To-do", "To-do"),
+                    note: ("To-do list di notch", "A to-do list in the notch"),
                 },
                 Row::Switch {
                     toggle: 29,
-                    title: "Kalkulator",
-                    note: "Halaman kalkulator sederhana di kartu",
+                    title: ("Kalkulator", "Calculator"),
+                    note: ("Halaman kalkulator sederhana di kartu", "A simple calculator page on the card"),
                 },
             ],
         }],
     },
     Page {
-        title: "Screen Time",
+        title: ("Screen Time", "Screen Time"),
         glyph: "\u{E7F4}",
         color: 0x5e5ce6,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Modul",
+            title: ("Modul", "Module"),
             rows: &[Row::Switch {
                 toggle: 23,
-                title: "Screen Time",
-                note: "Waktu pakai per app sampai 7 hari, cuma disimpan di PC ini",
+                title: ("Screen Time", "Screen Time"),
+                note: ("Waktu pakai per app sampai 7 hari, cuma disimpan di PC ini", "Time per app over up to 7 days, kept on this PC only"),
             }],
         }],
     },
     Page {
-        title: "Kalender",
+        title: ("Kalender", "Calendar"),
         glyph: "\u{E787}",
         color: 0xff453a,
         top: CONTENT_TOP,
         groups: &[
             Group {
-                title: "Modul",
+                title: ("Modul", "Module"),
                 rows: &[Row::Switch {
                     toggle: 8,
-                    title: "Kalender & Pomodoro",
-                    note: "Kartu kalender, agenda, dan timer fokus",
+                    title: ("Kalender & Pomodoro", "Calendar & Pomodoro"),
+                    note: ("Kartu kalender, agenda, dan timer fokus", "The calendar card, agenda and focus timer"),
                 }],
             },
             Group {
-                title: "Agenda",
+                title: ("Agenda", "Agenda"),
                 rows: &[
                     Row::Field {
                         id: ID_ICAL,
                         width: 240.0,
-                        title: "Link kalender 1",
-                        note: "Link .ics, acaranya warna biru",
+                        title: ("Link kalender 1", "Calendar link 1"),
+                        note: ("Link .ics, acaranya warna biru", "An .ics link, its events in blue"),
                     },
                     Row::Field {
                         id: ID_ICAL2,
                         width: 240.0,
-                        title: "Link kalender 2",
-                        note: "Link .ics, acaranya warna hijau",
+                        title: ("Link kalender 2", "Calendar link 2"),
+                        note: ("Link .ics, acaranya warna hijau", "An .ics link, its events in green"),
                     },
                     Row::Field {
                         id: ID_ICAL3,
                         width: 240.0,
-                        title: "Link kalender 3",
-                        note: "Link .ics, acaranya warna merah",
+                        title: ("Link kalender 3", "Calendar link 3"),
+                        note: ("Link .ics, acaranya warna merah", "An .ics link, its events in red"),
                     },
                 ],
             },
         ],
     },
     Page {
-        title: "Sholat",
+        title: ("Sholat", "Prayer"),
         glyph: "\u{E823}",
         color: 0x00c7be,
         top: PRAYER_TOP,
         groups: &[Group {
-            title: "Modul & pengingat",
+            title: ("Modul & pengingat", "Module & reminders"),
             rows: &[
                 Row::Switch {
                     toggle: 10,
-                    title: "Halaman sholat",
-                    note: "Kartu jadwal sholat dan posisi matahari",
+                    title: ("Halaman sholat", "Prayer page"),
+                    note: ("Kartu jadwal sholat dan posisi matahari", "Prayer times and the sun's place"),
                 },
                 Row::Switch {
                     toggle: 3,
-                    title: "Pengingat sholat",
-                    note: "Notifikasi menjelang waktu sholat",
+                    title: ("Pengingat sholat", "Prayer reminder"),
+                    note: ("Notifikasi menjelang waktu sholat", "A notice before each prayer time"),
                 },
                 Row::Field {
                     id: ID_REMIND,
                     width: 64.0,
-                    title: "Ingatkan sebelum",
-                    note: "Menit sebelum waktu sholat, 1 sampai 60",
+                    title: ("Ingatkan sebelum", "Remind before"),
+                    note: ("Menit sebelum waktu sholat, 1 sampai 60", "Minutes before the prayer time, 1 to 60"),
                 },
             ],
         }],
     },
     Page {
-        title: "Health",
+        title: ("Health", "Health"),
         glyph: "\u{EB42}",
         color: 0x0a84ff,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Pengingat",
+            title: ("Pengingat", "Reminders"),
             rows: &[
                 Row::Switch {
                     toggle: 14,
-                    title: "Minum air",
-                    note: "Pengingat minum",
+                    title: ("Minum air", "Drink water"),
+                    note: ("Pengingat minum", "A reminder to drink"),
                 },
                 Row::Switch {
                     toggle: 15,
-                    title: "Istirahat mata",
-                    note: "Pengingat istirahat mata",
+                    title: ("Istirahat mata", "Rest your eyes"),
+                    note: ("Pengingat istirahat mata", "A reminder to rest your eyes"),
                 },
                 Row::Switch {
                     toggle: 16,
-                    title: "Stretching",
-                    note: "Pengingat berdiri dan meregang",
+                    title: ("Stretching", "Stretching"),
+                    note: ("Pengingat berdiri dan meregang", "A reminder to stand up and stretch"),
                 },
             ],
         }],
     },
     Page {
-        title: "Shelf",
+        title: ("Shelf", "Shelf"),
         glyph: "\u{E8B7}",
         color: 0xffb340,
         top: CONTENT_TOP,
         groups: &[Group {
-            title: "Modul",
+            title: ("Modul", "Module"),
             rows: &[
                 Row::Switch {
                     toggle: 9,
-                    title: "Shelf",
-                    note: "Tampung file yang di-drag ke notch",
+                    title: ("Shelf", "Shelf"),
+                    note: ("Tampung file yang di-drag ke notch", "Holds files dragged onto the notch"),
                 },
                 Row::Switch {
                     toggle: 20,
-                    title: "Screenshot otomatis",
-                    note: "Screenshot baru langsung masuk shelf",
+                    title: ("Screenshot otomatis", "Screenshots"),
+                    note: ("Screenshot baru langsung masuk shelf", "New screenshots go straight to the shelf"),
                 },
                 Row::Switch {
                     toggle: 22,
-                    title: "Clipboard",
-                    note: "Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup",
+                    title: ("Clipboard", "Clipboard"),
+                    note: ("Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup", "Copied text and images go to the shelf until Drop closes"),
                 },
             ],
         }],
     },
     // Drawn by hand: the version and the update check.
     Page {
-        title: "About",
+        title: ("About", "About"),
         glyph: "\u{E946}",
         color: 0x64d2ff,
         top: CONTENT_TOP,
@@ -693,6 +703,13 @@ fn size_segment(row: Rect, index: usize) -> Rect {
     Rect::new(left, cy - 15.0, left + SIZE_WIDTH, cy + 15.0)
 }
 
+/// Segment `index` of the language picker at the right end of a row.
+fn lang_segment(row: Rect, index: usize) -> Rect {
+    let cy = (row.top + row.bottom) / 2.0;
+    let left = row.right - 16.0 - LANG_WIDTH * (LANGS.len() - index) as f32;
+    Rect::new(left, cy - 15.0, left + LANG_WIDTH, cy + 15.0)
+}
+
 /// Segment `index` of the style picker at the right end of a row.
 fn style_segment(row: Rect, index: usize) -> Rect {
     let cy = (row.top + row.bottom) / 2.0;
@@ -775,6 +792,7 @@ struct Window {
     /// The mouse is on the close button.
     close_hover: bool,
     notch_floating: bool,
+    language: Lang,
     /// Hours from UTC of the second clock on Home.
     second_zone: Option<f64>,
     auto_hide: AutoHide,
@@ -1060,12 +1078,13 @@ impl Window {
             ],
             notch_size: settings.notch_size,
             notch_floating: settings.notch_floating,
+            language: settings.language,
             second_zone: settings.second_zone,
             auto_hide: settings.auto_hide,
             usage_week: settings.usage_week,
             page_order: settings.page_order.clone(),
             pages_hidden: settings.pages_hidden.clone(),
-            status: SEARCH_HINT.to_string(),
+            status: search_hint(),
             status_is_error: false,
             focused: None,
             preview: None,
@@ -1118,7 +1137,7 @@ impl Window {
                 let _ = SetFocus(Some(self.hwnd));
             }
             if self.status_is_error {
-                self.status = SEARCH_HINT.to_string();
+                self.status = search_hint();
                 self.status_is_error = false;
             }
         }
@@ -1217,10 +1236,13 @@ impl Window {
     fn start_search(&mut self) {
         let query = self.text(ID_SEARCH);
         if query.is_empty() {
-            self.set_status("Ketik nama tempat dulu", true);
+            self.set_status(
+                lang::tr("Ketik nama tempat dulu", "Type a place name first"),
+                true,
+            );
             return;
         }
-        self.set_status("Searching…", false);
+        self.set_status(lang::tr("Mencari…", "Searching…"), false);
         let target = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let result = Box::new(geo::search(&query));
@@ -1248,7 +1270,13 @@ impl Window {
                 self.set_status("", false);
                 self.show_fields();
             }
-            Ok(_) => self.set_status("Tempat tidak ditemukan; coba nama lain", true),
+            Ok(_) => self.set_status(
+                lang::tr(
+                    "Tempat tidak ditemukan; coba nama lain",
+                    "No place found; try another name",
+                ),
+                true,
+            ),
             Err(message) => self.set_status(&message, true),
         }
     }
@@ -1294,7 +1322,10 @@ impl Window {
         self.set_text(ID_LONGITUDE, &format!("{:.5}", place.longitude));
         self.set_text(ID_ELEVATION, &format!("{}", place.elevation.round()));
         self.hide_results();
-        self.set_status(&format!("Lokasi: {}", place.region), false);
+        self.set_status(
+            &format!("{}: {}", lang::tr("Lokasi", "Location"), place.region),
+            false,
+        );
         self.update_preview();
         self.apply_live();
     }
@@ -1326,16 +1357,28 @@ impl Window {
         if !coordinates_ok {
             return Err((
                 PAGE_PRAYER,
-                "Lintang (-90 s/d 90) atau bujur (-180 s/d 180) tidak valid",
+                lang::tr(
+                    "Lintang (-90 s/d 90) atau bujur (-180 s/d 180) tidak valid",
+                    "Latitude (-90 to 90) or longitude (-180 to 180) is not valid",
+                ),
             ));
         }
         let Some(remind) = whole_number(&self.text(ID_REMIND), 1, 60) else {
-            return Err((PAGE_PRAYER, "Pengingat harus 1 sampai 60 menit"));
+            return Err((
+                PAGE_PRAYER,
+                lang::tr(
+                    "Pengingat harus 1 sampai 60 menit",
+                    "The reminder must be 1 to 60 minutes",
+                ),
+            ));
         };
         let Some(idle) = whole_number(&self.text(ID_IDLE), 1, 120) else {
             return Err((
                 PAGE_GENERAL,
-                "Waktu munculnya mata harus 1 sampai 120 menit",
+                lang::tr(
+                    "Waktu munculnya mata harus 1 sampai 120 menit",
+                    "The eyes must appear after 1 to 120 minutes",
+                ),
             ));
         };
 
@@ -1386,6 +1429,7 @@ impl Window {
             open_on_click: self.toggles[18],
             notch_size: self.notch_size,
             notch_floating: self.notch_floating,
+            language: self.language,
             second_zone: self.second_zone,
             auto_hide: self.auto_hide,
         })
@@ -1394,14 +1438,17 @@ impl Window {
     /// Writes `settings` and tells the notch. Returns false when that failed.
     fn apply(&mut self, settings: &Settings) -> bool {
         if settings.save().is_err() {
-            self.set_status("Settings gagal disimpan", true);
+            self.set_status(
+                lang::tr("Settings gagal disimpan", "Settings could not be saved"),
+                true,
+            );
             return false;
         }
         if self.toggles[5] != autostart::is_enabled() {
             autostart::set_enabled(self.toggles[5]);
         }
         if self.status_is_error {
-            self.status = SEARCH_HINT.to_string();
+            self.status = search_hint();
             self.status_is_error = false;
             self.invalidate();
         }
@@ -1473,6 +1520,16 @@ impl Window {
         })
     }
 
+    /// The language under a point on the current page.
+    fn lang_at(&self, x: f32, y: f32) -> Option<Lang> {
+        rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
+            Row::Language { .. } => (0..LANGS.len())
+                .find(|&i| lang_segment(rect, i).contains(x, y))
+                .map(|i| LANGS[i].1),
+            _ => None,
+        })
+    }
+
     /// The style under a point on the current page.
     fn style_at(&self, x: f32, y: f32) -> Option<bool> {
         rows(&PAGES[self.page]).find_map(|(rect, row)| match row {
@@ -1526,26 +1583,89 @@ impl Window {
             .iter()
             .any(|&id| !self.text(id).is_empty());
         match page {
-            CardPage::Status => ("Selalu tampil", true),
-            CardPage::Music if !on(7) => ("Modul mati di Music & lirik", false),
-            CardPage::Music => ("Muncul saat lagu diputar", true),
-            CardPage::Notifications if !on(19) => ("Notifikasi app mati di Notifikasi", false),
-            CardPage::Notifications => ("Pesan dari app lain", true),
-            CardPage::Prayer if !on(10) => ("Modul mati di Sholat", false),
-            CardPage::Prayer if self.preview.is_none() => ("Isi lokasi di Sholat dulu", false),
-            CardPage::Prayer => ("Jadwal sholat dan matahari", true),
-            CardPage::Calendar if !on(8) && !feeds => ("Modul mati di Kalender", false),
-            CardPage::Calendar => ("Kalender bulan ini dan agenda", true),
-            CardPage::Pomodoro if !on(8) => ("Modul mati di Kalender", false),
-            CardPage::Pomodoro => ("Fokus, timer, dan stopwatch", true),
-            CardPage::Todo if !on(12) => ("Modul mati di To-do", false),
-            CardPage::Todo => ("Daftar tugas", true),
-            CardPage::Calculator if !on(29) => ("Modul mati di To-do", false),
-            CardPage::Calculator => ("Kalkulator sederhana", true),
-            CardPage::Usage if !on(23) => ("Modul mati di Screen Time", false),
-            CardPage::Usage => ("Waktu pakai per app", true),
-            CardPage::Shelf if !on(9) => ("Modul mati di Shelf", false),
-            CardPage::Shelf => ("File, screenshot, dan copy-an", true),
+            CardPage::Status => (lang::tr("Selalu tampil", "Always shown"), true),
+            CardPage::Music if !on(7) => (
+                lang::tr(
+                    "Modul mati di Music & lirik",
+                    "Turned off in Music & lyrics",
+                ),
+                false,
+            ),
+            CardPage::Music => (
+                lang::tr("Muncul saat lagu diputar", "Shows while a song plays"),
+                true,
+            ),
+            CardPage::Notifications if !on(19) => (
+                lang::tr(
+                    "Notifikasi app mati di Notifikasi",
+                    "App notifications are off in Notifications",
+                ),
+                false,
+            ),
+            CardPage::Notifications => (
+                lang::tr("Pesan dari app lain", "Messages from other apps"),
+                true,
+            ),
+            CardPage::Prayer if !on(10) => (
+                lang::tr("Modul mati di Sholat", "Turned off in Prayer"),
+                false,
+            ),
+            CardPage::Prayer if self.preview.is_none() => (
+                lang::tr(
+                    "Isi lokasi di Sholat dulu",
+                    "Set a location in Prayer first",
+                ),
+                false,
+            ),
+            CardPage::Prayer => (
+                lang::tr("Jadwal sholat dan matahari", "Prayer times and the sun"),
+                true,
+            ),
+            CardPage::Calendar if !on(8) && !feeds => (
+                lang::tr("Modul mati di Kalender", "Turned off in Calendar"),
+                false,
+            ),
+            CardPage::Calendar => (
+                lang::tr("Kalender bulan ini dan agenda", "This month and the agenda"),
+                true,
+            ),
+            CardPage::Pomodoro if !on(8) => (
+                lang::tr("Modul mati di Kalender", "Turned off in Calendar"),
+                false,
+            ),
+            CardPage::Pomodoro => (
+                lang::tr("Fokus, timer, dan stopwatch", "Focus, timer and stopwatch"),
+                true,
+            ),
+            CardPage::Todo if !on(12) => (
+                lang::tr("Modul mati di To-do", "Turned off in To-do"),
+                false,
+            ),
+            CardPage::Todo => (lang::tr("Daftar tugas", "Your tasks by day"), true),
+            CardPage::Calculator if !on(29) => (
+                lang::tr("Modul mati di To-do", "Turned off in To-do"),
+                false,
+            ),
+            CardPage::Calculator => (
+                lang::tr("Kalkulator sederhana", "A simple calculator"),
+                true,
+            ),
+            CardPage::Usage if !on(23) => (
+                lang::tr("Modul mati di Screen Time", "Turned off in Screen Time"),
+                false,
+            ),
+            CardPage::Usage => (lang::tr("Waktu pakai per app", "Time spent per app"), true),
+            CardPage::Shelf if !on(9) => (
+                lang::tr("Modul mati di Shelf", "Turned off in Shelf"),
+                false,
+            ),
+            CardPage::Shelf => (
+                lang::tr(
+                    "File, screenshot, dan copy-an",
+                    "Files, screenshots and copies",
+                ),
+                true,
+            ),
         }
     }
 
@@ -1637,6 +1757,11 @@ impl Window {
             self.press_update();
         } else if self.search_button(x, y) {
             self.start_search();
+        } else if let Some(language) = self.lang_at(x, y) {
+            self.language = language;
+            lang::set(language);
+            self.invalidate();
+            self.apply_live();
         } else if let Some(floating) = self.style_at(x, y) {
             self.notch_floating = floating;
             self.invalidate();
@@ -1681,6 +1806,7 @@ impl Window {
             || self.zone_at(x, y).is_some()
             || self.hide_at(x, y).is_some()
             || self.style_at(x, y).is_some()
+            || self.lang_at(x, y).is_some()
     }
 
     unsafe fn paint(&self, hdc: HDC) {
@@ -1702,7 +1828,13 @@ impl Window {
         );
         t.SetTransform(&Matrix3x2::translation(0.0, TITLE_BAR - self.scroll));
         let page = &PAGES[self.page];
-        self.text_at(page.title, &self.fonts.title, TITLE, 0xffffff, 1.0);
+        self.text_at(
+            lang::tr(page.title.0, page.title.1),
+            &self.fonts.title,
+            TITLE,
+            0xffffff,
+            1.0,
+        );
         if self.page == PAGE_PRAYER {
             self.location();
         }
@@ -1737,7 +1869,14 @@ impl Window {
         let (footer, color, alpha) = if self.status_is_error && self.page != PAGE_PRAYER {
             (self.status.as_str(), 0xff99a4, 1.0)
         } else {
-            ("Setiap perubahan langsung tersimpan", 0xffffff, 0.45)
+            (
+                lang::tr(
+                    "Setiap perubahan langsung tersimpan",
+                    "Every change is saved at once",
+                ),
+                0xffffff,
+                0.45,
+            )
         };
         self.text_at(footer, &self.fonts.small, FOOTER_STATUS, color, alpha);
 
@@ -1777,29 +1916,35 @@ impl Window {
             self.rounded(tile, 6.0, page.color, 1.0);
             self.text_at(page.glyph, &f.glyph, tile, 0xffffff, 1.0);
             let label = Rect::new(tile.right + 10.0, row.top, row.right - 8.0, row.bottom);
-            self.text_at(page.title, &f.body, label, 0xffffff, 0.95);
+            self.text_at(t(page.title), &f.body, label, 0xffffff, 0.95);
         }
     }
 
     /// The Sholat page's top: place search, coordinates and today's times.
     unsafe fn location(&self) {
         let f = &self.fonts;
-        self.text_at("Lokasi", &f.section, LOCATION_HEADING, 0xffffff, 0.7);
-        self.button("Search", SEARCH_BUTTON, false);
+        self.text_at(
+            lang::tr("Lokasi", "Location"),
+            &f.section,
+            LOCATION_HEADING,
+            0xffffff,
+            0.7,
+        );
+        self.button(lang::tr("Cari", "Search"), SEARCH_BUTTON, false);
         let status_color = if self.status_is_error {
             0xff99a4
         } else {
             0xffffff
         };
         self.text_at(&self.status, &f.small, STATUS, status_color, 0.6);
-        let labels: &[(&str, f32, f32)] = if self.places.is_empty() {
+        let labels: &[(Text, f32, f32)] = if self.places.is_empty() {
             &FIELD_LABELS
         } else {
             &[]
         };
         for &(label, x, y) in labels {
             self.text_at(
-                label,
+                t(label),
                 &f.small,
                 Rect::new(x, y, x + 234.0, y + 18.0),
                 0xffffff,
@@ -1815,7 +1960,7 @@ impl Window {
         for (index, group) in page.groups.iter().enumerate() {
             let top = group_top(page, index);
             let heading = Rect::new(LEFT + 2.0, top, RIGHT, top + HEADING - 6.0);
-            self.text_at(group.title, &f.section, heading, 0xffffff, 0.7);
+            self.text_at(t(group.title), &f.section, heading, 0xffffff, 0.7);
             let bottom = top + HEADING + group.rows.len() as f32 * ROW;
             self.rounded(
                 Rect::new(LEFT, top + HEADING, RIGHT, bottom),
@@ -1844,6 +1989,7 @@ impl Window {
                 Row::Zone { title, note } => (*title, *note, zone_segment(rect, 0).left - 8.0),
                 Row::Hide { title, note } => (*title, *note, hide_segment(rect, 0).left - 8.0),
                 Row::Style { title, note } => (*title, *note, style_segment(rect, 0).left - 8.0),
+                Row::Language { title, note } => (*title, *note, lang_segment(rect, 0).left - 8.0),
             };
             let title_box = Rect::new(
                 rect.left + 16.0,
@@ -1857,7 +2003,22 @@ impl Window {
                 text_right,
                 rect.bottom - 5.0,
             );
+            let (title, note) = (t(title), t(note));
             self.text_at(title, &f.body, title_box, 0xffffff, 0.95);
+            if let Row::Language { .. } = row {
+                let track = Rect {
+                    right: lang_segment(rect, LANGS.len() - 1).right,
+                    ..lang_segment(rect, 0)
+                };
+                self.rounded(track, 8.0, FIELD, 1.0);
+                for (index, (label, language)) in LANGS.iter().enumerate() {
+                    let segment = lang_segment(rect, index);
+                    if *language == self.language {
+                        self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
+                    }
+                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                }
+            }
             if let Row::Style { .. } = row {
                 let track = Rect {
                     right: style_segment(rect, STYLES.len() - 1).right,
@@ -1883,7 +2044,7 @@ impl Window {
                     if *hide == self.auto_hide {
                         self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
                     }
-                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                    self.text_at(t(*label), &f.button, segment, 0xffffff, 0.95);
                 }
             }
             if let Row::Zone { .. } = row {
@@ -1897,7 +2058,7 @@ impl Window {
                     if *zone == self.second_zone {
                         self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
                     }
-                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                    self.text_at(t(*label), &f.button, segment, 0xffffff, 0.95);
                 }
             }
             if let Row::Size { .. } = row {
@@ -1911,7 +2072,7 @@ impl Window {
                     if *size == self.notch_size {
                         self.rounded(segment, 8.0, 0x5a5a5a, 1.0);
                     }
-                    self.text_at(label, &f.button, segment, 0xffffff, 0.95);
+                    self.text_at(t(*label), &f.button, segment, 0xffffff, 0.95);
                 }
             }
             if let Row::Switch { toggle, .. } = row {
@@ -1921,7 +2082,11 @@ impl Window {
                     .map(|i| self.health_minutes[i]);
                 match minutes {
                     Some(minutes) => self.text_at(
-                        &format!("{note}, setiap {minutes} menit"),
+                        &if lang::english() {
+                            format!("{note}, every {minutes} minutes")
+                        } else {
+                            format!("{note}, setiap {minutes} menit")
+                        },
                         &f.small,
                         note_box,
                         0xffffff,
@@ -1946,7 +2111,10 @@ impl Window {
         let count = self.page_order.len();
         let heading = Rect::new(LEFT + 2.0, CONTENT_TOP, RIGHT, CONTENT_TOP + HEADING - 6.0);
         self.text_at(
-            "Urutan di kartu, dari kiri ke kanan",
+            lang::tr(
+                "Urutan di kartu, dari kiri ke kanan",
+                "Order on the card, left to right",
+            ),
             &f.section,
             heading,
             0xffffff,
@@ -2013,7 +2181,7 @@ impl Window {
             0xffffff,
             1.0,
         );
-        let version = format!("Versi {}", update::CURRENT);
+        let version = format!("{} {}", lang::tr("Versi", "Version"), update::CURRENT);
         self.text_at(
             &version,
             &f.small,
@@ -2022,26 +2190,50 @@ impl Window {
             0.6,
         );
         let label = match &self.update {
-            UpdateCheck::Checking => "Mengecek…".to_string(),
-            UpdateCheck::Newer(version) => format!("Unduh {version}"),
-            _ => "Cek pembaruan".to_string(),
+            UpdateCheck::Checking => lang::tr("Mengecek…", "Checking…").to_string(),
+            UpdateCheck::Newer(version) => format!("{} {version}", lang::tr("Unduh", "Download")),
+            _ => lang::tr("Cek pembaruan", "Check for updates").to_string(),
         };
         let newer = matches!(self.update, UpdateCheck::Newer(_));
         self.button(&label, UPDATE_BUTTON, newer);
         let (status, color, alpha) = match &self.update {
             UpdateCheck::NotYet => (
-                "Cek manual, Drop tidak mengecek sendiri".to_string(),
+                lang::tr(
+                    "Cek manual, Drop tidak mengecek sendiri",
+                    "Checked by hand, Drop never checks on its own",
+                )
+                .to_string(),
                 0xffffff,
                 0.55,
             ),
-            UpdateCheck::Checking => ("Bertanya ke GitHub…".to_string(), 0xffffff, 0.55),
-            UpdateCheck::Latest => ("Sudah versi terbaru".to_string(), SWITCH_ON, 1.0),
+            UpdateCheck::Checking => (
+                lang::tr("Bertanya ke GitHub…", "Asking GitHub…").to_string(),
+                0xffffff,
+                0.55,
+            ),
+            UpdateCheck::Latest => (
+                lang::tr("Sudah versi terbaru", "This is the latest version").to_string(),
+                SWITCH_ON,
+                1.0,
+            ),
             UpdateCheck::Newer(version) => (
-                format!("Versi {version} tersedia, unduh dari GitHub"),
+                if lang::english() {
+                    format!("Version {version} is out, download it from GitHub")
+                } else {
+                    format!("Versi {version} tersedia, unduh dari GitHub")
+                },
                 ACCENT,
                 1.0,
             ),
-            UpdateCheck::Failed => ("Gagal mengecek, coba lagi nanti".to_string(), 0xff99a4, 1.0),
+            UpdateCheck::Failed => (
+                lang::tr(
+                    "Gagal mengecek, coba lagi nanti",
+                    "Could not check, try again later",
+                )
+                .to_string(),
+                0xff99a4,
+                1.0,
+            ),
         };
         self.text_at(
             &status,
@@ -2069,7 +2261,7 @@ impl Window {
             PREVIEW.top + 28.0,
         );
         self.text_at(
-            "Jadwal hari ini (Kemenag RI)",
+            lang::tr("Jadwal hari ini (Kemenag RI)", "Today's times (Kemenag RI)"),
             &f.small,
             inner,
             0xffffff,
@@ -2078,7 +2270,10 @@ impl Window {
         let Some(times) = self.preview else {
             let rest = Rect::new(inner.left, inner.bottom, inner.right, PREVIEW.bottom - 8.0);
             self.text_at(
-                "Isi lintang dan bujur, atau cari lokasi di atas",
+                lang::tr(
+                    "Isi lintang dan bujur, atau cari lokasi di atas",
+                    "Fill in latitude and longitude, or search for a place above",
+                ),
                 &f.body,
                 rest,
                 0xffffff,
@@ -2087,7 +2282,11 @@ impl Window {
             return;
         };
         let column = (PREVIEW.right - PREVIEW.left - 28.0) / 5.0;
-        for (i, (name, time)) in prayer::NAMES.iter().zip(times).enumerate() {
+        for (i, (name, time)) in (0..prayer::NAMES.len())
+            .map(prayer::name)
+            .zip(times)
+            .enumerate()
+        {
             let left = inner.left + i as f32 * column;
             let name_box = Rect::new(left, inner.bottom + 2.0, left + column, inner.bottom + 22.0);
             let time_box = Rect::new(left, name_box.bottom, left + column, name_box.bottom + 26.0);
@@ -2538,7 +2737,8 @@ mod tests {
                 | Row::Size { .. }
                 | Row::Zone { .. }
                 | Row::Hide { .. }
-                | Row::Style { .. } => None,
+                | Row::Style { .. }
+                | Row::Language { .. } => None,
             })
             .collect()
     }
@@ -2552,7 +2752,7 @@ mod tests {
 
     #[test]
     fn fields_land_on_their_pages() {
-        assert_eq!(PAGES[PAGE_PRAYER].title, "Sholat");
+        assert_eq!(PAGES[PAGE_PRAYER].title.0, "Sholat");
         assert_eq!(field_place(ID_REMIND).0, PAGE_PRAYER);
         assert_eq!(field_place(ID_IDLE).0, PAGE_GENERAL);
         assert!(field_place(ID_ICAL).1.right > 0.0);
@@ -2560,8 +2760,8 @@ mod tests {
 
     #[test]
     fn page_list_fits_without_scrolling() {
-        assert_eq!(PAGES[PAGE_ORDER].title, "Halaman");
-        assert_eq!(PAGES[PAGE_ABOUT].title, "About");
+        assert_eq!(PAGES[PAGE_ORDER].title.0, "Halaman");
+        assert_eq!(PAGES[PAGE_ABOUT].title.0, "About");
         assert!(order_row(CardPage::ALL.len() - 1).bottom + 16.0 <= FOOTER_TOP);
         let row = order_row(0);
         assert!(order_button(row, false).right < order_button(row, true).left);

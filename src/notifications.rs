@@ -23,6 +23,7 @@ use windows::UI::Notifications::Management::{
 };
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
 
+use crate::lang::tr;
 use crate::media;
 use crate::watch::Folder;
 
@@ -94,10 +95,10 @@ pub fn now_seconds() -> i64 {
 /// How long ago, for a notification's row.
 pub fn age_label(seconds: i64) -> String {
     match seconds / 60 {
-        ..=0 => "Baru".to_string(),
-        minutes @ 1..=59 => format!("{minutes} mnt"),
-        minutes @ 60..=1439 => format!("{} jam", minutes / 60),
-        minutes => format!("{} hari", minutes / 1440),
+        ..=0 => tr("Baru", "New").to_string(),
+        minutes @ 1..=59 => format!("{minutes} {}", tr("mnt", "min")),
+        minutes @ 60..=1439 => format!("{} {}", minutes / 60, tr("jam", "h")),
+        minutes => format!("{} {}", minutes / 1440, tr("hari", "d")),
     }
 }
 

@@ -17,8 +17,43 @@ pub const MONTHS: [&str; 12] = [
     "Desember",
 ];
 
+const MONTHS_EN: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
 /// Week starts on Monday, as on Indonesian calendars.
 pub const WEEKDAYS: [&str; 7] = ["Sn", "Sl", "Rb", "Km", "Jm", "Sb", "Mg"];
+const WEEKDAYS_EN: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+/// The name of `month` (1 to 12) in the language in use.
+pub fn month_name(month: u32) -> &'static str {
+    let names = if crate::lang::english() {
+        &MONTHS_EN
+    } else {
+        &MONTHS
+    };
+    names[(month as usize).clamp(1, 12) - 1]
+}
+
+/// The days' short names from Monday, in the language in use.
+pub fn weekdays() -> &'static [&'static str; 7] {
+    if crate::lang::english() {
+        &WEEKDAYS_EN
+    } else {
+        &WEEKDAYS
+    }
+}
 
 /// The month `offset` months away from (`year`, `month`).
 pub fn shift(year: i32, month: u32, offset: i32) -> (i32, u32) {
@@ -164,7 +199,7 @@ impl Pomodoro {
 
     pub fn label(&self) -> &'static str {
         match self.phase {
-            Phase::Focus => "Fokus",
+            Phase::Focus => crate::lang::tr("Fokus", "Focus"),
             Phase::Break => "Break",
         }
     }

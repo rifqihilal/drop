@@ -66,6 +66,7 @@ use crate::anim::{
     CARD_NAV, CARD_SIDE, CARD_TOP, DROP_ZONE, FLOAT_GAP, IDLE, LEVEL, LYRIC_CARD_EXTRA,
     LYRIC_STRIP_MAX, NOTICE_HEIGHT, NOTICE_WIDTH, PEEK, TODO_ROW,
 };
+use crate::lang::{english, tr};
 use crate::media::Command;
 use crate::notifications::AppNotice;
 use crate::todo::Task;
@@ -109,14 +110,14 @@ fn page_title<'a>(
 ) -> (&'a str, &'a str, Accent) {
     match page {
         Page::Music => ("Now", "Playing", Accent::Green),
-        Page::Prayer if !place.is_empty() => ("Sholat", place, Accent::Green),
-        Page::Prayer => ("Waktu", "Sholat", Accent::Green),
+        Page::Prayer if !place.is_empty() => (tr("Sholat", "Prayer"), place, Accent::Green),
+        Page::Prayer => (tr("Waktu", "Prayer"), tr("Sholat", "Times"), Accent::Green),
         Page::Calendar => (month, year, Accent::Red),
-        Page::Pomodoro => ("Fokus", "Timer", Accent::Red),
-        Page::Todo => ("Daftar", "Tugas", Accent::Green),
-        Page::Calculator => ("Hitung", "Cepat", Accent::Teal),
+        Page::Pomodoro => (tr("Fokus", "Focus"), "Timer", Accent::Red),
+        Page::Todo => (tr("Daftar", "To-do"), tr("Tugas", "List"), Accent::Green),
+        Page::Calculator => (tr("Hitung", "Quick"), tr("Cepat", "Math"), Accent::Teal),
         Page::Usage => ("Screen", "Time", Accent::Teal),
-        Page::Shelf => ("Shelf", "Berkas", Accent::Teal),
+        Page::Shelf => ("Shelf", tr("Berkas", "Files"), Accent::Teal),
         // Their own headings name them, so the header stays empty.
         Page::Status | Page::Notifications => ("", "", Accent::Red),
     }
@@ -177,10 +178,10 @@ fn clock_hour(clock: &str) -> u32 {
 
 fn greeting(hour: u32) -> &'static str {
     match hour {
-        4..=10 => "Selamat pagi",
-        11..=14 => "Selamat siang",
-        15..=17 => "Selamat sore",
-        _ => "Selamat malam",
+        4..=10 => tr("Selamat pagi", "Good morning"),
+        11..=14 => tr("Selamat siang", "Good afternoon"),
+        15..=17 => tr("Selamat sore", "Good afternoon"),
+        _ => tr("Selamat malam", "Good evening"),
     }
 }
 
@@ -275,8 +276,8 @@ fn prayer_sky(now: u32, times: &[u32; 5]) -> Sky {
 fn battery_time(minutes: u32) -> String {
     match (minutes / 60, minutes % 60) {
         (0, m) => format!("{m}m"),
-        (h, 0) => format!("{h}j"),
-        (h, m) => format!("{h}j {m}m"),
+        (h, 0) => format!("{h}{}", tr("j", "h")),
+        (h, m) => format!("{h}{} {m}m", tr("j", "h")),
     }
 }
 
@@ -354,7 +355,7 @@ impl CalcLayout {
             display.left + 14.0 + 64.0,
             display.bottom - 14.0,
         );
-        pad.chain([(CalcKey::Copy, "Salin", copy)])
+        pad.chain([(CalcKey::Copy, tr("Salin", "Copy"), copy)])
     }
 }
 
@@ -730,15 +731,12 @@ pub fn todo_scroll_most(count: usize) -> f32 {
 /// A day as the task card names it: "Hari ini", "Besok" or "10 Nov".
 pub fn todo_day_label(day: i64, today: i64) -> String {
     match day - today {
-        0 => "Hari ini".to_string(),
-        1 => "Besok".to_string(),
-        -1 => "Kemarin".to_string(),
+        0 => tr("Hari ini", "Today").to_string(),
+        1 => tr("Besok", "Tomorrow").to_string(),
+        -1 => tr("Kemarin", "Yesterday").to_string(),
         _ => {
             let (_, month, date) = calendar::civil_from_days(day);
-            let name: String = calendar::MONTHS[month as usize - 1]
-                .chars()
-                .take(3)
-                .collect();
+            let name: String = calendar::month_name(month).chars().take(3).collect();
             format!("{date} {name}")
         }
     }
@@ -1145,12 +1143,12 @@ impl Page {
         match self {
             Page::Music => "Music",
             Page::Status => "Home",
-            Page::Notifications => "Notifikasi",
-            Page::Prayer => "Sholat",
-            Page::Calendar => "Kalender",
+            Page::Notifications => tr("Notifikasi", "Notifications"),
+            Page::Prayer => tr("Sholat", "Prayer"),
+            Page::Calendar => tr("Kalender", "Calendar"),
             Page::Pomodoro => "Pomodoro",
             Page::Todo => "To-do",
-            Page::Calculator => "Kalkulator",
+            Page::Calculator => tr("Kalkulator", "Calculator"),
             Page::Usage => "Screen Time",
             Page::Shelf => "Shelf",
         }
@@ -2783,7 +2781,7 @@ impl Renderer {
         fixed: bool,
     ) {
         let cy = 17.0;
-        let month = calendar::MONTHS[scene.calendar.month as usize - 1];
+        let month = calendar::month_name(scene.calendar.month);
         let year = scene.calendar.year.to_string();
         let (first, second, accent) = page_title(page, scene.place, month, &year);
         // A place name stops short of the date in the middle.
@@ -3082,7 +3080,7 @@ impl Renderer {
             let left = layout.grid_left + column as f32 * CELL.0;
             rect(left, row, left + CELL.0, row + CELL.1)
         };
-        for (column, name) in calendar::WEEKDAYS.iter().enumerate() {
+        for (column, name) in calendar::weekdays().iter().enumerate() {
             self.draw_text(name, &self.tiny, cell(column as u32, 15.0), 0.45 * alpha);
         }
         let first = calendar::weekday(calendar.year, calendar.month, 1);
@@ -3168,7 +3166,11 @@ impl Renderer {
             self.draw_layout(&text.layout, left, 16.0, 0.55 * alpha);
         }
         if agenda.is_empty() {
-            if let Some(text) = self.text_layout("Belum ada acara", &self.small_left, room) {
+            if let Some(text) = self.text_layout(
+                tr("Belum ada acara", "No events yet"),
+                &self.small_left,
+                room,
+            ) {
                 self.draw_layout(&text.layout, left, AGENDA_TOP + 2.0, 0.5 * alpha);
             }
         }
@@ -3227,7 +3229,7 @@ impl Renderer {
                     self.light.SetOpacity(0.12 * alpha);
                     self.target.FillRoundedRectangle(&shape, &self.light);
                 }
-                let label = format!("{minutes} mnt");
+                let label = format!("{minutes} {}", tr("mnt", "min"));
                 let opacity = if chosen { 1.0 } else { 0.8 };
                 self.draw_text(&label, &self.tile_text, bounds, opacity * alpha);
             }
@@ -3284,6 +3286,11 @@ impl Renderer {
         );
         for (index, ((label, _), bounds)) in TIMER_TABS.iter().zip(layout.tabs).enumerate() {
             let opacity = if index == shown { 1.0 } else { 0.55 };
+            let label = if index == 0 {
+                tr(label, "Focus")
+            } else {
+                label
+            };
             self.draw_text(label, &self.tiny, bounds, opacity * alpha);
         }
     }
@@ -3455,12 +3462,18 @@ impl Renderer {
         let cy = (inset.top + inset.bottom) / 2.0;
         self.light.SetOpacity(alpha);
         self.draw_glyph(glyph::DOWNLOAD, x0 + 42.0, cy, &self.light);
-        if let Some(title) = self.text_layout("Lepas buat simpan", &self.title_text, 230.0) {
+        if let Some(title) = self.text_layout(
+            tr("Lepas buat simpan", "Drop to keep"),
+            &self.title_text,
+            230.0,
+        ) {
             self.draw_layout(&title.layout, x0 + 66.0, cy - 19.0, alpha);
         }
-        if let Some(note) =
-            self.text_layout("File tetap di tempat asalnya", &self.subtitle_text, 230.0)
-        {
+        if let Some(note) = self.text_layout(
+            tr("File tetap di tempat asalnya", "Files stay where they are"),
+            &self.subtitle_text,
+            230.0,
+        ) {
             self.draw_layout(&note.layout, x0 + 66.0, cy + 1.0, 0.55 * alpha);
         }
     }
@@ -3482,17 +3495,30 @@ impl Renderer {
                 1.5,
                 &self.dashes,
             );
-            let hint = "Drag file ke notch, atau copy teks dan gambar";
+            let hint = tr(
+                "Drag file ke notch, atau copy teks dan gambar",
+                "Drag files here, or copy text and images",
+            );
             self.draw_text(hint, &self.tile_text, bounds, 0.5 * alpha);
             return;
         }
-        let heading = format!("{} item", shelf.items.len());
+        let heading = match (english(), shelf.items.len()) {
+            (true, 1) => "1 item".to_string(),
+            (true, count) => format!("{count} items"),
+            (false, count) => format!("{count} item"),
+        };
         if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
             self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
         }
-        let picked = format!("Hapus ({})", shelf.selected.len());
+        let picked = format!("{} ({})", tr("Hapus", "Remove"), shelf.selected.len());
         if shelf.selected.is_empty() {
-            self.draw_pill(layout.clear, glyph::DELETE, "Hapus semua", None, alpha);
+            self.draw_pill(
+                layout.clear,
+                glyph::DELETE,
+                tr("Hapus semua", "Clear all"),
+                None,
+                alpha,
+            );
         } else {
             self.draw_pill(
                 layout.clear,
@@ -3608,15 +3634,26 @@ impl Renderer {
     unsafe fn draw_notifications_card(&self, inbox: &InboxScene, x0: f32, x1: f32, alpha: f32) {
         if inbox.total == 0 {
             let bounds = rect(x0, 40.0, x1, 120.0);
-            self.draw_text("Belum ada notifikasi", &self.tile_text, bounds, 0.5 * alpha);
+            self.draw_text(
+                tr("Belum ada notifikasi", "No notifications yet"),
+                &self.tile_text,
+                bounds,
+                0.5 * alpha,
+            );
             return;
         }
-        let heading = format!("{} notifikasi", inbox.total);
+        let heading = format!("{} {}", inbox.total, tr("notifikasi", "notifications"));
         if let Some(text) = self.text_layout(&heading, &self.title_text, 220.0) {
             self.draw_layout(&text.layout, x0 + 20.0, 8.0, alpha);
         }
         let clear = ShelfRects::new(x0, x1).clear;
-        self.draw_pill(clear, glyph::DELETE, "Hapus semua", None, alpha);
+        self.draw_pill(
+            clear,
+            glyph::DELETE,
+            tr("Hapus semua", "Clear all"),
+            None,
+            alpha,
+        );
 
         let (left, right) = (x0 + 56.0, x1 - 16.0);
         for (index, row) in inbox.rows.iter().enumerate() {
@@ -3933,8 +3970,8 @@ impl Renderer {
             &self.light,
         );
         for (label, left, lit) in [
-            ("Hari ini", track.left, 1.0 - position),
-            ("7 hari", track.left + half, position),
+            (tr("Hari ini", "Today"), track.left, 1.0 - position),
+            (tr("7 hari", "7 days"), track.left + half, position),
         ] {
             self.draw_text(
                 label,
@@ -3955,9 +3992,9 @@ impl Renderer {
         const ICON: f32 = 20.0;
         const ICON_ROOM: f32 = 28.0;
         let period = if scene.week {
-            "7 hari terakhir"
+            tr("7 hari terakhir", "last 7 days")
         } else {
-            "hari ini"
+            tr("hari ini", "today")
         };
         self.draw_usage_switch(usage_switch(x0), scene.switch, alpha);
         let total = usage::format_time(usage::total_ms(scene.apps));
@@ -3968,7 +4005,11 @@ impl Renderer {
             self.draw_layout(&label.layout, x0 + 20.0, 62.0, 0.55 * alpha);
         }
         if scene.week {
-            let average = format!("rata-rata {}", usage::format_time(scene.average_ms));
+            let average = format!(
+                "{} {}",
+                tr("rata-rata", "average"),
+                usage::format_time(scene.average_ms)
+            );
             if let Some(label) = self.text_layout(&average, &self.small_left, TOTAL_ROOM) {
                 self.draw_layout(&label.layout, x0 + 20.0, 79.0, 0.55 * alpha);
             }
@@ -3978,7 +4019,7 @@ impl Renderer {
         let right = x1 - 20.0;
         if scene.apps.is_empty() {
             self.draw_text(
-                "Belum ada data",
+                tr("Belum ada data", "No data yet"),
                 &self.tiny,
                 rect(left, 54.0, right, 54.0 + TODO_ROW),
                 0.5 * alpha,
@@ -4088,7 +4129,9 @@ impl Renderer {
                 let count = format!("{done}/{}", todo.shown.len());
                 if let Some(text) = self.text_layout(&count, &self.big_clock, 96.0) {
                     self.draw_layout(&text.layout, left, 4.0, alpha);
-                    if let Some(word) = self.text_layout("selesai", &self.small_left, 80.0) {
+                    if let Some(word) =
+                        self.text_layout(tr("selesai", "done"), &self.small_left, 80.0)
+                    {
                         let x = left + text.width + 6.0;
                         self.draw_layout(&word.layout, x, 28.0, 0.55 * alpha);
                     }
@@ -4145,14 +4188,14 @@ impl Renderer {
         self.draw_pill(
             layout.add(),
             glyph::ADD,
-            "Tambah",
+            tr("Tambah", "Add"),
             add_accent,
             add_alpha * alpha,
         );
         let (label, accent) = if todo.arranging {
-            ("Selesai", Some(Accent::Green))
+            (tr("Selesai", "Done"), Some(Accent::Green))
         } else {
-            ("Atur", None)
+            (tr("Atur", "Edit"), None)
         };
         let arrange_alpha = if todo.shown.is_empty() && !todo.arranging || writing {
             0.4
@@ -4193,9 +4236,13 @@ impl Renderer {
             self.light.SetOpacity(0.6 * alpha);
             self.draw_glyph(glyph::CHECK, cx, cy, &self.light);
             let note = if todo.day == todo.today {
-                "Belum ada tugas".to_string()
+                tr("Belum ada tugas", "No tasks yet").to_string()
             } else {
-                format!("Kosong \u{b7} {}", todo_day_label(todo.day, todo.today))
+                format!(
+                    "{} \u{b7} {}",
+                    tr("Kosong", "Nothing"),
+                    todo_day_label(todo.day, todo.today)
+                )
             };
             self.draw_text(
                 &note,
@@ -4401,7 +4448,7 @@ impl Renderer {
         self.draw_small_glyph_at(glyph::CLOCK, time.left + 16.0, cy, &self.light);
         let text_left = time.left + 30.0;
         let (shown, opacity) = if form.time.is_empty() && !form.on_time {
-            ("Jam".to_string(), 0.4)
+            (tr("Jam", "Time").to_string(), 0.4)
         } else {
             (todo::time_mask(form.time), 0.92)
         };
@@ -4471,13 +4518,19 @@ impl Renderer {
             DWRITE_MEASURING_MODE_NATURAL,
         );
 
-        self.draw_pill(layout.cancel(), glyph::CLOSE, "Batal", None, alpha);
+        self.draw_pill(
+            layout.cancel(),
+            glyph::CLOSE,
+            tr("Batal", "Cancel"),
+            None,
+            alpha,
+        );
         let ready = !form.text.trim().is_empty() && !form.bad_time;
         let save_alpha = if ready { 1.0 } else { 0.45 };
         self.draw_pill(
             layout.save(),
             glyph::CHECK,
-            "Simpan",
+            tr("Simpan", "Save"),
             Some(Accent::Green),
             save_alpha * alpha,
         );
@@ -4501,7 +4554,9 @@ impl Renderer {
         let cy = (field.top + field.bottom) / 2.0;
         let mut end = left;
         if text.is_empty() {
-            if let Some(hint) = self.text_layout("Nama tugas", &self.subtitle_text, room) {
+            if let Some(hint) =
+                self.text_layout(tr("Nama tugas", "Task name"), &self.subtitle_text, room)
+            {
                 self.draw_layout(&hint.layout, left, cy - hint.height / 2.0, 0.4 * alpha);
             }
         } else {
@@ -4834,7 +4889,7 @@ impl Renderer {
             let name_box = rect(x - 34.0, base + 5.0, x + 34.0, base + 19.0);
             let time_box = rect(x - 34.0, base + 19.0, x + 34.0, base + 35.0);
             self.draw_text(
-                prayer::NAMES[index],
+                prayer::name(index),
                 &self.tiny,
                 name_box,
                 0.85 * label * alpha,
@@ -4880,9 +4935,9 @@ impl Renderer {
         // The next prayer on the left, the wait for it on the right.
         let left = panel.left + 14.0;
         let caption = if prayer.next_today.is_none() {
-            "Berikutnya, besok"
+            tr("Berikutnya, besok", "Next, tomorrow")
         } else {
-            "Berikutnya"
+            tr("Berikutnya", "Next")
         };
         if let Some(text) = self.text_layout(caption, &self.small_left, 150.0) {
             self.draw_layout(&text.layout, left, panel.top + 8.0, 0.8 * alpha);
@@ -4896,7 +4951,11 @@ impl Renderer {
                 self.draw_layout(&time.layout, x, y, 0.75 * alpha);
             }
         }
-        let wait = format!("{} lagi", prayer.wait);
+        let wait = if english() {
+            format!("in {}", prayer.wait)
+        } else {
+            format!("{} lagi", prayer.wait)
+        };
         if let Some(text) = self.text_layout(&wait, &self.text_left, 150.0) {
             let x = panel.right - 14.0 - text.width;
             self.draw_layout(&text.layout, x, panel.top + 10.0, alpha);
@@ -5067,7 +5126,7 @@ impl Renderer {
         // Another zone's time under the date: "13:28 di Jakarta (WIB)".
         if let Some((time, place)) = scene.second_clock {
             text(
-                &format!("{time} di {place}"),
+                &format!("{time} {} {place}", tr("di", "in")),
                 &self.small_left,
                 left,
                 86.0,
@@ -5079,9 +5138,13 @@ impl Renderer {
             let cy = 122.0;
             self.draw_battery(left + 7.0, cy, 7.0, percent, charging, alpha);
             let label = match (charging, status.battery_left) {
-                (true, _) => format!("{percent}% \u{b7} mengisi"),
+                (true, _) => format!("{percent}% \u{b7} {}", tr("mengisi", "charging")),
                 (false, Some(minutes)) => {
-                    format!("{percent}% \u{b7} {} lagi", battery_time(minutes))
+                    format!(
+                        "{percent}% \u{b7} {} {}",
+                        battery_time(minutes),
+                        tr("lagi", "left")
+                    )
                 }
                 (false, None) => format!("{percent}%"),
             };
@@ -5145,7 +5208,14 @@ impl Renderer {
                 );
             }
             None => {
-                text("Cuaca", &self.subtitle_text, left, 12.0, room, 0.75);
+                text(
+                    tr("Cuaca", "Weather"),
+                    &self.subtitle_text,
+                    left,
+                    12.0,
+                    room,
+                    0.75,
+                );
                 text(status.weather_hint, &self.small_left, left, 30.0, room, 0.5);
             }
         }
@@ -5156,7 +5226,7 @@ impl Renderer {
                 if let Some(time) = self.text_layout(&prayer.next_time, &self.text_left, 60.0) {
                     self.draw_layout(&time.layout, right - time.width, 60.0, alpha);
                 }
-                let wait = format!("dalam {}", prayer.wait);
+                let wait = format!("{} {}", tr("dalam", "in"), prayer.wait);
                 text(&wait, &self.small_left, left, 78.0, room, 0.55);
                 let bar = |end: f32, brush: &ID2D1SolidColorBrush| {
                     self.target.FillRoundedRectangle(
@@ -5175,9 +5245,16 @@ impl Renderer {
                 bar(left + room * prayer.progress.clamp(0.0, 1.0), &self.accent);
             }
             None => {
-                text("Sholat", &self.subtitle_text, left, 60.0, room, 0.75);
                 text(
-                    "Atur lokasi di Pengaturan",
+                    tr("Sholat", "Prayer"),
+                    &self.subtitle_text,
+                    left,
+                    60.0,
+                    room,
+                    0.75,
+                );
+                text(
+                    tr("Atur lokasi di Pengaturan", "Set a location in Settings"),
                     &self.small_left,
                     left,
                     78.0,

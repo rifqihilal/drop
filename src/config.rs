@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::health;
+use crate::lang::{self, Lang};
 use crate::prayer::Location;
 use crate::render::Page;
 
@@ -116,6 +117,8 @@ pub struct Settings {
     /// Links to iCalendar feeds for the agenda; each slot has its colour,
     /// and an empty one is unused.
     pub ical_urls: [String; FEEDS],
+    /// The interface language.
+    pub language: Lang,
     /// Every card page, in the order the card shows them.
     pub page_order: Vec<Page>,
     /// Pages kept off the card. Home is never among them.
@@ -170,6 +173,7 @@ impl Default for Settings {
             auto_hide: AutoHide::Fullscreen,
             second_zone: None,
             ical_urls: Default::default(),
+            language: Lang::system(),
             page_order: Page::ALL.to_vec(),
             pages_hidden: Vec::new(),
             water: true,
@@ -212,11 +216,14 @@ impl Settings {
         }
     }
 
+    /// Reads the settings file, and puts its language into effect.
     pub fn load() -> Self {
-        path()
+        let settings: Self = path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|text| parse(&text))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        lang::set(settings.language);
+        settings
     }
 
     pub fn save(&self) -> std::io::Result<()> {
@@ -224,7 +231,11 @@ impl Settings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, self.to_ini())
+        let text = match self.language {
+            Lang::English => english_comments(&self.to_ini()),
+            Lang::Indonesian => self.to_ini(),
+        };
+        std::fs::write(path, text)
     }
 
     fn to_ini(&self) -> String {
@@ -260,6 +271,8 @@ impl Settings {
              bunyi = {}\n\
              \n\
              [umum]\n\
+             ; Bahasa tampilan: id (Indonesia) atau en (English).\n\
+             bahasa = {}\n\
              ; Notch kecil di kanan saat kamera atau mikrofon dipakai.\n\
              titik_privasi = {}\n\
              ; Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.\n\
@@ -339,6 +352,7 @@ impl Settings {
             flag(self.notify_apps),
             flag(self.follow_dnd),
             flag(self.sound),
+            self.language.key(),
             flag(self.privacy_dots),
             self.idle_minutes,
             flag(self.weather),
@@ -408,6 +422,161 @@ pub fn page_order(text: &str) -> Vec<Page> {
     pages
 }
 
+/// The comments of `drop.ini` in English, line for line; the keys and
+/// values stay as they are, so the file reads the same either way.
+const COMMENTS_EN: [(&str, &str); 32] = [
+    (
+        "Pengaturan Drop. Ubah lewat menu tray > Pengaturan, atau langsung di sini;",
+        "Drop's settings. Change them from the tray menu > Settings, or right here;",
+    ),
+    (
+        "Drop membaca ulang file ini dalam satu menit.",
+        "Drop reads this file again within a minute. Keys stay in Indonesian.",
+    ),
+    (
+        "Koordinat dalam derajat desimal; lintang selatan bernilai negatif.",
+        "Coordinates in decimal degrees; southern latitudes are negative.",
+    ),
+    (
+        "Ketinggian dalam meter di atas permukaan laut.",
+        "Elevation in metres above sea level.",
+    ),
+    (
+        "Berapa menit sebelum waktu sholat peringatan muncul.",
+        "How many minutes before each prayer time the reminder shows.",
+    ),
+    (
+        "Ingatkan cabut charger saat baterai sampai 80%.",
+        "Suggest unplugging the charger when the battery reaches 80%.",
+    ),
+    (
+        "Notifikasi saat mikrofon di-mute atau dinyalakan.",
+        "A notice when the microphone is muted or turned on.",
+    ),
+    (
+        "Notifikasi aplikasi lain, seperti WhatsApp.",
+        "Notifications from other apps, such as WhatsApp.",
+    ),
+    (
+        "Notifikasi aplikasi dan bunyi diam saat Do Not Disturb Windows aktif.",
+        "App notifications and sounds stay quiet while Windows' Do Not Disturb is on.",
+    ),
+    (
+        "Bahasa tampilan: id (Indonesia) atau en (English).",
+        "Display language: id (Indonesian) or en (English).",
+    ),
+    (
+        "Notch kecil di kanan saat kamera atau mikrofon dipakai.",
+        "A small notch on the right while the camera or microphone is in use.",
+    ),
+    (
+        "Menit tanpa sentuhan keyboard atau mouse sebelum mata muncul.",
+        "Minutes without keyboard or mouse before the eyes appear.",
+    ),
+    (
+        "Cuaca diambil dari Open-Meteo untuk lokasi di atas.",
+        "The weather comes from Open-Meteo for the location above.",
+    ),
+    (
+        "Screenshot baru langsung masuk shelf.",
+        "New screenshots go straight to the shelf.",
+    ),
+    (
+        "Teks dan gambar yang dicopy masuk shelf sampai Drop ditutup.",
+        "Copied text and images go to the shelf until Drop closes.",
+    ),
+    (
+        "Waktu pakai per app hari ini, cuma disimpan di PC ini.",
+        "Time spent per app, kept on this PC only.",
+    ),
+    (
+        "Screen Time menampilkan 7 hari terakhir, bukan hari ini.",
+        "Screen Time shows the last 7 days instead of today.",
+    ),
+    (
+        "Lirik dicari di lrclib.net dari judul dan penyanyi lagu.",
+        "Lyrics are looked up on lrclib.net by the song's title and artist.",
+    ),
+    (
+        "Saat tertutup notch hanya bar hitam tipis.",
+        "When closed the notch is only a thin black bar.",
+    ),
+    (
+        "Hover hanya melebarkan notch, kartu terbuka saat diklik.",
+        "Hovering only widens the notch; the card opens on a click.",
+    ),
+    (
+        "Notch dan kartu memantul saat melebar.",
+        "The notch and card bounce as they grow.",
+    ),
+    (
+        "Panah kiri dan kanan untuk ganti halaman kartu.",
+        "Left and right arrows to change the card's page.",
+    ),
+    (
+        "Ukuran notch: kecil, normal atau besar.",
+        "Notch size: kecil (small), normal or besar (large).",
+    ),
+    (
+        "Notch mengambang di bawah tepi atas layar, tidak menempel.",
+        "The notch floats below the screen's top edge instead of joining it.",
+    ),
+    (
+        "Sembunyikan notch saat app di depan fullscreen, juga saat di-maximize, atau tidak.",
+        "Tuck the notch away for a full-screen app (fullscreen), also a maximized one (maximize), or not (tidak).",
+    ),
+    (
+        "Jam daerah lain di Home: selisih jam dari UTC (7 WIB, 8 WITA, 9 WIT); kosong = mati.",
+        "A second clock on Home: hours from UTC (7 WIB, 8 WITA, 9 WIT); empty = off.",
+    ),
+    (
+        "Tautan kalender .ics (Google Calendar: Setelan > Alamat rahasia",
+        "Calendar .ics links (Google Calendar: Settings > Secret address",
+    ),
+    (
+        "dalam format iCal). Kosongkan untuk mematikan agenda.",
+        "in iCal format). Leave them empty to turn the agenda off.",
+    ),
+    (
+        "Urutan halaman kartu, dipisah koma: musik, home, notifikasi, sholat, kalender,",
+        "The card's pages in order, separated by commas: musik, home, notifikasi, sholat, kalender,",
+    ),
+    (
+        "pomodoro, tugas, kalkulator, screen_time, shelf. Yang tidak disebut ditaruh di akhir.",
+        "pomodoro, tugas, kalkulator, screen_time, shelf. Pages left out go at the end.",
+    ),
+    (
+        "Halaman yang tidak tampil di kartu, dipisah koma. Home selalu tampil.",
+        "Pages kept off the card, separated by commas. Home always shows.",
+    ),
+    (
+        "Pengingat setelah sekian menit memakai komputer; menjauh dari",
+        "Reminders after so many minutes at the computer; being away",
+    ),
+];
+
+/// `text` with its comments in English.
+fn english_comments(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let Some(comment) = line.strip_prefix("; ") else {
+                return line.to_string();
+            };
+            if let Some((_, english)) = COMMENTS_EN.iter().find(|(id, _)| *id == comment) {
+                return format!("; {english}");
+            }
+            // "komputer 5 menit atau lebih memulai hitungan dari awal."
+            comment
+                .strip_prefix("komputer ")
+                .and_then(|rest| rest.strip_suffix(" menit atau lebih memulai hitungan dari awal."))
+                .map_or(line.to_string(), |minutes| {
+                    format!("; for {minutes} minutes or more starts the count over.")
+                })
+        })
+        .map(|line| line + "\n")
+        .collect()
+}
+
 pub fn path() -> Option<PathBuf> {
     let appdata = std::env::var_os("APPDATA")?;
     Some(PathBuf::from(appdata).join("Drop").join("drop.ini"))
@@ -443,7 +612,12 @@ pub fn valid_longitude(value: f64) -> bool {
 }
 
 fn parse(text: &str) -> Settings {
-    let mut settings = Settings::default();
+    let mut settings = Settings {
+        // A file from before the language setting was written by someone
+        // using Drop in Indonesian; only a new file follows Windows.
+        language: Lang::Indonesian,
+        ..Settings::default()
+    };
     // Notepad may save with a byte-order mark.
     for line in text.trim_start_matches('\u{feff}').lines() {
         let line = line.trim();
@@ -474,6 +648,7 @@ fn parse(text: &str) -> Settings {
             "baterai_80" => s.charge_limit = flag(false),
             "mic" => s.notify_mic = flag(true),
             "titik_privasi" => s.privacy_dots = flag(true),
+            "bahasa" => s.language = Lang::from_key(value).unwrap_or_else(Lang::system),
             "sholat" => s.notify_prayer = flag(true),
             "aplikasi" => s.notify_apps = flag(true),
             "ikuti_dnd" => s.follow_dnd = flag(true),
@@ -593,6 +768,7 @@ mod tests {
                 String::new(),
                 "https://example.com/kerja.ics".to_string(),
             ],
+            language: Lang::English,
             page_order: page_order("shelf, home, tugas"),
             pages_hidden: vec![Page::Usage, Page::Music],
             water: false,
@@ -603,6 +779,29 @@ mod tests {
             stretch_minutes: 90,
         };
         assert_eq!(parse(&settings.to_ini()), settings);
+    }
+
+    #[test]
+    fn older_files_stay_in_indonesian() {
+        assert_eq!(parse("musik = ya\n").language, Lang::Indonesian);
+        assert_eq!(parse("bahasa = en\n").language, Lang::English);
+    }
+
+    #[test]
+    fn english_comments_read_the_same() {
+        let settings = Settings {
+            language: Lang::English,
+            ..Settings::default()
+        };
+        let text = english_comments(&settings.to_ini());
+        assert_eq!(parse(&text), settings);
+        // Every comment line found its English one.
+        let indonesian = settings.to_ini();
+        for (id, en) in indonesian.lines().zip(text.lines()) {
+            if id.starts_with("; ") {
+                assert_ne!(id, en, "untranslated: {id}");
+            }
+        }
     }
 
     #[test]

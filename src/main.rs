@@ -22,6 +22,7 @@ mod geo;
 mod health;
 mod ical;
 mod keys;
+mod lang;
 mod lyrics;
 mod media;
 mod net;
@@ -91,6 +92,7 @@ use config::{AutoHide, NotchSize, PrayerSettings, Settings};
 use frames::Pacer;
 use health::Health;
 use ical::{Event, IcalWatch};
+use lang::{english, tr};
 use lyrics::{Lyrics, LyricsWatch};
 use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
@@ -1338,7 +1340,9 @@ impl App {
         for (task, day) in tasks {
             let item = AgendaItem {
                 day: agenda_day(day, today),
-                time: task.time.map_or("Tugas".to_string(), prayer::format_time),
+                time: task
+                    .time
+                    .map_or(tr("Tugas", "Task").to_string(), prayer::format_time),
                 summary: &task.text,
                 today: day == today,
                 source: render::TASK_SOURCE,
@@ -1864,7 +1868,7 @@ impl App {
         let (name, bytes) = self.downloads.first()?;
         Some(DownloadScene {
             label: if self.downloads.len() > 1 {
-                format!("{} unduhan", self.downloads.len())
+                format!("{} {}", self.downloads.len(), tr("unduhan", "downloads"))
             } else {
                 name.clone()
             },
@@ -1876,7 +1880,13 @@ impl App {
         let now = Instant::now();
         let with_music = self.song_playing();
         // "Berjalan" or "Dijeda", once a timer has started.
-        let state = |running: bool| if running { "Berjalan" } else { "Dijeda" };
+        let state = |running: bool| {
+            if running {
+                tr("Berjalan", "Running")
+            } else {
+                tr("Dijeda", "Paused")
+            }
+        };
         match kind {
             TimerKind::Pomodoro => TimerScene {
                 kind,
@@ -1884,7 +1894,7 @@ impl App {
                 left: calendar::format_left(self.pomodoro.left(now)),
                 running: self.pomodoro.running(),
                 on_break: self.pomodoro.phase == Phase::Break,
-                detail: format!("Sesi {}", self.pomodoro.session),
+                detail: format!("{} {}", tr("Sesi", "Session"), self.pomodoro.session),
                 picking: false,
                 with_music,
                 progress: self.pomodoro.progress(now),
@@ -1895,7 +1905,7 @@ impl App {
                 left: timers::format_clock(self.quick.left(now), true),
                 running: self.quick.running(),
                 on_break: false,
-                detail: format!("{} menit", self.quick.minutes()),
+                detail: format!("{} {}", self.quick.minutes(), tr("menit", "min")),
                 picking: self.quick.idle(),
                 with_music,
                 progress: self.quick.progress(now),
@@ -1903,14 +1913,14 @@ impl App {
             TimerKind::Stopwatch => TimerScene {
                 kind,
                 label: if self.stopwatch.idle() {
-                    "Siap"
+                    tr("Siap", "Ready")
                 } else {
                     state(self.stopwatch.running())
                 },
                 left: timers::format_clock(self.stopwatch.elapsed(now), false),
                 running: self.stopwatch.running(),
                 on_break: false,
-                detail: "Hitung naik".to_string(),
+                detail: tr("Hitung naik", "Counting up").to_string(),
                 picking: false,
                 with_music,
                 progress: self.stopwatch.progress(now),
@@ -1948,8 +1958,12 @@ impl App {
             motion: Motion::Shake,
             accent: Accent::Blue,
             progress: 1.0,
-            title: "Timer selesai".to_string(),
-            subtitle: format!("{minutes} menit sudah lewat"),
+            title: tr("Timer selesai", "Timer done").to_string(),
+            subtitle: if english() {
+                format!("{minutes} min are up")
+            } else {
+                format!("{minutes} menit sudah lewat")
+            },
             trailing: Trailing::None,
             dim: false,
         };
@@ -1964,8 +1978,12 @@ impl App {
                 motion: Motion::Shake,
                 accent: Accent::Green,
                 progress: 1.0,
-                title: "Waktunya break".to_string(),
-                subtitle: format!("Sesi {} selesai · break dulu", self.pomodoro.session),
+                title: tr("Waktunya break", "Time for a break").to_string(),
+                subtitle: if english() {
+                    format!("Session {} done · take a break", self.pomodoro.session)
+                } else {
+                    format!("Sesi {} selesai · break dulu", self.pomodoro.session)
+                },
                 trailing: Trailing::Text(calendar::format_left(self.pomodoro.left(Instant::now()))),
                 dim: false,
             },
@@ -1974,8 +1992,8 @@ impl App {
                 motion: Motion::Shake,
                 accent: Accent::Teal,
                 progress: 1.0,
-                title: "Break selesai".to_string(),
-                subtitle: "Lanjut sesi fokus".to_string(),
+                title: tr("Break selesai", "Break over").to_string(),
+                subtitle: tr("Lanjut sesi fokus", "Back to focus").to_string(),
                 trailing: Trailing::None,
                 dim: false,
             },
@@ -2009,9 +2027,9 @@ impl App {
         }
         self.music()?;
         Some(self.lyric().unwrap_or(if self.lyrics_missing {
-            ("", "Liriknya belum ada", "")
+            ("", tr("Liriknya belum ada", "No lyrics found"), "")
         } else {
-            ("", "Memuat lirik\u{2026}", "")
+            ("", tr("Memuat lirik\u{2026}", "Loading lyrics\u{2026}"), "")
         }))
     }
 
@@ -2125,11 +2143,11 @@ impl App {
     /// What the status page shows in place of the weather.
     fn weather_hint(&self) -> &'static str {
         if !self.settings.weather {
-            "Cuaca off"
+            tr("Cuaca off", "Weather off")
         } else if self.settings.prayer().is_none() {
-            "Atur lokasi di Pengaturan"
+            tr("Atur lokasi di Pengaturan", "Set a location in Settings")
         } else {
-            "Loading cuaca…"
+            tr("Loading cuaca…", "Loading weather…")
         }
     }
 
@@ -2644,12 +2662,14 @@ impl App {
         // sleep after the prayer time skips it.
         let due = (0..prayer::NAMES.len())
             .find(|&i| !day.reminded[i] && now + lead >= day.times[i] && now < day.times[i]);
-        let title =
-            |i: usize| format!("{} {}", prayer::NAMES[i], prayer::format_time(day.times[i]));
+        let title = |i: usize| format!("{} {}", prayer::name(i), prayer::format_time(day.times[i]));
         let reminder = if let Some(i) = due {
             day.reminded[i] = true;
             let minutes = day.times[i] - now;
-            Some((title(i), format!("{minutes} Menit lagi")))
+            Some((
+                title(i),
+                format!("{minutes} {}", tr("Menit lagi", "min to go")),
+            ))
         } else {
             let arrived = (0..prayer::NAMES.len()).find(|&i| {
                 !day.arrived[i]
@@ -2658,7 +2678,7 @@ impl App {
             });
             arrived.map(|i| {
                 day.arrived[i] = true;
-                (title(i), "Waktunya sholat".to_string())
+                (title(i), tr("Waktunya sholat", "Time to pray").to_string())
             })
         };
         if let Some((title, wait)) = reminder {
@@ -2685,7 +2705,7 @@ impl App {
             .as_ref()
             .filter(|_| self.settings.module_prayer)?;
         let (next, wait) = prayer::soon(&day.times, minutes_now())?;
-        Some((prayer::NAMES[next], prayer::format_wait(wait)))
+        Some((prayer::name(next), prayer::format_wait(wait)))
     }
 
     /// The prayer page: the next prayer (tomorrow's Subuh after Isya), how
@@ -2709,7 +2729,7 @@ impl App {
             }
         };
         Some(PrayerScene {
-            next_name: prayer::NAMES[next],
+            next_name: prayer::name(next),
             next_time: prayer::format_time(time % (24 * 60)),
             wait: prayer::format_wait(time.saturating_sub(now)),
             times: day.times.map(prayer::format_time),
@@ -3347,16 +3367,31 @@ fn show_menu(hwnd: HWND) -> usize {
         } else {
             MF_STRING
         };
-        let _ = AppendMenuW(menu, minimal_flags, MENU_MINIMAL, w!("Notch minimal"));
+        let _ = AppendMenuW(
+            menu,
+            minimal_flags,
+            MENU_MINIMAL,
+            &HSTRING::from(tr("Notch minimal", "Minimal notch")),
+        );
         let autostart_flags = if autostart::is_enabled() {
             MF_STRING | MF_CHECKED
         } else {
             MF_STRING
         };
-        let _ = AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, w!("Mulai otomatis"));
+        let _ = AppendMenuW(
+            menu,
+            autostart_flags,
+            MENU_AUTOSTART,
+            &HSTRING::from(tr("Mulai otomatis", "Start with Windows")),
+        );
         let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Settings…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Keluar"));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_QUIT,
+            &HSTRING::from(tr("Keluar", "Quit")),
+        );
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
         // Required so the menu closes when clicking elsewhere.
@@ -3395,13 +3430,15 @@ fn idle_ms() -> u32 {
 /// A day on the agenda: "Hari ini", "Besok" or "Sab 7".
 fn agenda_day(day: i64, today: i64) -> String {
     const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+    const DAYS_EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let (year, month, date) = calendar::civil_from_days(day);
+    let days = if english() { &DAYS_EN } else { &DAYS };
     match day - today {
-        0 => "Hari ini".to_string(),
-        1 => "Besok".to_string(),
+        0 => tr("Hari ini", "Today").to_string(),
+        1 => tr("Besok", "Tomorrow").to_string(),
         _ => format!(
             "{} {date}",
-            DAYS[calendar::weekday(year, month, date) as usize]
+            days[calendar::weekday(year, month, date) as usize]
         ),
     }
 }
@@ -3415,6 +3452,27 @@ fn date_text() -> String {
         "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
     ];
     let time = unsafe { GetLocalTime() };
+    if english() {
+        const DAYS_EN: [&str; 7] = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+        // "Friday, Oct 30"
+        let month: String = calendar::month_name(time.wMonth as u32)
+            .chars()
+            .take(3)
+            .collect();
+        return format!(
+            "{}, {month} {}",
+            DAYS_EN[time.wDayOfWeek as usize % 7],
+            time.wDay
+        );
+    }
     format!(
         "{}, {} {}",
         DAYS[time.wDayOfWeek as usize % 7],
@@ -3497,7 +3555,8 @@ fn has_flag(flag: &str) -> bool {
 mod notices {
     use crate::anim::{Accent, Motion, Notice, Trailing};
     use crate::health::Kind;
-    use crate::prayer::{format_time, NAMES};
+    use crate::lang::{english, tr};
+    use crate::prayer::format_time;
     use crate::render::glyph;
     use crate::{minutes_now, PrayerDay};
 
@@ -3508,11 +3567,11 @@ mod notices {
             motion: Motion::Flash,
             accent: Accent::Teal,
             progress: 1.0,
-            title: "Screenshot masuk Shelf".to_string(),
+            title: tr("Screenshot masuk Shelf", "Screenshot added to Shelf").to_string(),
             subtitle: if copied {
-                "Siap paste pakai Ctrl+V".to_string()
+                tr("Siap paste pakai Ctrl+V", "Ready to paste with Ctrl+V").to_string()
             } else {
-                "Copy dari Shelf".to_string()
+                tr("Copy dari Shelf", "Copy it from the Shelf").to_string()
             },
             trailing: Trailing::None,
             dim: false,
@@ -3526,7 +3585,7 @@ mod notices {
             motion: Motion::Bob,
             accent: Accent::Blue,
             progress: 1.0,
-            title: "Unduhan selesai".to_string(),
+            title: tr("Unduhan selesai", "Download finished").to_string(),
             subtitle: name.to_string(),
             trailing: Trailing::None,
             dim: false,
@@ -3541,7 +3600,7 @@ mod notices {
             motion: Motion::Pulse,
             accent: Accent::Red,
             progress: 1.0,
-            title: "Unduhan dibatalkan".to_string(),
+            title: tr("Unduhan dibatalkan", "Download cancelled").to_string(),
             subtitle: name.to_string(),
             trailing: Trailing::None,
             dim: true,
@@ -3555,7 +3614,7 @@ mod notices {
             motion: Motion::Pulse,
             accent: Accent::Blue,
             progress: 1.0,
-            title: "Unduhan terhenti".to_string(),
+            title: tr("Unduhan terhenti", "Download stalled").to_string(),
             subtitle: name.to_string(),
             trailing: Trailing::None,
             dim: true,
@@ -3569,12 +3628,17 @@ mod notices {
             accent: Accent::Teal,
             progress: 1.0,
             title: if on {
-                "Caps Lock nyala"
+                tr("Caps Lock nyala", "Caps Lock on")
             } else {
-                "Caps Lock mati"
+                tr("Caps Lock mati", "Caps Lock off")
             }
             .to_string(),
-            subtitle: if on { "Huruf besar" } else { "Huruf kecil" }.to_string(),
+            subtitle: if on {
+                tr("Huruf besar", "Capital letters")
+            } else {
+                tr("Huruf kecil", "Small letters")
+            }
+            .to_string(),
             trailing: Trailing::None,
             dim: !on,
         }
@@ -3635,15 +3699,15 @@ mod notices {
             accent: if muted { Accent::Red } else { Accent::Green },
             progress: 1.0,
             title: if muted {
-                "Mic dimatikan"
+                tr("Mic dimatikan", "Mic muted")
             } else {
-                "Mic menyala"
+                tr("Mic menyala", "Mic on")
             }
             .to_string(),
             subtitle: if muted {
-                "Suaramu tidak terdengar"
+                tr("Suaramu tidak terdengar", "Nobody can hear you")
             } else {
-                "Suaramu terdengar lagi"
+                tr("Suaramu terdengar lagi", "You can be heard again")
             }
             .to_string(),
             trailing: Trailing::None,
@@ -3659,9 +3723,9 @@ mod notices {
             accent: Accent::Green,
             progress: percent as f32 / 100.0,
             title: if plugged {
-                "Mengisi daya"
+                tr("Mengisi daya", "Charging")
             } else {
-                "Charger dilepas"
+                tr("Charger dilepas", "Charger unplugged")
             }
             .to_string(),
             subtitle: format!("Battery {percent}%"),
@@ -3678,7 +3742,11 @@ mod notices {
             accent: Accent::Green,
             progress: percent as f32 / 100.0,
             title: format!("Battery {percent}%"),
-            subtitle: "Cabut charger biar baterai awet".to_string(),
+            subtitle: tr(
+                "Cabut charger biar baterai awet",
+                "Unplug to keep the battery healthy",
+            )
+            .to_string(),
             trailing: Trailing::Text(format!("{percent}%")),
             dim: false,
         }
@@ -3690,8 +3758,8 @@ mod notices {
             motion: Motion::Flash,
             accent: Accent::Green,
             progress: 1.0,
-            title: "Battery penuh".to_string(),
-            subtitle: "Charger boleh dicabut".to_string(),
+            title: tr("Battery penuh", "Battery full").to_string(),
+            subtitle: tr("Charger boleh dicabut", "You can unplug the charger").to_string(),
             trailing: Trailing::Text("100%".to_string()),
             dim: false,
         }
@@ -3704,7 +3772,7 @@ mod notices {
             accent: Accent::Red,
             progress: percent as f32 / 100.0,
             title: "Battery low".to_string(),
-            subtitle: "Colok charger dulu".to_string(),
+            subtitle: tr("Colok charger dulu", "Plug in the charger").to_string(),
             trailing: Trailing::Text(format!("{percent}%")),
             dim: false,
         }
@@ -3713,7 +3781,7 @@ mod notices {
     /// Confirms a new location: names the place and the next prayer.
     pub fn prayer_ready(day: &PrayerDay) -> Notice {
         let city = if day.settings.city.is_empty() {
-            "Lokasi tersimpan".to_string()
+            tr("Lokasi tersimpan", "Location saved").to_string()
         } else {
             day.settings.city.clone()
         };
@@ -3725,8 +3793,12 @@ mod notices {
             motion: Motion::Pulse,
             accent: Accent::Green,
             progress: 1.0,
-            title: "Jadwal sholat aktif".to_string(),
-            subtitle: format!("{city} · berikutnya {}", NAMES[next]),
+            title: tr("Jadwal sholat aktif", "Prayer times on").to_string(),
+            subtitle: format!(
+                "{city} · {} {}",
+                tr("berikutnya", "next"),
+                crate::prayer::name(next)
+            ),
             trailing: Trailing::Text(format_time(day.times[next])),
             dim: false,
         }
@@ -3739,8 +3811,8 @@ mod notices {
             motion: Motion::Pulse,
             accent: Accent::Teal,
             progress: 1.0,
-            title: "Hasil disalin".to_string(),
-            subtitle: "Tinggal paste di mana saja".to_string(),
+            title: tr("Hasil disalin", "Result copied").to_string(),
+            subtitle: tr("Tinggal paste di mana saja", "Paste it anywhere").to_string(),
             trailing: Trailing::Text(result.to_string()),
             dim: false,
         }
@@ -3754,7 +3826,11 @@ mod notices {
             accent: Accent::Blue,
             progress: 1.0,
             title: summary.to_string(),
-            subtitle: format!("Agenda \u{b7} {minutes_left} menit lagi"),
+            subtitle: if english() {
+                format!("Agenda \u{b7} in {minutes_left} min")
+            } else {
+                format!("Agenda \u{b7} {minutes_left} menit lagi")
+            },
             trailing: Trailing::Text(format_time(start)),
             dim: false,
         }
@@ -3768,7 +3844,7 @@ mod notices {
             accent: Accent::Green,
             progress: 1.0,
             title: text.to_string(),
-            subtitle: "Tugas \u{b7} waktunya sekarang".to_string(),
+            subtitle: tr("Tugas \u{b7} waktunya sekarang", "Task \u{b7} it is time").to_string(),
             trailing: Trailing::Text(crate::todo::format_time(time)),
             dim: false,
         }
@@ -3780,20 +3856,32 @@ mod notices {
             Kind::Water => (
                 glyph::WATER,
                 Accent::Blue,
-                "Waktunya minum",
-                format!("{minutes} menit di depan layar"),
+                tr("Waktunya minum", "Time to drink"),
+                if english() {
+                    format!("{minutes} min at the screen")
+                } else {
+                    format!("{minutes} menit di depan layar")
+                },
             ),
             Kind::Eyes => (
                 glyph::EYE,
                 Accent::Teal,
-                "Istirahat mata",
-                "Lihat sejauh 6 meter, 20 detik".to_string(),
+                tr("Istirahat mata", "Rest your eyes"),
+                tr(
+                    "Lihat sejauh 6 meter, 20 detik",
+                    "Look 6 metres away for 20 seconds",
+                )
+                .to_string(),
             ),
             Kind::Stretch => (
                 glyph::WALK,
                 Accent::Green,
-                "Waktunya stretching",
-                "Berdiri, gerakin badan sebentar".to_string(),
+                tr("Waktunya stretching", "Time to stretch"),
+                tr(
+                    "Berdiri, gerakin badan sebentar",
+                    "Stand up and move for a bit",
+                )
+                .to_string(),
             ),
         };
         Notice {

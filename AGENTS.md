@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Direct2D and DirectWrite for drawing. The UI text is Indonesian.
+Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Direct2D and DirectWrite for drawing. The UI is in Indonesian or English, picked in Settings.
 
 ## Commands
 
@@ -16,6 +16,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 - `src/render.rs` — layered window rendering: `Scene` is what one frame shows, `draw_card_header` frames each card, `draw_*_card` draws a page
 - `src/settings.rs` — the settings window (a separate normal window)
 - `src/config.rs` — `drop.ini`, read and written by hand-rolled code so the file stays editable
+- `src/lang.rs` — the interface language: one switch, read through `tr(indonesian, english)`
 - Worker threads post results to the notch window as `WM_APP + n` messages with a boxed payload: `weather.rs`, `ical.rs`, `lyrics.rs`, `media.rs`, `geo.rs`, `screenshots.rs`, `notifications.rs`, `clipboard.rs`, `downloads.rs`. Check for free numbers before adding one
 - `watch.rs` blocks a worker on folder changes. `screenshots.rs` uses it on the Screenshots folder, `downloads.rs` on the Downloads folder, `notifications.rs` on the notification database folder, because the listener's change event needs a packaged app
 - System events: `system.rs` (audio, power, battery, full-screen, clipboard), `wifi.rs`, `bluetooth.rs`, `keys.rs` (volume keys, Caps Lock), `osd.rs`, `tray.rs`, `dragdrop.rs`, `frames.rs` (display-paced animation)
@@ -27,6 +28,7 @@ Windows-only native notch app in Rust. One binary, no webview: Win32 windows, Di
 - Stay light. The budget is 30 MB of private memory, and idle CPU should stay near zero: event-driven where Windows allows, timers only as slow as they can be
 - Every open card is `anim::CARD`, so a page must fit 150 px, with the foot left to the page dots. Pages draw at their own origin. The card frame places them under `CARD_TOP`, between `CARD_SIDE` margins; hit tests convert with `on_page`
 - A new card page needs: a `Page` variant with its place in `Page::ALL`, its `key` and `name`, a title in `page_title`, an icon in `page_glyph`, when it is available in `App::pages`, a colour in `card_color` and a note in `order_note` in `settings.rs`, and a module switch on its page in `PAGES` there
+- Every text on screen goes through `lang::tr` with both languages side by side (Settings rows hold them as a `Text` pair); texts with numbers branch on `lang::english()`. Unit tests run in Indonesian, so never switch the language inside a test
 - A new setting needs: a field in `Settings` and its default, a line in `to_ini`, a key in `parse` (keys are global, sections are only for reading), and the round-trip test
 - The `windows` crate is pinned to 0.61 with an explicit feature list in `Cargo.toml`; add features there when using new Win32 APIs
 - Commits follow conventional commits (`feat:`, `fix:`)

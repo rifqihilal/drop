@@ -130,7 +130,11 @@ fn text_file_name(text: &str) -> String {
         .take(NAME_CHARS)
         .collect();
     let preview = preview.trim_end_matches(['.', ' ']);
-    let preview = if preview.is_empty() { "Teks" } else { preview };
+    let preview = if preview.is_empty() {
+        crate::lang::tr("Teks", "Text")
+    } else {
+        preview
+    };
     format!("{:08x} {preview}.txt", hash(text.as_bytes()))
 }
 
@@ -142,7 +146,11 @@ fn hash(bytes: &[u8]) -> u32 {
 
 fn save_picture(dir: &Path, dib: &[u8]) -> Option<PathBuf> {
     let (width, height, pixels) = dib_pixels(dib)?;
-    let path = dir.join(format!("{:08x} Gambar.png", hash(dib)));
+    let path = dir.join(format!(
+        "{:08x} {}.png",
+        hash(dib),
+        crate::lang::tr("Gambar", "Image")
+    ));
     unsafe { write_png(&path, width, height, &pixels) }.ok()?;
     Some(path)
 }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
+use crate::lang::tr;
 use crate::net;
 
 /// New weather. LPARAM: a `Box<Weather>`.
@@ -54,15 +55,15 @@ impl Weather {
 impl Sky {
     pub fn description(&self) -> &'static str {
         match self.code {
-            0 => "Cerah",
-            1 | 2 => "Cerah berawan",
-            3 => "Berawan",
-            45 | 48 => "Berkabut",
-            51..=57 => "Gerimis",
-            61..=67 | 80..=82 => "Hujan",
-            71..=77 | 85 | 86 => "Salju",
-            95..=99 => "Badai petir",
-            _ => "Cuaca",
+            0 => tr("Cerah", "Clear"),
+            1 | 2 => tr("Cerah berawan", "Partly cloudy"),
+            3 => tr("Berawan", "Cloudy"),
+            45 | 48 => tr("Berkabut", "Foggy"),
+            51..=57 => tr("Gerimis", "Drizzle"),
+            61..=67 | 80..=82 => tr("Hujan", "Rain"),
+            71..=77 | 85 | 86 => tr("Salju", "Snow"),
+            95..=99 => tr("Badai petir", "Thunderstorm"),
+            _ => tr("Cuaca", "Weather"),
         }
     }
 
