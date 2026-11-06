@@ -97,8 +97,8 @@ use notifications::{AppNotice, Inbox};
 use render::{
     glyph, zoom, AgendaItem, CalcKey, CalcScene, CalendarControl, CalendarScene, DownloadScene,
     InboxRow, InboxScene, MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene,
-    StatusScene, Strip, TimerControl, TimerKind, TimerScene, TodoHit, TodoScene, UsageScene,
-    WeatherScene,
+    StatusScene, Strip, TimerControl, TimerKind, TimerScene, TodoForm, TodoHit, TodoScene,
+    UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -326,8 +326,14 @@ struct App {
     calc: Calculator,
     /// Task under the mouse.
     todo_hover: Option<usize>,
-    /// Which six tasks the card shows.
-    todo_view: usize,
+    /// The day the task list shows.
+    todo_day: i64,
+    /// How far the task list is scrolled, in pixels.
+    todo_scroll: f32,
+    /// Tasks show buttons to move and remove them.
+    todo_arranging: bool,
+    /// The last day and minute checked for tasks coming due.
+    todo_checked: (i64, u32),
     /// A new task being typed.
     editing: Option<Editing>,
 }
@@ -335,6 +341,12 @@ struct App {
 /// A new task being typed in the notch, which holds the keyboard meanwhile.
 struct Editing {
     text: String,
+    /// Digits typed for the time to remind at, up to four.
+    time: String,
+    /// Typing goes to the time instead of the name.
+    on_time: bool,
+    /// The day the task is for.
+    day: i64,
     /// The window that had the keyboard before; it gets it back afterwards.
     previous: HWND,
     /// First half of a character outside the Basic Multilingual Plane,
@@ -493,7 +505,10 @@ fn main() -> Result<()> {
             todo: Todo::load(),
             calc: Calculator::default(),
             todo_hover: None,
-            todo_view: 0,
+            todo_day: today_number(),
+            todo_scroll: 0.0,
+            todo_arranging: false,
+            todo_checked: (today_number(), minutes_now()),
             editing: None,
             press: None,
             page: Page::Music,
@@ -638,6 +653,7 @@ impl App {
         if clock_changed {
             self.update_prayer();
             self.update_health();
+            self.update_todo_reminders();
             self.update_usage();
             self.update_agenda();
         }
@@ -773,6 +789,9 @@ impl App {
                 self.page = Page::Notifications;
             }
             self.month_offset = 0;
+            self.todo_day = today_number();
+            self.todo_scroll = 0.0;
+            self.todo_arranging = false;
             self.page_switch = None;
             self.nav_open = false;
             self.volume_open = false;
@@ -1083,7 +1102,12 @@ impl App {
             _ => None,
         };
         let todo_hover = match self.todo_hit(x, y) {
-            Some(TodoHit::Toggle(index) | TodoHit::Remove(index)) => Some(index),
+            Some(
+                TodoHit::Toggle(index)
+                | TodoHit::Remove(index)
+                | TodoHit::Up(index)
+                | TodoHit::Down(index),
+            ) => Some(index),
             _ => None,
         };
         let inbox_hover = self.inbox_row(x, y);
@@ -1106,15 +1130,22 @@ impl App {
     }
 
     fn todo_scene(&self) -> TodoScene<'_> {
+        let today = today_number();
         TodoScene {
             tasks: self.todo.tasks(),
-            left: self.todo.left(),
+            shown: self.todo.shown(self.todo_day, today),
+            today,
+            day: self.todo_day,
             hover: self.todo_hover,
-            // A view emptied by removals falls back to the last one left.
-            view: self
-                .todo_view
-                .min(self.todo.tasks().len().saturating_sub(1) / todo::PER_VIEW),
-            editing: self.editing.as_ref().map(|editing| editing.text.as_str()),
+            scroll: self.todo_scroll,
+            arranging: self.todo_arranging,
+            form: self.editing.as_ref().map(|editing| TodoForm {
+                text: &editing.text,
+                time: &editing.time,
+                on_time: editing.on_time,
+                day: editing.day,
+                bad_time: todo::parse_time(&editing.time).is_err(),
+            }),
             caret: self.editing.as_ref().is_some_and(|editing| {
                 (editing.since.elapsed().as_millis() / CARET_BLINK).is_multiple_of(2)
             }),
@@ -1184,26 +1215,147 @@ impl App {
             .todo_hit(x, y, self.notch.width.value, &self.todo_scene())
     }
 
-    /// Click on the task page: add (or save what is typed), tick a task off,
-    /// remove one, or clear the finished ones.
+    /// Click on the task page: tick a task off, write a new one, arrange the
+    /// list, or pick a day from the month.
     fn on_todo_click(&mut self, x: f32, y: f32) {
-        match self.todo_hit(x, y) {
-            Some(TodoHit::Add) if self.editing.is_some() => self.finish_editing(true, true),
-            Some(TodoHit::Add) if !self.todo.is_full() => self.start_editing(),
-            Some(TodoHit::Toggle(index)) => self.todo.toggle(index),
-            Some(TodoHit::Remove(index)) => {
+        let Some(hit) = self.todo_hit(x, y) else {
+            return;
+        };
+        let shown = self.todo.shown(self.todo_day, today_number());
+        let neighbour = |index: usize, step: isize| {
+            let at = shown.iter().position(|&i| i == index)? as isize + step;
+            shown.get(usize::try_from(at).ok()?).copied()
+        };
+        match hit {
+            TodoHit::Add if self.editing.is_some() => {}
+            TodoHit::Add if !self.todo.is_full() => {
+                self.todo_arranging = false;
+                self.start_editing();
+            }
+            TodoHit::Add => return,
+            TodoHit::Arrange => self.todo_arranging = !self.todo_arranging,
+            TodoHit::PreviousDay | TodoHit::NextDay => {
+                self.todo_day += if hit == TodoHit::NextDay { 1 } else { -1 };
+                self.todo_scroll = 0.0;
+                self.todo_hover = None;
+            }
+            TodoHit::Today => {
+                self.todo_day = today_number();
+                self.todo_scroll = 0.0;
+            }
+            TodoHit::Toggle(index) => self.todo.toggle(index),
+            TodoHit::Remove(index) => {
                 self.todo.remove(index);
                 self.todo_hover = None;
             }
-            Some(TodoHit::ClearDone) => self.todo.clear_done(),
-            Some(TodoHit::PreviousView) => {
-                self.todo_view = self.todo_scene().view.saturating_sub(1)
+            TodoHit::Up(index) | TodoHit::Down(index) => {
+                let step = if matches!(hit, TodoHit::Up(_)) { -1 } else { 1 };
+                if let Some(other) = neighbour(index, step) {
+                    self.todo.swap(index, other);
+                    self.todo_hover = Some(other);
+                }
             }
-            Some(TodoHit::NextView) => self.todo_view = self.todo_scene().view + 1,
-            _ => return,
+            TodoHit::Title | TodoHit::Time => {
+                if let Some(editing) = self.editing.as_mut() {
+                    editing.on_time = hit == TodoHit::Time;
+                    editing.since = Instant::now();
+                }
+            }
+            TodoHit::FormPreviousDay | TodoHit::FormNextDay => {
+                let today = today_number();
+                if let Some(editing) = self.editing.as_mut() {
+                    let step = if hit == TodoHit::FormNextDay { 1 } else { -1 };
+                    editing.day = (editing.day + step).max(today);
+                }
+            }
+            TodoHit::Cancel => self.finish_editing(false, true),
+            TodoHit::Save => {
+                let ready = self.editing.as_ref().is_some_and(|editing| {
+                    !editing.text.trim().is_empty() && todo::parse_time(&editing.time).is_ok()
+                });
+                if !ready {
+                    return;
+                }
+                self.finish_editing(true, true);
+            }
         }
-        self.todo_view = self.todo_scene().view;
+        self.clamp_todo_scroll();
         self.tick();
+    }
+
+    /// The month the calendar page and the task page's month show.
+    fn shown_month(&self) -> (i32, u32) {
+        let (year, month, _) = prayer::today();
+        calendar::shift(year as i32, month as u32, self.month_offset)
+    }
+
+    /// Days of `month` with something on them, by source: each calendar
+    /// link's events, and tasks left to do.
+    fn month_marks(&self, (year, month): (i32, u32)) -> Vec<(u32, usize)> {
+        let events = self
+            .events
+            .iter()
+            .map(|event| (calendar::civil_from_days(event.day), event.source))
+            .filter(|&((y, m, _), _)| (y, m) == (year, month))
+            .map(|((_, _, d), source)| (d, source));
+        let tasks = self
+            .todo
+            .marked(year, month)
+            .into_iter()
+            .filter(|_| self.settings.module_todo)
+            .map(|day| (day, render::TASK_SOURCE));
+        events.chain(tasks).collect()
+    }
+
+    /// The calendar page's agenda: the month's first events and tasks, in
+    /// order. In this month, what is over makes way.
+    fn month_agenda(&self) -> Vec<AgendaItem<'_>> {
+        let shown = self.shown_month();
+        let events = self.month_events(shown);
+        let keys: Vec<(i64, u32)> = events
+            .iter()
+            .map(|event| (event.day, event.minute.unwrap_or(0)))
+            .collect();
+        let mut items: Vec<((i64, u32), AgendaItem)> =
+            keys.into_iter().zip(self.agenda_scene(events)).collect();
+        let (today, now) = (today_number(), minutes_now());
+        let tasks = self
+            .todo
+            .tasks()
+            .iter()
+            .filter(|_| self.settings.module_todo)
+            .filter(|task| !task.done)
+            .filter_map(|task| Some((task, task.day?)))
+            .filter(|&(_, day)| {
+                let (year, month, _) = calendar::civil_from_days(day);
+                (year, month) == shown
+            })
+            .filter(|&(task, day)| {
+                self.month_offset != 0
+                    || day > today
+                    || day == today && task.time.is_none_or(|time| time + AGENDA_GRACE >= now)
+            });
+        for (task, day) in tasks {
+            let item = AgendaItem {
+                day: agenda_day(day, today),
+                time: task.time.map_or("Tugas".to_string(), prayer::format_time),
+                summary: &task.text,
+                today: day == today,
+                source: render::TASK_SOURCE,
+            };
+            items.push(((day, task.time.unwrap_or(0)), item));
+        }
+        items.sort_by_key(|(key, _)| *key);
+        items
+            .into_iter()
+            .take(anim::AGENDA_ROWS)
+            .map(|(_, item)| item)
+            .collect()
+    }
+
+    fn clamp_todo_scroll(&mut self) {
+        let count = self.todo.shown(self.todo_day, today_number()).len();
+        self.todo_scroll = self.todo_scroll.clamp(0.0, render::todo_scroll_most(count));
     }
 
     /// Takes the keyboard so a new task can be typed in the notch.
@@ -1211,6 +1363,9 @@ impl App {
         let previous = unsafe { GetForegroundWindow() };
         self.editing = Some(Editing {
             text: String::new(),
+            time: String::new(),
+            on_time: false,
+            day: self.todo_day.max(today_number()),
             previous,
             surrogate: None,
             since: Instant::now(),
@@ -1221,15 +1376,27 @@ impl App {
         }
     }
 
+    /// Adds the task being written; a time that is no time of day is left off.
+    fn save_editing(&mut self) {
+        let Some(editing) = self.editing.as_mut() else {
+            return;
+        };
+        let time = todo::parse_time(&editing.time).ok().flatten();
+        if self.todo.add(&editing.text, Some(editing.day), time) {
+            // The list goes to the task's day, to show it there.
+            self.todo_day = editing.day;
+        }
+    }
+
     /// Ends typing, adding the task when `save`, and hands the keyboard back
     /// when `give_back` (not when another window already took it).
     fn finish_editing(&mut self, save: bool, give_back: bool) {
+        if save {
+            self.save_editing();
+        }
         let Some(editing) = self.editing.take() else {
             return;
         };
-        if save {
-            self.todo.add(&editing.text);
-        }
         unsafe {
             if give_back
                 && GetForegroundWindow() == self.hwnd
@@ -1258,24 +1425,41 @@ impl App {
         self.schedule(CALC_PRESS.as_millis() as u32 + 20);
     }
 
-    /// A typed character while a new task is being written. Enter adds the
-    /// task and starts the next one, Escape stops.
+    /// A typed character while a new task is being written. Tab moves
+    /// between the name and the time, Enter adds the task and starts the
+    /// next one on the same day, Escape stops.
     fn on_char(&mut self, unit: u16) {
         let Some(editing) = self.editing.as_mut() else {
             return;
         };
         editing.since = Instant::now();
+        let ready = !editing.text.trim().is_empty() && todo::parse_time(&editing.time).is_ok();
         match unit {
-            0x0D if !editing.text.trim().is_empty() && !self.todo.is_full() => {
-                let text = std::mem::take(&mut editing.text);
-                self.todo.add(&text);
+            0x09 => editing.on_time = !editing.on_time,
+            0x0D if ready && !self.todo.is_full() => {
+                self.save_editing();
+                if let Some(editing) = self.editing.as_mut() {
+                    editing.text.clear();
+                    editing.time.clear();
+                    editing.on_time = false;
+                }
                 if self.todo.is_full() {
                     self.finish_editing(false, true);
                 }
             }
+            0x0D if !editing.text.trim().is_empty() => {}
             0x0D | 0x1B => self.finish_editing(false, true),
+            0x08 if editing.on_time => {
+                editing.time.pop();
+            }
             0x08 => {
                 editing.text.pop();
+            }
+            _ if editing.on_time => {
+                let digit = char::from_u32(u32::from(unit)).filter(char::is_ascii_digit);
+                if let Some(digit) = digit.filter(|_| editing.time.len() < 4) {
+                    editing.time.push(digit);
+                }
             }
             // Ctrl+V
             0x16 => {
@@ -1330,7 +1514,15 @@ impl App {
                     || self.renderer.progress_at(x, y, width, lyrics).is_some()
                     || (lyrics && self.renderer.lyric_line_at(x, y, width).is_some())
             }
-            Page::Calendar => self.renderer.calendar_control_at(x, y, width).is_some(),
+            Page::Calendar => {
+                match self
+                    .renderer
+                    .calendar_control_at(x, y, width, self.shown_month())
+                {
+                    Some(CalendarControl::Day(_)) => self.pages().contains(&Page::Todo),
+                    control => control.is_some(),
+                }
+            }
             Page::Pomodoro => self
                 .renderer
                 .timer_control_at(x, y, width, self.picking_minutes())
@@ -1598,8 +1790,26 @@ impl App {
         if self.notch.card_visible.target == 0.0 {
             return;
         }
-        let down = ((wparam.0 >> 16) as i16) < 0;
-        self.step_page(down);
+        let delta = (wparam.0 >> 16) as i16;
+        let (x, y) = self.cursor_on_canvas();
+        let on_list = self.shown_page() == Page::Todo
+            && self.editing.is_none()
+            && self.renderer.on_todo_list(x, y, self.notch.width.value);
+        let count = self.todo.shown(self.todo_day, today_number()).len();
+        if on_list && render::todo_scroll_most(count) > 0.0 {
+            self.todo_scroll -= f32::from(delta) / 120.0 * anim::TODO_ROW;
+            self.clamp_todo_scroll();
+            self.todo_hover = self.todo_hit(x, y).and_then(|hit| match hit {
+                TodoHit::Toggle(index)
+                | TodoHit::Remove(index)
+                | TodoHit::Up(index)
+                | TodoHit::Down(index) => Some(index),
+                _ => None,
+            });
+            self.draw();
+            return;
+        }
+        self.step_page(delta < 0);
     }
 
     /// Moves the open card to the next page (`forward`) or the one before,
@@ -1868,28 +2078,17 @@ impl App {
     }
 
     fn agenda_scene<'a>(&self, events: Vec<&'a Event>) -> Vec<AgendaItem<'a>> {
-        const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
         let today = today_number();
         events
             .into_iter()
-            .map(|event| {
-                let (year, month, date) = calendar::civil_from_days(event.day);
-                AgendaItem {
-                    day: match event.day - today {
-                        0 => "Hari ini".to_string(),
-                        1 => "Besok".to_string(),
-                        _ => format!(
-                            "{} {date}",
-                            DAYS[calendar::weekday(year, month, date) as usize]
-                        ),
-                    },
-                    time: event
-                        .minute
-                        .map_or("All day".to_string(), prayer::format_time),
-                    summary: &event.summary,
-                    today: event.day == today,
-                    source: event.source,
-                }
+            .map(|event| AgendaItem {
+                day: agenda_day(event.day, today),
+                time: event
+                    .minute
+                    .map_or("All day".to_string(), prayer::format_time),
+                summary: &event.summary,
+                today: event.day == today,
+                source: event.source,
             })
             .collect()
     }
@@ -2145,9 +2344,22 @@ impl App {
         }
         let width = self.notch.width.value;
         if self.shown_page() == Page::Calendar {
-            match self.renderer.calendar_control_at(x, y, width) {
+            match self
+                .renderer
+                .calendar_control_at(x, y, width, self.shown_month())
+            {
                 Some(CalendarControl::PreviousMonth) => self.month_offset -= 1,
                 Some(CalendarControl::NextMonth) => self.month_offset += 1,
+                Some(CalendarControl::Day(date)) => {
+                    let Some(index) = self.pages().iter().position(|&p| p == Page::Todo) else {
+                        return;
+                    };
+                    let (year, month) = self.shown_month();
+                    self.todo_day = calendar::days_from_civil(year, month, date);
+                    self.todo_scroll = 0.0;
+                    self.go_to(index);
+                    return;
+                }
                 None => return,
             }
             self.tick();
@@ -2372,6 +2584,26 @@ impl App {
         self.aim_usage_switch();
         self.sync_usage_icons();
         self.tick();
+    }
+
+    /// Raises a notice for each task whose time came since the last check.
+    fn update_todo_reminders(&mut self) {
+        let (today, now) = (today_number(), minutes_now());
+        let (day, minute) = self.todo_checked;
+        // On a new day, its times up to now count from midnight.
+        let after = (day == today).then_some(minute);
+        self.todo_checked = (today, now);
+        if !self.settings.module_todo || after.is_some_and(|minute| now <= minute) {
+            return;
+        }
+        let due: Vec<(String, u32)> = self
+            .todo
+            .due(today, after, now)
+            .map(|task| (task.text.clone(), task.time.unwrap_or(now)))
+            .collect();
+        for (text, time) in due {
+            self.notify(notices::task(&text, time));
+        }
     }
 
     /// Counts a minute of use toward the health reminders, held back while
@@ -2726,13 +2958,7 @@ impl App {
                     year: shown_year,
                     month: shown_month,
                     today: (self.month_offset == 0).then_some(day as u32),
-                    marked: self
-                        .events
-                        .iter()
-                        .map(|event| (calendar::civil_from_days(event.day), event.source))
-                        .filter(|&((y, m, _), _)| (y, m) == (shown_year, shown_month))
-                        .map(|((_, _, d), source)| (d, source))
-                        .collect(),
+                    marked: self.month_marks((shown_year, shown_month)),
                 }
             },
             timer: Some(self.timer_scene(if self.shown_page() == Page::Pomodoro {
@@ -2780,11 +3006,7 @@ impl App {
                 average_ms: self.usage.daily_average_ms(),
             },
             agenda: self.agenda_scene(self.upcoming()),
-            month_agenda: {
-                let (year, month, _) = prayer::today();
-                let shown = calendar::shift(year as i32, month as u32, self.month_offset);
-                self.agenda_scene(self.month_events(shown))
-            },
+            month_agenda: self.month_agenda(),
             drop_zone: self.drag_over,
             liquid_glow: n.liquid_glow.value,
             ripple_at: n.ripple_at,
@@ -3167,6 +3389,20 @@ fn idle_ms() -> u32 {
     }
 }
 
+/// A day on the agenda: "Hari ini", "Besok" or "Sab 7".
+fn agenda_day(day: i64, today: i64) -> String {
+    const DAYS: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+    let (year, month, date) = calendar::civil_from_days(day);
+    match day - today {
+        0 => "Hari ini".to_string(),
+        1 => "Besok".to_string(),
+        _ => format!(
+            "{} {date}",
+            DAYS[calendar::weekday(year, month, date) as usize]
+        ),
+    }
+}
+
 /// "Jumat, 30 Okt"
 fn date_text() -> String {
     const DAYS: [&str; 7] = [
@@ -3517,6 +3753,20 @@ mod notices {
             title: summary.to_string(),
             subtitle: format!("Agenda \u{b7} {minutes_left} menit lagi"),
             trailing: Trailing::Text(format_time(start)),
+            dim: false,
+        }
+    }
+
+    /// A task whose time has come, with that time on the right.
+    pub fn task(text: &str, time: u32) -> Notice {
+        Notice {
+            icon: glyph::CHECK,
+            motion: Motion::Shake,
+            accent: Accent::Green,
+            progress: 1.0,
+            title: text.to_string(),
+            subtitle: "Tugas \u{b7} waktunya sekarang".to_string(),
+            trailing: Trailing::Text(crate::todo::format_time(time)),
             dim: false,
         }
     }

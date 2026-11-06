@@ -635,66 +635,112 @@ fn usage_switch(x0: f32) -> D2D_RECT_F {
 const TILE: (f32, f32) = (64.0, 46.0);
 const TILE_GAP: f32 = 11.0;
 
-/// Tasks in each of the card's two columns.
-const TODO_COLUMN: usize = 3;
-
-/// The tasks the card's current view shows, as indexes into the list.
-fn todo_view(todo: &TodoScene) -> std::ops::Range<usize> {
-    let start = (todo.view * todo::PER_VIEW).min(todo.tasks.len());
-    start..(start + todo::PER_VIEW).min(todo.tasks.len())
-}
-
-/// Task card layout between the card's edges.
+/// Task card layout: the count and its buttons on the left, and a panel on
+/// the right that holds the day's list, the form for a new task or a month.
 struct TodoRects {
-    x0: f32,
-    x1: f32,
-    /// Two columns once the tasks no longer fit in one; one full width
-    /// before that, so their text has room.
-    columns: usize,
+    left: f32,
+    panel: D2D_RECT_F,
 }
 
 impl TodoRects {
-    fn new(x0: f32, x1: f32, tasks: usize) -> Self {
-        let columns = if tasks > TODO_COLUMN { 2 } else { 1 };
-        Self { x0, x1, columns }
+    fn new(x0: f32, x1: f32) -> Self {
+        Self {
+            left: x0 + 16.0,
+            panel: rect(x0 + 150.0, 4.0, x1 - 8.0, 142.0),
+        }
     }
 
-    /// The arrows to the views before and after, either side of "1/2".
-    fn view_arrows(&self) -> [(f32, f32); 2] {
-        [(self.x0 + 74.0, 21.0), (self.x0 + 126.0, 21.0)]
+    /// The day shown, between arrows to the day before and after.
+    fn stepper(&self) -> D2D_RECT_F {
+        rect(self.left, 50.0, self.left + 124.0, 72.0)
     }
 
-    /// The add button, which saves while typing.
+    /// Centres of the arrows at the ends of a stepper.
+    fn step_arrows(bounds: D2D_RECT_F) -> [(f32, f32); 2] {
+        let cy = (bounds.top + bounds.bottom) / 2.0;
+        [(bounds.left + 12.0, cy), (bounds.right - 12.0, cy)]
+    }
+
     fn add(&self) -> D2D_RECT_F {
-        rect(self.x1 - 104.0, 8.0, self.x1 - 14.0, 34.0)
+        rect(self.left, 78.0, self.left + 124.0, 102.0)
     }
 
-    fn clear(&self) -> D2D_RECT_F {
-        rect(self.x1 - 230.0, 8.0, self.x1 - 112.0, 34.0)
+    fn arrange(&self) -> D2D_RECT_F {
+        rect(self.left, 108.0, self.left + 124.0, 132.0)
     }
 
-    /// The field for a new task, in place of the count.
-    fn field(&self) -> D2D_RECT_F {
-        rect(self.x0 + 14.0, 6.0, self.x1 - 112.0, 36.0)
+    fn row(&self, local: usize, scroll: f32) -> D2D_RECT_F {
+        let top = self.panel.top + 6.0 + local as f32 * TODO_ROW - scroll;
+        rect(
+            self.panel.left + 6.0,
+            top,
+            self.panel.right - 12.0,
+            top + TODO_ROW,
+        )
     }
 
-    fn row(&self, index: usize) -> D2D_RECT_F {
-        let (column, row) = (index / TODO_COLUMN, index % TODO_COLUMN);
-        let columns = self.columns as f32;
-        let width = (self.x1 - self.x0 - 24.0 - 8.0 * (columns - 1.0)) / columns;
-        let left = self.x0 + 12.0 + column as f32 * (width + 8.0);
-        let top = 42.0 + row as f32 * TODO_ROW;
-        rect(left, top, left + width, top + TODO_ROW)
+    fn check(row: D2D_RECT_F) -> (f32, f32) {
+        (row.left + 14.0, (row.top + row.bottom) / 2.0)
     }
 
-    fn check(&self, index: usize) -> (f32, f32) {
-        let row = self.row(index);
-        (row.left + 18.0, (row.top + row.bottom) / 2.0)
+    /// While arranging: up, down and remove at the row's right end.
+    fn tools(row: D2D_RECT_F) -> [(f32, f32); 3] {
+        let cy = (row.top + row.bottom) / 2.0;
+        [
+            (row.right - 56.0, cy),
+            (row.right - 33.0, cy),
+            (row.right - 10.0, cy),
+        ]
     }
 
-    fn remove(&self, index: usize) -> (f32, f32) {
-        let row = self.row(index);
-        (row.right - 18.0, (row.top + row.bottom) / 2.0)
+    fn title_field(&self) -> D2D_RECT_F {
+        let p = self.panel;
+        rect(p.left + 10.0, p.top + 10.0, p.right - 10.0, p.top + 38.0)
+    }
+
+    fn time_field(&self) -> D2D_RECT_F {
+        let p = self.panel;
+        rect(p.left + 10.0, p.top + 46.0, p.left + 104.0, p.top + 74.0)
+    }
+
+    fn day_chip(&self) -> D2D_RECT_F {
+        let p = self.panel;
+        rect(p.left + 112.0, p.top + 46.0, p.right - 10.0, p.top + 74.0)
+    }
+
+    fn cancel(&self) -> D2D_RECT_F {
+        let p = self.panel;
+        let mid = (p.left + p.right) / 2.0;
+        rect(p.left + 10.0, p.bottom - 38.0, mid - 4.0, p.bottom - 12.0)
+    }
+
+    fn save(&self) -> D2D_RECT_F {
+        let p = self.panel;
+        let mid = (p.left + p.right) / 2.0;
+        rect(mid + 4.0, p.bottom - 38.0, p.right - 10.0, p.bottom - 12.0)
+    }
+}
+
+/// How far the task list scrolls at most, for `count` tasks.
+pub fn todo_scroll_most(count: usize) -> f32 {
+    let panel = TodoRects::new(0.0, 400.0).panel;
+    (count as f32 * TODO_ROW + 12.0 - (panel.bottom - panel.top)).max(0.0)
+}
+
+/// A day as the task card names it: "Hari ini", "Besok" or "10 Nov".
+pub fn todo_day_label(day: i64, today: i64) -> String {
+    match day - today {
+        0 => "Hari ini".to_string(),
+        1 => "Besok".to_string(),
+        -1 => "Kemarin".to_string(),
+        _ => {
+            let (_, month, date) = calendar::civil_from_days(day);
+            let name: String = calendar::MONTHS[month as usize - 1]
+                .chars()
+                .take(3)
+                .collect();
+            format!("{date} {name}")
+        }
     }
 }
 
@@ -886,6 +932,10 @@ pub mod glyph {
     pub const BOLT: &str = "\u{E945}";
     pub const SCREEN: &str = "\u{E7F4}";
     pub const CALCULATOR: &str = "\u{E8EF}";
+    pub const EDIT: &str = "\u{E70F}";
+    pub const CLOCK: &str = "\u{E121}";
+    pub const CHEVRON_UP: &str = "\u{E70E}";
+    pub const CHEVRON_DOWN: &str = "\u{E70D}";
 
     /// Battery outline filled to `percent`.
     pub fn battery(percent: u32) -> &'static str {
@@ -1167,8 +1217,14 @@ pub struct AgendaItem<'a> {
     pub source: usize,
 }
 
-/// The colour of a calendar link's events.
+/// The source of tasks on the calendar, next to the calendar links.
+pub const TASK_SOURCE: usize = crate::config::FEEDS;
+
+/// The colour of a calendar link's events, and white for tasks.
 fn source_color(source: usize) -> D2D1_COLOR_F {
+    if source == TASK_SOURCE {
+        return color(1.0, 1.0, 1.0, 0.9);
+    }
     const COLORS: [Accent; 3] = [Accent::Blue, Accent::Green, Accent::Red];
     accent_color(COLORS[source % COLORS.len()])
 }
@@ -1237,26 +1293,55 @@ pub struct UsageScene<'a> {
 
 pub struct TodoScene<'a> {
     pub tasks: &'a [Task],
-    pub left: usize,
+    /// The tasks of the day picked, as indexes into `tasks`.
+    pub shown: Vec<usize>,
+    pub today: i64,
+    /// The day the list shows.
+    pub day: i64,
     /// The task under the mouse.
     pub hover: Option<usize>,
-    /// Which six tasks show, counted from 0.
-    pub view: usize,
-    /// Text being typed for a new task, while typing.
-    pub editing: Option<&'a str>,
+    /// How far the list is scrolled, in pixels.
+    pub scroll: f32,
+    /// Rows show buttons to move and remove them.
+    pub arranging: bool,
+    /// A new task being written.
+    pub form: Option<TodoForm<'a>>,
     /// The text cursor is lit (it blinks).
     pub caret: bool,
+}
+
+pub struct TodoForm<'a> {
+    pub text: &'a str,
+    /// Digits typed for the time, up to four.
+    pub time: &'a str,
+    /// Typing goes to the time instead of the name.
+    pub on_time: bool,
+    pub day: i64,
+    /// What was typed for the time is no time of day.
+    pub bad_time: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TodoHit {
     Add,
-    ClearDone,
-    /// The arrows to the tasks before or after these six.
-    PreviousView,
-    NextView,
+    Arrange,
+    /// The arrows to the day before and after, and the day's name, which
+    /// goes back to today.
+    PreviousDay,
+    NextDay,
+    Today,
     Toggle(usize),
     Remove(usize),
+    Up(usize),
+    Down(usize),
+    /// The new task's fields: its name and its time, and the arrows that
+    /// move its day.
+    Title,
+    Time,
+    FormPreviousDay,
+    FormNextDay,
+    Cancel,
+    Save,
 }
 
 /// Which timer the card and the strip show.
@@ -1318,6 +1403,8 @@ pub struct CalendarScene {
 pub enum CalendarControl {
     PreviousMonth,
     NextMonth,
+    /// A day of the month shown, to open the task list on.
+    Day(u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1418,6 +1505,8 @@ pub struct Renderer {
     /// Wrapped lyrics: the line being sung, and those around it.
     lyric_text: IDWriteTextFormat,
     lyric_next: IDWriteTextFormat,
+    /// A task read in full, wrapped.
+    todo_full: IDWriteTextFormat,
     /// Small icon glyph for the remove buttons.
     close_glyph: IDWriteTextFormat,
     /// Icons inside pill buttons.
@@ -1609,6 +1698,7 @@ impl Renderer {
             };
             let lyric_text = wrapped(DWRITE_FONT_WEIGHT_BOLD, 16.0)?;
             let lyric_next = wrapped(DWRITE_FONT_WEIGHT_SEMI_BOLD, 15.0)?;
+            let todo_full = wrapped(DWRITE_FONT_WEIGHT_NORMAL, 12.5)?;
             let close_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 8.0)?;
             let pill_glyph = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_NORMAL, 11.0)?;
             let nav_bold = format(w!("Segoe Fluent Icons"), DWRITE_FONT_WEIGHT_BOLD, 13.0)?;
@@ -1636,6 +1726,7 @@ impl Renderer {
                 prayer_next,
                 lyric_text,
                 lyric_next,
+                todo_full,
                 close_glyph,
                 pill_glyph,
                 nav_bold,
@@ -3945,121 +4036,174 @@ impl Renderer {
         }
     }
 
-    /// The task list: a heading with the add button, or the field for a new
-    /// task while typing, then one row per task.
+    /// The task page: the day's count with its buttons on the left, and on
+    /// the right the day's list, the form for a new task or a month.
     unsafe fn draw_todo_card(&self, todo: &TodoScene, x0: f32, x1: f32, alpha: f32) {
-        let shown = todo_view(todo);
-        let layout = TodoRects::new(x0, x1, shown.len());
-        let views = todo.tasks.len().div_ceil(todo::PER_VIEW);
-        // A task too long for its row reads in full across the top while
-        // the mouse is on it.
+        let layout = TodoRects::new(x0, x1);
+        let left = layout.left;
+
+        // A task too long for its row reads in full in the count's place
+        // while the mouse is on it.
         let full_text = todo
             .hover
-            .filter(|_| todo.editing.is_none())
-            .and_then(|index| Some((index, todo.tasks.get(index)?)))
-            .filter(|(index, task)| {
-                let row = layout.row(index - shown.start);
-                let room = row.right - 34.0 - (row.left + 34.0);
+            .filter(|_| todo.form.is_none())
+            .and_then(|index| todo.tasks.get(index))
+            .filter(|task| {
+                let room = layout.panel.right - layout.panel.left - 120.0;
                 self.text_layout(&task.text, &self.subtitle_text, 1000.0)
                     .is_some_and(|text| text.width > room)
             });
-        match (todo.editing, full_text) {
-            (Some(text), _) => self.draw_todo_field(text, todo.caret, layout.field(), alpha),
-            (None, Some((_, task))) => {
-                if let Some(text) =
-                    self.text_layout(&task.text, &self.subtitle_text, x1 - x0 - 34.0)
-                {
-                    self.draw_layout(&text.layout, x0 + 20.0, 21.0 - text.height / 2.0, alpha);
+        match full_text {
+            Some(task) => {
+                if let Some(text) = self.text_layout(&task.text, &self.todo_full, 124.0) {
+                    let _ = text.layout.SetMaxHeight(76.0);
+                    self.draw_layout(&text.layout, left, 6.0, 0.92 * alpha);
                 }
             }
-            (None, None) => {
-                let done = todo.tasks.len() - todo.left;
-                if !todo.tasks.is_empty() {
-                    let count = format!("{done}/{}", todo.tasks.len());
-                    if let Some(text) = self.text_layout(&count, &self.title_text, 80.0) {
-                        self.draw_layout(&text.layout, x0 + 20.0, 21.0 - text.height / 2.0, alpha);
-                        let caption = if todo.left == 0 {
-                            "semua selesai"
-                        } else {
-                            "selesai"
-                        };
-                        // With more than one view, "1/2" between arrows
-                        // takes the caption's place.
-                        if views > 1 {
-                            let [previous, next] = layout.view_arrows();
-                            for ((cx, cy), icon, on) in [
-                                (previous, glyph::CHEVRON_LEFT, todo.view > 0),
-                                (next, glyph::CHEVRON_RIGHT, todo.view + 1 < views),
-                            ] {
-                                self.light.SetOpacity(if on { 0.12 } else { 0.05 } * alpha);
-                                self.target.FillEllipse(
-                                    &D2D1_ELLIPSE {
-                                        point: pt(cx, cy),
-                                        radiusX: 11.0,
-                                        radiusY: 11.0,
-                                    },
-                                    &self.light,
-                                );
-                                self.light.SetOpacity(if on { 0.9 } else { 0.3 } * alpha);
-                                self.draw_small_glyph(icon, cx, cy, &self.light);
-                            }
-                            let label = format!("{}/{views}", todo.view + 1);
-                            let between = rect(previous.0 + 11.0, 8.0, next.0 - 11.0, 34.0);
-                            self.draw_text(&label, &self.tiny, between, 0.8 * alpha);
-                        } else if let Some(label) =
-                            self.text_layout(caption, &self.small_left, 120.0)
-                        {
-                            let x = x0 + 26.0 + text.width;
-                            self.draw_layout(
-                                &label.layout,
-                                x,
-                                21.0 - label.height / 2.0,
-                                0.55 * alpha,
-                            );
-                        }
+            None => {
+                let done = todo
+                    .shown
+                    .iter()
+                    .filter(|&&index| todo.tasks[index].done)
+                    .count();
+                let count = format!("{done}/{}", todo.shown.len());
+                if let Some(text) = self.text_layout(&count, &self.big_clock, 96.0) {
+                    self.draw_layout(&text.layout, left, 4.0, alpha);
+                    if let Some(word) = self.text_layout("selesai", &self.small_left, 80.0) {
+                        let x = left + text.width + 6.0;
+                        self.draw_layout(&word.layout, x, 28.0, 0.55 * alpha);
                     }
                 }
-                if done > 0 {
-                    self.draw_pill(layout.clear(), glyph::DELETE, "Hapus selesai", None, alpha);
-                }
             }
         }
-
-        // Add, or save while typing; a task read in full covers it.
-        let full = todo.tasks.len() >= todo::CAPACITY;
-        if full_text.is_some() {
-            // Nothing: the task's text runs across the top.
-        } else if todo.editing.is_some() {
-            self.draw_pill(
-                layout.add(),
-                glyph::CHECK,
-                "Save",
-                Some(Accent::Green),
-                alpha,
-            );
+        // The day shown, stepped a day at a time; the calendar page picks
+        // any other.
+        let stepper = layout.stepper();
+        self.light.SetOpacity(0.08 * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: stepper,
+                radiusX: 11.0,
+                radiusY: 11.0,
+            },
+            &self.light,
+        );
+        let [previous, next] = TodoRects::step_arrows(stepper);
+        self.light.SetOpacity(0.8 * alpha);
+        for ((cx, cy), icon) in [
+            (previous, glyph::CHEVRON_LEFT),
+            (next, glyph::CHEVRON_RIGHT),
+        ] {
+            self.draw_small_glyph(icon, cx, cy, &self.light);
+        }
+        let label = todo_day_label(todo.day, todo.today);
+        let label_box = rect(
+            stepper.left + 22.0,
+            stepper.top,
+            stepper.right - 22.0,
+            stepper.bottom,
+        );
+        if todo.day == todo.today {
+            self.draw_text(&label, &self.tiny, label_box, 0.9 * alpha);
         } else {
-            let opacity = if full { 0.4 } else { 1.0 };
-            self.draw_pill(layout.add(), glyph::ADD, "Tambah", None, opacity * alpha);
+            self.accent.SetColor(&accent_color(Accent::Green));
+            self.accent.SetOpacity(alpha);
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            self.target.DrawText(
+                &wide,
+                &self.tiny,
+                &label_box,
+                &self.accent,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
         }
 
-        if todo.tasks.is_empty() && todo.editing.is_none() {
+        let full = todo.tasks.len() >= todo::CAPACITY;
+        let writing = todo.form.is_some();
+        let add_accent = writing.then_some(Accent::Green);
+        let add_alpha = if full && !writing { 0.4 } else { 1.0 };
+        self.draw_pill(
+            layout.add(),
+            glyph::ADD,
+            "Tambah",
+            add_accent,
+            add_alpha * alpha,
+        );
+        let (label, accent) = if todo.arranging {
+            ("Selesai", Some(Accent::Green))
+        } else {
+            ("Atur", None)
+        };
+        let arrange_alpha = if todo.shown.is_empty() && !todo.arranging || writing {
+            0.4
+        } else {
+            1.0
+        };
+        self.draw_pill(
+            layout.arrange(),
+            glyph::EDIT,
+            label,
+            accent,
+            arrange_alpha * alpha,
+        );
+
+        let panel = layout.panel;
+        self.light.SetOpacity(0.06 * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: panel,
+                radiusX: 14.0,
+                radiusY: 14.0,
+            },
+            &self.light,
+        );
+        if let Some(form) = &todo.form {
+            self.draw_todo_form(&layout, form, todo.today, todo.caret, alpha);
+        } else if todo.shown.is_empty() {
+            let (cx, cy) = ((panel.left + panel.right) / 2.0, panel.top + 52.0);
+            self.light.SetOpacity(0.1 * alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(cx - 20.0, cy - 20.0, cx + 20.0, cy + 20.0),
+                    radiusX: 10.0,
+                    radiusY: 10.0,
+                },
+                &self.light,
+            );
+            self.light.SetOpacity(0.6 * alpha);
+            self.draw_glyph(glyph::CHECK, cx, cy, &self.light);
+            let note = if todo.day == todo.today {
+                "Belum ada tugas".to_string()
+            } else {
+                format!("Kosong \u{b7} {}", todo_day_label(todo.day, todo.today))
+            };
             self.draw_text(
-                "Belum ada tugas \u{b7} klik Tambah",
+                &note,
                 &self.tiny,
-                rect(x0, 54.0, x1, 54.0 + TODO_ROW),
+                rect(panel.left, cy + 26.0, panel.right, cy + 44.0),
                 0.5 * alpha,
             );
+        } else {
+            self.draw_todo_list(&layout, todo, alpha);
         }
-        for (index, task) in todo
-            .tasks
-            .iter()
-            .enumerate()
-            .take(shown.end)
-            .skip(shown.start)
-        {
-            let row = layout.row(index - shown.start);
-            let hovered = todo.hover == Some(index);
-            if hovered {
+    }
+
+    /// The day's tasks in the panel, scrolled, with a thin bar when they
+    /// do not all fit.
+    unsafe fn draw_todo_list(&self, layout: &TodoRects, todo: &TodoScene, alpha: f32) {
+        let panel = layout.panel;
+        self.target.PushAxisAlignedClip(
+            &rect(panel.left, panel.top + 4.0, panel.right, panel.bottom - 4.0),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        );
+        for (local, &index) in todo.shown.iter().enumerate() {
+            let row = layout.row(local, todo.scroll);
+            if row.bottom < panel.top || row.top > panel.bottom {
+                continue;
+            }
+            let task = &todo.tasks[index];
+            if todo.hover == Some(index) {
                 self.light.SetOpacity(0.06 * alpha);
                 self.target.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
@@ -4070,7 +4214,7 @@ impl Renderer {
                     &self.light,
                 );
             }
-            let (cx, cy) = layout.check(index - shown.start);
+            let (cx, cy) = TodoRects::check(row);
             if task.done {
                 self.accent.SetColor(&accent_color(Accent::Green));
                 self.accent.SetOpacity(alpha);
@@ -4098,9 +4242,81 @@ impl Renderer {
                     None,
                 );
             }
-            let text_left = row.left + 34.0;
-            let room = row.right - 34.0 - text_left;
-            if let Some(text) = self.text_layout(&task.text, &self.subtitle_text, room) {
+
+            // Right end: the buttons while arranging, else when it is due.
+            let mut text_right = row.right - 6.0;
+            if todo.arranging {
+                let shown = &todo.shown;
+                let neighbour = |step: isize| {
+                    let at = local as isize + step;
+                    (at >= 0)
+                        .then(|| shown.get(at as usize))
+                        .flatten()
+                        .is_some_and(|&other| todo.tasks[other].done == task.done)
+                };
+                let [up, down, remove] = TodoRects::tools(row);
+                for ((x, y), icon, on) in [
+                    (up, glyph::CHEVRON_UP, neighbour(-1)),
+                    (down, glyph::CHEVRON_DOWN, neighbour(1)),
+                ] {
+                    self.light.SetOpacity(if on { 0.12 } else { 0.05 } * alpha);
+                    self.target.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: pt(x, y),
+                            radiusX: 10.0,
+                            radiusY: 10.0,
+                        },
+                        &self.light,
+                    );
+                    self.light.SetOpacity(if on { 0.9 } else { 0.3 } * alpha);
+                    self.draw_small_glyph(icon, x, y, &self.light);
+                }
+                self.accent.SetColor(&accent_color(Accent::Red));
+                self.accent.SetOpacity(0.9 * alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(remove.0, remove.1),
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &self.accent,
+                );
+                self.light.SetOpacity(alpha);
+                self.draw_small_glyph(glyph::CLOSE, remove.0, remove.1, &self.light);
+                text_right = up.0 - 14.0;
+            } else {
+                let late = !task.done && task.day.is_some_and(|day| day < todo.today);
+                let when = match (task.day, task.time) {
+                    (Some(day), _) if late => Some(todo_day_label(day, todo.today)),
+                    (_, Some(time)) => Some(todo::format_time(time)),
+                    _ => None,
+                };
+                if let Some(when) = when {
+                    if let Some(text) = self.text_layout(&when, &self.small_left, 80.0) {
+                        let x = row.right - 8.0 - text.width;
+                        let y = cy - text.height / 2.0;
+                        if late {
+                            self.accent.SetColor(&accent_color(Accent::Red));
+                            self.accent.SetOpacity(0.9 * alpha);
+                            self.target.DrawTextLayout(
+                                pt(x, y),
+                                &text.layout,
+                                &self.accent,
+                                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            );
+                        } else {
+                            let opacity = if task.done { 0.3 } else { 0.55 };
+                            self.draw_layout(&text.layout, x, y, opacity * alpha);
+                        }
+                        text_right = x - 8.0;
+                    }
+                }
+            }
+
+            let text_left = row.left + 30.0;
+            if let Some(text) =
+                self.text_layout(&task.text, &self.subtitle_text, text_right - text_left)
+            {
                 if task.done {
                     let _ = text.layout.SetStrikethrough(
                         true,
@@ -4118,16 +4334,138 @@ impl Renderer {
                     opacity * alpha,
                 );
             }
-            if hovered {
-                let (rx, ry) = layout.remove(index - shown.start);
-                self.light.SetOpacity(0.6 * alpha);
-                self.draw_small_glyph(glyph::CLOSE, rx, ry, &self.light);
-            }
+        }
+        self.target.PopAxisAlignedClip();
+
+        let most = todo_scroll_most(todo.shown.len());
+        if most > 0.0 {
+            let track = panel.bottom - panel.top - 20.0;
+            let content = track + most;
+            let height = (track * track / content).max(16.0);
+            let top = panel.top + 10.0 + (track - height) * (todo.scroll / most).clamp(0.0, 1.0);
+            self.light.SetOpacity(0.3 * alpha);
+            self.target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: rect(panel.right - 7.0, top, panel.right - 4.0, top + height),
+                    radiusX: 1.5,
+                    radiusY: 1.5,
+                },
+                &self.light,
+            );
         }
     }
 
-    /// The field for a new task: what was typed so far, scrolled to keep the
-    /// end in view, and the blinking cursor.
+    /// The form for a new task: its name, the time to remind at and its day,
+    /// then Batal and Simpan.
+    unsafe fn draw_todo_form(
+        &self,
+        layout: &TodoRects,
+        form: &TodoForm,
+        today: i64,
+        caret: bool,
+        alpha: f32,
+    ) {
+        let title = layout.title_field();
+        self.draw_todo_field(form.text, caret && !form.on_time, title, alpha);
+
+        let time = layout.time_field();
+        let radius = (time.bottom - time.top) / 2.0;
+        let shape = D2D1_ROUNDED_RECT {
+            rect: time,
+            radiusX: radius,
+            radiusY: radius,
+        };
+        self.light.SetOpacity(0.1 * alpha);
+        self.target.FillRoundedRectangle(&shape, &self.light);
+        let cy = (time.top + time.bottom) / 2.0;
+        self.light.SetOpacity(0.6 * alpha);
+        self.draw_small_glyph_at(glyph::CLOCK, time.left + 16.0, cy, &self.light);
+        let text_left = time.left + 30.0;
+        let (shown, opacity) = if form.time.is_empty() && !form.on_time {
+            ("Jam".to_string(), 0.4)
+        } else {
+            (todo::time_mask(form.time), 0.92)
+        };
+        if let Some(text) = self.text_layout(&shown, &self.subtitle_text, 70.0) {
+            let y = cy - text.height / 2.0;
+            if form.bad_time {
+                self.accent.SetColor(&accent_color(Accent::Red));
+                self.accent.SetOpacity(alpha);
+                self.target.DrawTextLayout(
+                    pt(text_left, y),
+                    &text.layout,
+                    &self.accent,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            } else {
+                self.draw_layout(&text.layout, text_left, y, opacity * alpha);
+            }
+        }
+        // The field being typed in is ringed.
+        let focused = if form.on_time { time } else { title };
+        self.accent.SetColor(&accent_color(Accent::Green));
+        self.accent.SetOpacity(0.7 * alpha);
+        let ring = (focused.bottom - focused.top) / 2.0;
+        self.target.DrawRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: rect(
+                    focused.left + 0.5,
+                    focused.top + 0.5,
+                    focused.right - 0.5,
+                    focused.bottom - 0.5,
+                ),
+                radiusX: ring - 0.5,
+                radiusY: ring - 0.5,
+            },
+            &self.accent,
+            1.0,
+            None,
+        );
+
+        let chip = layout.day_chip();
+        let radius = (chip.bottom - chip.top) / 2.0;
+        self.accent.SetOpacity(0.18 * alpha);
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: chip,
+                radiusX: radius,
+                radiusY: radius,
+            },
+            &self.accent,
+        );
+        self.accent.SetOpacity(alpha);
+        let [previous, next] = TodoRects::step_arrows(chip);
+        let earliest = form.day <= today;
+        self.accent
+            .SetOpacity(if earliest { 0.3 } else { 1.0 } * alpha);
+        self.draw_small_glyph(glyph::CHEVRON_LEFT, previous.0, previous.1, &self.accent);
+        self.accent.SetOpacity(alpha);
+        self.draw_small_glyph(glyph::CHEVRON_RIGHT, next.0, next.1, &self.accent);
+        let label = todo_day_label(form.day, today);
+        let wide: Vec<u16> = label.encode_utf16().collect();
+        self.target.DrawText(
+            &wide,
+            &self.small_text,
+            &rect(chip.left + 22.0, chip.top, chip.right - 22.0, chip.bottom),
+            &self.accent,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+
+        self.draw_pill(layout.cancel(), glyph::CLOSE, "Batal", None, alpha);
+        let ready = !form.text.trim().is_empty() && !form.bad_time;
+        let save_alpha = if ready { 1.0 } else { 0.45 };
+        self.draw_pill(
+            layout.save(),
+            glyph::CHECK,
+            "Simpan",
+            Some(Accent::Green),
+            save_alpha * alpha,
+        );
+    }
+
+    /// The field for a new task's name: what was typed so far, scrolled to
+    /// keep the end in view, and the blinking cursor.
     unsafe fn draw_todo_field(&self, text: &str, caret: bool, field: D2D_RECT_F, alpha: f32) {
         self.light.SetOpacity(0.1 * alpha);
         let height = field.bottom - field.top;
@@ -4144,9 +4482,7 @@ impl Renderer {
         let cy = (field.top + field.bottom) / 2.0;
         let mut end = left;
         if text.is_empty() {
-            if let Some(hint) =
-                self.text_layout("Tugas baru, Enter untuk simpan", &self.subtitle_text, room)
-            {
+            if let Some(hint) = self.text_layout("Nama tugas", &self.subtitle_text, room) {
                 self.draw_layout(&hint.layout, left, cy - hint.height / 2.0, 0.4 * alpha);
             }
         } else {
@@ -4277,35 +4613,75 @@ impl Renderer {
     pub fn todo_hit(&self, x: f32, y: f32, width: f32, todo: &TodoScene) -> Option<TodoHit> {
         let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
-        let shown = todo_view(todo);
-        let layout = TodoRects::new(cx - width / 2.0, cx + width / 2.0, shown.len());
+        let layout = TodoRects::new(cx - width / 2.0, cx + width / 2.0);
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        let near = |(ax, ay): (f32, f32), radius: f32| {
+            (x - ax).powi(2) + (y - ay).powi(2) <= radius.powi(2)
+        };
+        if inside(layout.stepper()) {
+            let [previous, next] = TodoRects::step_arrows(layout.stepper());
+            return if near(previous, 13.0) {
+                Some(TodoHit::PreviousDay)
+            } else if near(next, 13.0) {
+                Some(TodoHit::NextDay)
+            } else {
+                (todo.day != todo.today).then_some(TodoHit::Today)
+            };
+        }
         if inside(layout.add()) {
             return Some(TodoHit::Add);
         }
-        if todo.editing.is_none() && todo.tasks.len() > todo.left && inside(layout.clear()) {
-            return Some(TodoHit::ClearDone);
+        if inside(layout.arrange()) {
+            return (todo.form.is_none() && (todo.arranging || !todo.shown.is_empty()))
+                .then_some(TodoHit::Arrange);
         }
-        let views = todo.tasks.len().div_ceil(todo::PER_VIEW);
-        if todo.editing.is_none() && views > 1 {
-            let [previous, next] = layout.view_arrows();
-            let near =
-                |(ax, ay): (f32, f32)| (x - ax).powi(2) + (y - ay).powi(2) <= 13.0_f32.powi(2);
-            if near(previous) {
-                return (todo.view > 0).then_some(TodoHit::PreviousView);
-            }
-            if near(next) {
-                return (todo.view + 1 < views).then_some(TodoHit::NextView);
-            }
+        if !inside(layout.panel) {
+            return None;
         }
-        let local = (0..shown.len()).find(|&index| inside(layout.row(index)))?;
-        let (rx, ry) = layout.remove(local);
-        let index = shown.start + local;
-        if (x - rx).powi(2) + (y - ry).powi(2) <= 12.0_f32.powi(2) {
+        if let Some(form) = &todo.form {
+            let chip = layout.day_chip();
+            if inside(chip) {
+                let middle = (chip.left + chip.right) / 2.0;
+                return if x >= middle {
+                    Some(TodoHit::FormNextDay)
+                } else {
+                    (form.day > todo.today).then_some(TodoHit::FormPreviousDay)
+                };
+            }
+            return [
+                (layout.title_field(), TodoHit::Title),
+                (layout.time_field(), TodoHit::Time),
+                (layout.cancel(), TodoHit::Cancel),
+                (layout.save(), TodoHit::Save),
+            ]
+            .into_iter()
+            .find(|(bounds, _)| inside(*bounds))
+            .map(|(_, hit)| hit);
+        }
+        let local = (0..todo.shown.len()).find(|&local| inside(layout.row(local, todo.scroll)))?;
+        let index = todo.shown[local];
+        if !todo.arranging {
+            return Some(TodoHit::Toggle(index));
+        }
+        let [up, down, remove] = TodoRects::tools(layout.row(local, todo.scroll));
+        if near(up, 11.0) {
+            Some(TodoHit::Up(index))
+        } else if near(down, 11.0) {
+            Some(TodoHit::Down(index))
+        } else if near(remove, 11.0) {
             Some(TodoHit::Remove(index))
         } else {
             Some(TodoHit::Toggle(index))
         }
+    }
+
+    /// Whether (`x`, `y`) is on the task card's list, where the wheel
+    /// scrolls instead of turning the page.
+    pub fn on_todo_list(&self, x: f32, y: f32, width: f32) -> bool {
+        let (y, width) = self.on_page(y, width);
+        let cx = CANVAS.0 / 2.0;
+        let panel = TodoRects::new(cx - width / 2.0, cx + width / 2.0).panel;
+        x >= panel.left && x < panel.right && y >= panel.top && y < panel.bottom
     }
 
     /// The whole page is a sky in the colours of the hour. The next prayer
@@ -4571,18 +4947,37 @@ impl Renderer {
         )
     }
 
-    /// Which calendar control sits at (`x`, `y`) on the open card.
-    pub fn calendar_control_at(&self, x: f32, y: f32, width: f32) -> Option<CalendarControl> {
+    /// Which calendar control sits at (`x`, `y`) on the open card showing
+    /// `month` of `year`: the arrows, or a day.
+    pub fn calendar_control_at(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        (year, month): (i32, u32),
+    ) -> Option<CalendarControl> {
         let (y, width) = self.on_page(y, width);
         let cx = CANVAS.0 / 2.0;
         let layout = CalendarRects::new(cx - width / 2.0, cx + width / 2.0);
-        [
+        let arrow = [
             (layout.previous_month, CalendarControl::PreviousMonth),
             (layout.next_month, CalendarControl::NextMonth),
         ]
         .into_iter()
         .find(|((cx, cy), _)| (x - cx).powi(2) + (y - cy).powi(2) <= HIT_RADIUS.powi(2))
-        .map(|(_, control)| control)
+        .map(|(_, control)| control);
+        if arrow.is_some() {
+            return arrow;
+        }
+        let first = calendar::weekday(year, month, 1);
+        (1..=calendar::days_in_month(year, month))
+            .find(|&day| {
+                let index = first + day - 1;
+                let left = layout.grid_left + (index % 7) as f32 * CELL.0;
+                let top = GRID_TOP + (index / 7) as f32 * CELL.1;
+                x >= left && x < left + CELL.0 && y >= top && y < top + CELL.1
+            })
+            .map(CalendarControl::Day)
     }
 
     /// Which timer control sits at (`x`, `y`) on the open card. `picking`
@@ -4685,7 +5080,19 @@ impl Renderer {
         let left = panel.right + 16.0;
         let right = x1 - 14.0;
         let room = right - left;
-        let next = next_up(&scene.agenda, scene.todo.tasks);
+        // Today's tasks, and those left from earlier days.
+        let today = scene.todo.today;
+        let tasks: Vec<Task> = scene
+            .todo
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.day
+                    .is_none_or(|day| day == today || (day < today && !task.done))
+            })
+            .cloned()
+            .collect();
+        let next = next_up(&scene.agenda, &tasks);
         let lines: &[f32] = if next.is_some() {
             &[52.0, 108.0]
         } else {
@@ -5824,6 +6231,8 @@ mod tests {
         let task = |text: &str, done| Task {
             text: text.to_string(),
             done,
+            day: None,
+            time: None,
         };
         let event = |today| AgendaItem {
             day: String::new(),
