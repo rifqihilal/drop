@@ -1972,8 +1972,8 @@ impl Renderer {
 
     /// A small notch of its own right of the main one, with an icon for each
     /// of the camera and microphone in use; the microphone's crossed out
-    /// while it is muted. While the eyes show it gives way to a coloured dot
-    /// for each, inside the notch beside them.
+    /// while it is muted. While the eyes show, or the notch rests as the thin
+    /// bar, it gives way to a coloured dot for each inside the notch.
     unsafe fn draw_privacy(&self, scene: &Scene) {
         let alpha = scene.privacy_visible.clamp(0.0, 1.0)
             * (1.0 - scene.card_visible * 1.6).clamp(0.0, 1.0);
@@ -1994,7 +1994,30 @@ impl Renderer {
             _ if scene.mic_muted => (glyph::MIC_OFF, accent_color(Accent::Red)),
             _ => (glyph::MIC, color(1.0, 0.62, 0.04, 1.0)),
         };
-        let idle = scene.eyes_visible.clamp(0.0, 1.0);
+        // As the thin bar (set so, or tucked away for a full-screen app)
+        // the small notch would stand out, so small dots in the bar's right
+        // end take its place, until the notch grows again.
+        let bar = if scene.minimal {
+            (1.0 - (scene.height - crate::anim::MINIMAL.1) / 12.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if bar > 0.01 {
+            let right = CANVAS.0 / 2.0 + scene.width / 2.0 - 10.0;
+            for (index, (bit, _)) in icons.iter().rev().enumerate() {
+                self.accent.SetColor(&tint(*bit).1);
+                self.accent.SetOpacity(bar * alpha);
+                self.target.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(right - index as f32 * 7.0, scene.height / 2.0),
+                        radiusX: 2.2,
+                        radiusY: 2.2,
+                    },
+                    &self.accent,
+                );
+            }
+        }
+        let idle = scene.eyes_visible.clamp(0.0, 1.0) * (1.0 - bar);
         if idle > 0.01 {
             let right = CANVAS.0 / 2.0 + scene.width / 2.0 - 16.0;
             for (index, (bit, _)) in icons.iter().rev().enumerate() {
@@ -2012,7 +2035,7 @@ impl Renderer {
                 }
             }
         }
-        let alpha = alpha * (1.0 - idle);
+        let alpha = alpha * (1.0 - idle - bar).max(0.0);
         if alpha <= 0.01 {
             return;
         }

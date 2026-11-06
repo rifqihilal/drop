@@ -2219,6 +2219,10 @@ impl App {
         if self.notch.card_visible.value > 0.1 || !self.settings.privacy_dots {
             return None;
         }
+        // As the thin bar only dots show, too small to click.
+        if self.bar() && self.notch.height.value < MINIMAL.1 + 6.0 {
+            return None;
+        }
         self.renderer.privacy_at(
             (x, y),
             (self.notch.width.value, self.notch.scale),
