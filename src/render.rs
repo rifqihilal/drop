@@ -1012,6 +1012,8 @@ pub struct Scene<'a> {
     pub timer: Option<TimerScene>,
     /// What is downloading, when `strip` is `Strip::Download`.
     pub download: Option<DownloadScene>,
+    /// The event about to start, when `strip` is `Strip::Event`.
+    pub event: Option<EventScene>,
     /// What the live strip beside the clock shows.
     pub strip: Strip,
     pub shelf: ShelfScene<'a>,
@@ -1233,6 +1235,8 @@ pub enum Strip {
     Timer,
     /// Files arriving in the Downloads folder.
     Download,
+    /// An event on the agenda about to start.
+    Event,
 }
 
 pub struct PrayerScene {
@@ -1367,6 +1371,15 @@ pub struct TimerScene {
 }
 
 /// A file arriving in the Downloads folder.
+/// The event the live strip counts down to.
+pub struct EventScene {
+    pub title: String,
+    /// "10 mnt", or "Sekarang" once it has begun.
+    pub wait: String,
+    /// Which calendar link it came from, which gives it its colour.
+    pub source: usize,
+}
+
 pub struct DownloadScene {
     /// Its final name, or "N unduhan" when several arrive.
     pub label: String,
@@ -2601,6 +2614,11 @@ impl Renderer {
                         self.draw_download_strip(download, left, right, height, alpha);
                     }
                 }
+                (Strip::Event, _, _) => {
+                    if let Some(event) = scene.event.as_ref() {
+                        self.draw_event_strip(event, left, right, height, alpha);
+                    }
+                }
                 _ => {}
             });
             self.target.PopAxisAlignedClip();
@@ -2983,6 +3001,27 @@ impl Renderer {
         // The clock keeps the middle, so the name stays to its left.
         let name = rect(x0 + 36.0, 0.0, (x0 + x1) / 2.0 - 36.0, h);
         self.draw_text(&download.label, &self.tile_text, name, 0.9 * alpha);
+    }
+
+    /// An event about to start: the calendar in its link's colour and its
+    /// name left of the clock, how soon on the right.
+    unsafe fn draw_event_strip(&self, event: &EventScene, x0: f32, x1: f32, h: f32, alpha: f32) {
+        let cy = h / 2.0;
+        self.accent.SetColor(&source_color(event.source));
+        self.accent.SetOpacity(alpha);
+        self.draw_small_glyph_at(glyph::CALENDAR, x0 + 21.0, cy, &self.accent);
+        if let Some(text) = self.text_layout(&event.wait, &self.text_left, 90.0) {
+            let x = x1 - 14.0 - text.width;
+            self.target.DrawTextLayout(
+                pt(x, cy - text.height / 2.0),
+                &text.layout,
+                &self.accent,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
+        }
+        // The clock keeps the middle, so the name stays to its left.
+        let name = rect(x0 + 36.0, 0.0, (x0 + x1) / 2.0 - 36.0, h);
+        self.draw_text(&event.title, &self.tile_text, name, 0.9 * alpha);
     }
 
     /// A prayer icon in a faint green circle and "Maghrib 18:07" on the left,

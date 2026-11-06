@@ -83,8 +83,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use anim::{
     Accent, Bell, LevelKind, Motion, Notch, Notice, Spring, Trailing, CARD, CARD_NAV, COMPACT,
-    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, FLOAT_GAP, LYRIC_CARD_EXTRA,
-    LYRIC_STRIP, LYRIC_STRIP_MAX, MINIMAL, MUSIC_STRIP, TIMER_MUSIC_STRIP, TIMER_STRIP,
+    COMPACT_LARGE, COMPACT_SMALL, DOWNLOAD_STRIP, DROP_ZONE, EVENT_STRIP, FLOAT_GAP,
+    LYRIC_CARD_EXTRA, LYRIC_STRIP, LYRIC_STRIP_MAX, MINIMAL, MUSIC_STRIP, TIMER_MUSIC_STRIP,
+    TIMER_STRIP,
 };
 use bluetooth::{Bluetooth, DeviceEvent};
 use calendar::{Phase, Pomodoro};
@@ -98,9 +99,9 @@ use media::{Command, Media, Track};
 use notifications::{AppNotice, Inbox};
 use render::{
     glyph, zoom, AgendaItem, CalcKey, CalcScene, CalendarControl, CalendarScene, DownloadScene,
-    InboxRow, InboxScene, MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit, ShelfScene,
-    StatusScene, Strip, TimerControl, TimerKind, TimerScene, TodoForm, TodoHit, TodoScene,
-    UsageScene, WeatherScene,
+    EventScene, InboxRow, InboxScene, MusicScene, Page, PrayerScene, Renderer, Scene, ShelfHit,
+    ShelfScene, StatusScene, Strip, TimerControl, TimerKind, TimerScene, TodoForm, TodoHit,
+    TodoScene, UsageScene, WeatherScene,
 };
 use shelf::Shelf;
 use system::{Audio, PowerEvent};
@@ -180,6 +181,8 @@ const PRAYER_NOTICE_DURATION: Duration = Duration::from_secs(10);
 const MENU_SETTINGS: usize = 3;
 /// Agenda events are announced this many minutes ahead.
 const EVENT_LEAD: u32 = 10;
+/// Minutes an event stays in the live strip once it has begun.
+const EVENT_NOW: u32 = 2;
 /// The agenda looks this many days ahead.
 const AGENDA_DAYS: i64 = 14;
 /// A timed event stays on the agenda this long after it starts.
@@ -819,6 +822,7 @@ impl App {
             Strip::Timer if self.song_playing() => Some(TIMER_MUSIC_STRIP),
             Strip::Timer => Some(TIMER_STRIP),
             Strip::Download => Some(DOWNLOAD_STRIP),
+            Strip::Event => Some(EVENT_STRIP),
             Strip::Music if lyric_mode => Some((
                 self.lyric_strip.clamp(LYRIC_STRIP.0, LYRIC_STRIP_MAX),
                 LYRIC_STRIP.1,
@@ -830,13 +834,16 @@ impl App {
     }
 
     /// What the closed notch shows beside the clock: a running or paused
-    /// timer first, then music that is playing.
+    /// timer first, then an event about to start, files downloading, and
+    /// music that is playing.
     fn strip(&self) -> Strip {
         let modules = &self.settings;
         if self.bar() {
             Strip::None
         } else if modules.module_calendar && self.live_timer().is_some() {
             Strip::Timer
+        } else if self.soon_event().is_some() {
+            Strip::Event
         } else if !self.downloads.is_empty() {
             Strip::Download
         } else if self.music().is_some_and(|track| track.playing) {
@@ -1863,6 +1870,32 @@ impl App {
             .find(|&kind| self.timer_live(kind))
     }
 
+    /// Today's next timed event that starts within [`EVENT_LEAD`] minutes,
+    /// or began less than [`EVENT_NOW`] minutes ago.
+    fn soon_event(&self) -> Option<(&Event, u32)> {
+        let (today, now) = (today_number(), minutes_now());
+        self.events
+            .iter()
+            .filter(|event| event.day == today)
+            .filter_map(|event| Some((event, event.minute?)))
+            .filter(|&(_, start)| start <= now + EVENT_LEAD && now < start + EVENT_NOW)
+            .min_by_key(|&(_, start)| start)
+    }
+
+    fn event_scene(&self) -> Option<EventScene> {
+        let (event, start) = self.soon_event()?;
+        let now = minutes_now();
+        Some(EventScene {
+            title: event.summary.clone(),
+            wait: if start <= now {
+                tr("Sekarang", "Now").to_string()
+            } else {
+                format!("{} {}", start - now, tr("mnt", "min"))
+            },
+            source: event.source,
+        })
+    }
+
     /// The first download, or how many there are when several arrive.
     fn download_scene(&self) -> Option<DownloadScene> {
         let (name, bytes) = self.downloads.first()?;
@@ -2065,9 +2098,9 @@ impl App {
 
     fn on_events(&mut self, events: Vec<Event>) {
         self.events = events;
-        // An event may already be close.
+        // An event may already be close, for the notice and the live strip.
         self.update_agenda();
-        self.draw();
+        self.tick();
     }
 
     /// The next events: all-day ones from today, timed ones that have not
@@ -2991,6 +3024,7 @@ impl App {
                 self.live_timer().unwrap_or(self.timer_view)
             })),
             download: self.download_scene(),
+            event: self.event_scene(),
             strip: self.strip(),
             prayer: self.prayer_scene(),
             prayer_soon: self.prayer_soon(),
