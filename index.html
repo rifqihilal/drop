@@ -150,6 +150,10 @@ code { font: 700 13px "Plus Jakarta Sans", sans-serif; color: var(--text); backg
 .bar .sp { flex: 1; }
 .bar a.lk { color: var(--muted); text-decoration: none; transition: color .2s; }
 .bar a.lk:hover { color: var(--text); }
+.lang { display: flex; padding: 3px; border-radius: 99px; border: 1px solid #2a2e48; background: #0f1124b3; }
+.lang button { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 99px; font: 700 12px "Plus Jakarta Sans", sans-serif; color: var(--muted); transition: background .2s, color .2s; }
+.lang button[aria-pressed="true"] { background: var(--text); color: #0b0c1a; }
+.lang button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .bar .out { color: var(--text); text-decoration: none; border: 1px solid #2a2e36; padding: 7px 14px; border-radius: 99px; transition: background .2s; }
 .bar .out:hover { background: #14171d; }
 .bar .group { display: flex; gap: 22px; }
@@ -480,6 +484,8 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   .bar { padding: 58px 16px 0; }
   .tag { font-size: 12px; }
   .bar .group { display: none; }
+  .bar { gap: 10px; }
+  .lang button { padding: 4px 8px; }
   .wrap { padding: 0 16px; }
   section { padding-top: 96px; }
   .hero { padding-top: 126px; }
@@ -567,11 +573,12 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
 <header class="bar">
   <a class="brand" href="#"><img src="assets/icon.png" alt="">Drop</a>
   <span class="sp"></span>
-  <nav class="group" aria-label="Bagian">
-    <a class="lk" href="#agent">Agent</a>
-    <a class="lk" href="#kartu">Kartu</a>
-    <a class="lk" href="#pasang">Pasang</a>
+  <nav class="group" aria-label="Bagian" data-en-label="Sections">
+    <a class="lk" href="#agent" data-en="Agent">Agent</a>
+    <a class="lk" href="#kartu" data-en="Cards">Kartu</a>
+    <a class="lk" href="#pasang" data-en="Install">Pasang</a>
   </nav>
+  <div class="lang" role="group" aria-label="Bahasa / Language"><button type="button" data-lang="id" aria-pressed="true">ID</button><button type="button" data-lang="en" aria-pressed="false">EN</button></div>
   <a class="out" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe">Download</a>
 </header>
 
@@ -586,16 +593,16 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   </div>
   <section class="hero" data-notch="hero">
     <div class="wrap">
-      <span class="tag"><i></i>Baru di 0.3.0: Claude Code dan OpenCode di notch</span>
-      <h1>Tepi atas layarmu,<br>kini hidup.</h1>
-      <p class="lead">Drop adalah notch ringan untuk Windows. Progres AI agent, pesan WhatsApp, musik, dan jadwal sholat duduk di tepi atas layar. Melebar saat perlu, lalu mengecil lagi.</p>
+      <span class="tag" data-en="&lt;i&gt;&lt;/i&gt;New in 0.3.0: Claude Code and OpenCode in the notch"><i></i>Baru di 0.3.0: Claude Code dan OpenCode di notch</span>
+      <h1 data-en="The top of your screen,&lt;br&gt;now alive.">Tepi atas layarmu,<br>kini hidup.</h1>
+      <p class="lead" data-en="Drop is a light notch for Windows. AI agent progress, WhatsApp messages, music and prayer times sit at the top edge of your screen. It grows when there is something to see, then shrinks back.">Drop adalah notch ringan untuk Windows. Progres AI agent, pesan WhatsApp, musik, dan jadwal sholat duduk di tepi atas layar. Melebar saat perlu, lalu mengecil lagi.</p>
       <div class="btns">
-        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
-        <a class="btn ghost" href="#kartu">Lihat fitur</a>
+        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+        <a class="btn ghost" href="#kartu" data-en="See features">Lihat fitur</a>
       </div>
       <p class="meta" data-meta>Versi 0.3.0 · 2,7 MB · Windows 10 dan 11 · Gratis</p>
-      <div class="chips" id="chips" aria-label="Isi notch"></div>
-      <p class="hint">Notch di atas halaman ini hidup. Pilih untuk melihat isinya.</p>
+      <div class="chips" id="chips" aria-label="Isi notch" data-en-label="Notch content"></div>
+      <p class="hint" data-en="The notch at the top of this page is live. Pick one to see it.">Notch di atas halaman ini hidup. Pilih untuk melihat isinya.</p>
     </div>
   </section>
 
@@ -603,28 +610,28 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
     <div class="wrap row">
       <div class="copy rise" style="--c: var(--orange)">
         <p class="eyebrow">AI agent</p>
-        <h2>Agent bekerja, kamu tetap tahu.</h2>
-        <p class="sub">Progres Claude Code dan OpenCode tampil di notch. Tidak perlu bolak-balik ke terminal untuk tahu agent sedang apa.</p>
+        <h2 data-en="Your agent works, you stay in the loop.">Agent bekerja, kamu tetap tahu.</h2>
+        <p class="sub" data-en="Claude Code and OpenCode progress shows in the notch. No more switching back to the terminal to see what your agent is up to.">Progres Claude Code dan OpenCode tampil di notch. Tidak perlu bolak-balik ke terminal untuk tahu agent sedang apa.</p>
         <ul class="list">
-          <li>Langkah yang sedang jalan, lama giliran, rencana kerja, dan balasan terakhir.</li>
-          <li>Izinkan atau tolak perintah, dan jawab pertanyaan agent, langsung dari notch.</li>
-          <li>Beberapa agent sekaligus tampil sebagai satu strip, dengan daftar semua sesi.</li>
+          <li data-en="The running step, how long the turn has taken, the plan and the last reply.">Langkah yang sedang jalan, lama giliran, rencana kerja, dan balasan terakhir.</li>
+          <li data-en="Allow or deny commands, and answer the agent&#x27;s questions, right from the notch.">Izinkan atau tolak perintah, dan jawab pertanyaan agent, langsung dari notch.</li>
+          <li data-en="Several agents at once show as one strip, with every session listed.">Beberapa agent sekaligus tampil sebagai satu strip, dengan daftar semua sesi.</li>
         </ul>
-        <p class="note">Hubungkan sekali dari Settings → AI agent. Saat ini untuk Claude Code dan OpenCode.</p>
+        <p class="note" data-en="Connect once from Settings → AI agent. Works with Claude Code and OpenCode for now.">Hubungkan sekali dari Settings → AI agent. Saat ini untuk Claude Code dan OpenCode.</p>
       </div>
       <div class="desk rise" style="--g1:#e8774f40;--g2:#7a4fd850">
         <div class="win" style="left:6%;top:30%;width:46%;height:60%"></div>
         <div class="win" style="left:56%;top:44%;width:38%;height:46%"></div>
         <div class="card">
-          <div class="ch"><span class="ring"></span><span class="dm">Sabtu, 21 Nov</span><b>13:59</b></div>
+          <div class="ch"><span class="ring"></span><span class="dm" data-en="Sat, 21 Nov">Sabtu, 21 Nov</span><b>13:59</b></div>
           <div class="agent">
             <div class="bot"><i></i><i></i></div>
             <div>
               <div class="who"><b>webshop</b><span class="dm">Claude Code</span></div>
-              <div class="ask"><span class="ast">✳</span>Izinkan Jalanin · git push origin main?</div>
+              <div class="ask" data-en="&lt;span class=&quot;ast&quot;&gt;✳&lt;/span&gt;Allow Run · git push origin main?"><span class="ast">✳</span>Izinkan Jalanin · git push origin main?</div>
               <div class="term"><span>Terminal</span>$ git push origin main</div>
               <div class="wait"></div>
-              <div class="acts"><span class="no">Tolak</span><span class="yes">Izinkan</span></div>
+              <div class="acts"><span class="no" data-en="Deny">Tolak</span><span class="yes" data-en="Allow">Izinkan</span></div>
             </div>
           </div>
           <div class="pd"><i></i><i></i><i></i><i></i><i class="on"></i><i></i></div>
@@ -637,25 +644,25 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
     <div class="wrap row flip">
       <div class="copy rise" style="--c: #25d366">
         <p class="eyebrow">WhatsApp</p>
-        <h2>Balas tanpa membuka aplikasinya.</h2>
-        <p class="sub">Pesan masuk muncul sebentar di notch. Klik untuk membalas di tempat, lalu kembali bekerja.</p>
+        <h2 data-en="Reply without opening the app.">Balas tanpa membuka aplikasinya.</h2>
+        <p class="sub" data-en="New messages pop up in the notch for a moment. Click to reply right there, then get back to work.">Pesan masuk muncul sebentar di notch. Klik untuk membalas di tempat, lalu kembali bekerja.</p>
         <ul class="list">
-          <li>Jumlah pesan belum dibaca per pengirim.</li>
-          <li>Klik notifikasi lain untuk membuka tujuannya: chat, tautan, atau app pengirimnya.</li>
-          <li>Suara notifikasi pilihan, dibuat pelan.</li>
+          <li data-en="Unread count per sender.">Jumlah pesan belum dibaca per pengirim.</li>
+          <li data-en="Click any other notification to open where it leads: the chat, the link, or the app that sent it.">Klik notifikasi lain untuk membuka tujuannya: chat, tautan, atau app pengirimnya.</li>
+          <li data-en="A notification sound of your choice, kept soft.">Suara notifikasi pilihan, dibuat pelan.</li>
         </ul>
-        <p class="note">Untuk WhatsApp Desktop resmi.</p>
+        <p class="note" data-en="For the official WhatsApp Desktop app.">Untuk WhatsApp Desktop resmi.</p>
       </div>
       <div class="desk rise" style="--g1:#25d36630;--g2:#2b7bd84a">
         <div class="win" style="left:8%;top:34%;width:40%;height:56%"></div>
         <div class="win" style="left:52%;top:28%;width:40%;height:62%"></div>
         <div class="card">
-          <div class="ch"><span class="ring"></span><span class="dm">Rabu, 25 Nov</span><b data-clock>13:30</b></div>
-          <div class="inbox-head"><b>3 notifikasi</b><span class="clear"><svg><use href="#p-trash"/></svg>Hapus semua</span></div>
+          <div class="ch"><span class="ring"></span><span class="dm" data-en="Wed, 25 Nov">Rabu, 25 Nov</span><b data-clock>13:30</b></div>
+          <div class="inbox-head"><b data-en="3 notifications">3 notifikasi</b><span class="clear" data-en="&lt;svg&gt;&lt;use href=&quot;#p-trash&quot;/&gt;&lt;/svg&gt;Clear all"><svg><use href="#p-trash"/></svg>Hapus semua</span></div>
           <div class="chat">
-            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b>Rina</b><small>WhatsApp · Jadi ketemu jam 7? Aku bawa laptopnya</small></div><span class="age"><span class="badge">2</span>1 mnt</span></div>
+            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b>Rina</b><small data-en="WhatsApp · Still on for 7? I&#x27;m bringing the laptop">WhatsApp · Jadi ketemu jam 7? Aku bawa laptopnya</small></div><span class="age" data-en="&lt;span class=&quot;badge&quot;&gt;2&lt;/span&gt;1 min"><span class="badge">2</span>1 mnt</span></div>
             <div class="reply"><span class="typed" id="typed"></span><span class="send"><svg><use href="#d-send"/></svg></span></div>
-            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b>Tim Kantor</b><small>WhatsApp · Bayu: slide sudah aku upload ya</small></div><span class="age">5 mnt</span></div>
+            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b data-en="Office team">Tim Kantor</b><small data-en="WhatsApp · Bayu: the slides are uploaded">WhatsApp · Bayu: slide sudah aku upload ya</small></div><span class="age" data-en="5 min">5 mnt</span></div>
           </div>
           <div class="pd"><i></i><i class="on"></i><i></i><i></i><i></i><i></i></div>
         </div>
@@ -666,21 +673,21 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   <section id="kartu" data-notch="musik">
     <div class="wrap">
       <div class="head rise">
-        <p class="eyebrow">Kartu</p>
-        <h2>Semua yang biasa kamu cek,<br>satu gerakan mouse.</h2>
-        <p class="sub">Arahkan mouse ke notch dan kartunya terbuka. Pindah halaman dengan scroll, geser touchpad, atau <kbd>Alt</kbd> <kbd>N</kbd>.</p>
+        <p class="eyebrow" data-en="Cards">Kartu</p>
+        <h2 data-en="Everything you check,&lt;br&gt;one mouse move away.">Semua yang biasa kamu cek,<br>satu gerakan mouse.</h2>
+        <p class="sub" data-en="Point at the notch and its card opens. Switch pages by scrolling, swiping the touchpad, or &lt;kbd&gt;Alt&lt;/kbd&gt; &lt;kbd&gt;N&lt;/kbd&gt;.">Arahkan mouse ke notch dan kartunya terbuka. Pindah halaman dengan scroll, geser touchpad, atau <kbd>Alt</kbd> <kbd>N</kbd>.</p>
       </div>
       <div class="bento">
         <article class="tile w2">
           <div class="vis"><div class="mini-home">
-            <div class="big"><span>Selamat pagi, Dimas</span><b data-clock>09:41</b><span>Rabu, 25 Nov</span></div>
-            <div><span>Cuaca</span><b>26°</b></div>
-            <div><span>Dzuhur</span><b>11:52</b></div>
-            <div><span>Fokus</span><b>18:20</b></div>
-            <div><span>Agent</span><b style="color:var(--orange)">✳ Edit</b></div>
+            <div class="big"><span data-en="Good morning, Dimas">Selamat pagi, Dimas</span><b data-clock>09:41</b><span data-en="Wed, 25 Nov">Rabu, 25 Nov</span></div>
+            <div><span data-en="Weather">Cuaca</span><b>26°</b></div>
+            <div><span data-en="Dhuhr">Dzuhur</span><b>11:52</b></div>
+            <div><span data-en="Focus">Fokus</span><b>18:20</b></div>
+            <div><span data-en="Agent">Agent</span><b style="color:var(--orange)">✳ Edit</b></div>
           </div></div>
-          <h3>Home bento <span class="new">BARU</span></h3>
-          <p>Jam dan sapaan, plus 4 atau 6 kotak pilihan. Klik kotak untuk membuka halamannya.</p>
+          <h3 data-en="Home bento &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Home bento <span class="new">BARU</span></h3>
+          <p data-en="A clock and a greeting, plus 4 or 6 tiles of your choice. Click a tile to open its page.">Jam dan sapaan, plus 4 atau 6 kotak pilihan. Klik kotak untuk membuka halamannya.</p>
         </article>
         <article class="tile w2">
           <div class="vis"><div class="mus">
@@ -689,8 +696,8 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
               <div class="line"><i></i></div>
               <div class="ly"><em>Baik-baik sajalah</em> ...</div></div>
           </div></div>
-          <h3>Musik dan lirik</h3>
-          <p>Kontrol, sampul, dan lirik tersinkron. Lagu berganti di tempat saat next atau prev.</p>
+          <h3 data-en="Music and lyrics">Musik dan lirik</h3>
+          <p data-en="Controls, cover art and synced lyrics. Songs change in place on next or previous.">Kontrol, sampul, dan lirik tersinkron. Lagu berganti di tempat saat next atau prev.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="mix">
@@ -699,8 +706,8 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
             <div><span>Chrome</span><span class="lvl" style="--v:34%;--c:#5aaef0"><i></i></span></div>
             <div><span>Discord</span><span class="lvl" style="--v:80%;--c:#8c8cf5"><i></i></span></div>
           </div></div>
-          <h3>Mixer <span class="new">BARU</span></h3>
-          <p>Volume tiap app yang sedang bersuara.</p>
+          <h3 data-en="Mixer &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Mixer <span class="new">BARU</span></h3>
+          <p data-en="The volume of every app making sound.">Volume tiap app yang sedang bersuara.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="loupe">
@@ -708,19 +715,19 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
             <span class="hex">#5AAEF0</span>
             <span><kbd>Alt</kbd> <kbd>C</kbd></span>
           </div></div>
-          <h3>Droplate <span class="new">BARU</span></h3>
-          <p>Ambil warna dari mana saja dengan kaca pembesar.</p>
+          <h3 data-en="Droplate &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Droplate <span class="new">BARU</span></h3>
+          <p data-en="Pick a colour from anywhere with a magnifier.">Ambil warna dari mana saja dengan kaca pembesar.</p>
         </article>
         <article class="tile w2">
           <div class="vis" style="flex-direction:column">
             <div class="tp"><div>
-              <p>Halo semuanya, terima kasih sudah hadir.</p><p>Hari ini saya mau cerita soal tiga hal.</p><p>Pertama, apa yang sudah kita capai.</p><p>Kedua, apa yang masih tertunda.</p><p>Ketiga, rencana bulan depan.</p><p>Mari kita mulai dari angka.</p>
-              <p>Halo semuanya, terima kasih sudah hadir.</p><p>Hari ini saya mau cerita soal tiga hal.</p><p>Pertama, apa yang sudah kita capai.</p><p>Kedua, apa yang masih tertunda.</p><p>Ketiga, rencana bulan depan.</p><p>Mari kita mulai dari angka.</p>
+              <p data-en="Hi everyone, thanks for coming.">Halo semuanya, terima kasih sudah hadir.</p><p data-en="Today I want to talk about three things.">Hari ini saya mau cerita soal tiga hal.</p><p data-en="First, what we&#x27;ve achieved.">Pertama, apa yang sudah kita capai.</p><p data-en="Second, what&#x27;s still pending.">Kedua, apa yang masih tertunda.</p><p data-en="Third, next month&#x27;s plan.">Ketiga, rencana bulan depan.</p><p data-en="Let&#x27;s start with the numbers.">Mari kita mulai dari angka.</p>
+              <p data-en="Hi everyone, thanks for coming.">Halo semuanya, terima kasih sudah hadir.</p><p data-en="Today I want to talk about three things.">Hari ini saya mau cerita soal tiga hal.</p><p data-en="First, what we&#x27;ve achieved.">Pertama, apa yang sudah kita capai.</p><p data-en="Second, what&#x27;s still pending.">Kedua, apa yang masih tertunda.</p><p data-en="Third, next month&#x27;s plan.">Ketiga, rencana bulan depan.</p><p data-en="Let&#x27;s start with the numbers.">Mari kita mulai dari angka.</p>
             </div></div>
-            <div class="tpm"><span>140 wpm</span><span>·</span><span>2:10 lagi</span><span>·</span><span><kbd>Alt</kbd> <kbd>P</kbd></span></div>
+            <div class="tpm"><span>140 wpm</span><span>·</span><span data-en="2:10 left">2:10 lagi</span><span>·</span><span><kbd>Alt</kbd> <kbd>P</kbd></span></div>
           </div>
-          <h3>Teleprompter <span class="new">BARU</span></h3>
-          <p>Naskah bergulir pelan tepat di bawah kamera. Bisa disembunyikan dari rekaman layar.</p>
+          <h3 data-en="Teleprompter &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Teleprompter <span class="new">BARU</span></h3>
+          <p data-en="Your script scrolls slowly right under the camera. It can be hidden from screen recordings.">Naskah bergulir pelan tepat di bawah kamera. Bisa disembunyikan dari rekaman layar.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="rings"><svg viewBox="0 0 120 120">
@@ -728,54 +735,54 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
             <circle cx="60" cy="60" r="39" stroke="#1d2433"/><circle cx="60" cy="60" r="39" stroke="#5aaef0" stroke-dasharray="245" stroke-dashoffset="110"/>
             <circle cx="60" cy="60" r="26" stroke="#2d2120"/><circle cx="60" cy="60" r="26" stroke="#e8774f" stroke-dasharray="163" stroke-dashoffset="40"/>
           </svg></div></div>
-          <h3>Istirahat <span class="new">BARU</span></h3>
-          <p>Mata, peregangan, dan minum. Ditahan selama rapat.</p>
+          <h3 data-en="Breaks &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Istirahat <span class="new">BARU</span></h3>
+          <p data-en="Eyes, stretching and water. Held back during meetings.">Mata, peregangan, dan minum. Ditahan selama rapat.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="rul"><b>25:00</b><div class="ticks"></div></div></div>
           <h3>Pomodoro</h3>
-          <p>Penggaris menit untuk fokus dan istirahat, plus stopwatch.</p>
+          <p data-en="A minute ruler for focus and breaks, plus a stopwatch.">Penggaris menit untuk fokus dan istirahat, plus stopwatch.</p>
         </article>
         <article class="tile w2">
           <div class="vis"><div class="cal">
             <div class="days">
-              <span class="h">S</span><span class="h">S</span><span class="h">R</span><span class="h">K</span><span class="h">J</span><span class="h">S</span><span class="h">M</span>
+              <span class="h" data-en="M">S</span><span class="h" data-en="T">S</span><span class="h" data-en="W">R</span><span class="h" data-en="T">K</span><span class="h" data-en="F">J</span><span class="h" data-en="S">S</span><span class="h" data-en="S">M</span>
               <span>16</span><span class="ev">17</span><span>18</span><span>19</span><span class="ev">20</span><span>21</span><span>22</span>
               <span>23</span><span>24</span><span class="sel">25</span><span class="ev">26</span><span>27</span><span>28</span><span>29</span>
               <span class="ev">30</span><span>1</span><span>2</span><span>3</span><span class="ev">4</span><span>5</span><span>6</span>
             </div>
             <div class="agenda">
-              <div><i style="--c:#5aaef0"></i>09:00 Rapat mingguan</div>
-              <div><span class="chk on"></span><span style="color:var(--dim);text-decoration:line-through">Kirim laporan</span></div>
-              <div><span class="chk"></span>Beli kado Ibu</div>
+              <div data-en="&lt;i style=&quot;--c:#5aaef0&quot;&gt;&lt;/i&gt;09:00 Weekly meeting"><i style="--c:#5aaef0"></i>09:00 Rapat mingguan</div>
+              <div><span class="chk on"></span><span style="color:var(--dim);text-decoration:line-through" data-en="Send the report">Kirim laporan</span></div>
+              <div data-en="&lt;span class=&quot;chk&quot;&gt;&lt;/span&gt;Buy Mum a present"><span class="chk"></span>Beli kado Ibu</div>
             </div>
           </div></div>
-          <h3>Kalender dan agenda harian <span class="new">BARU</span></h3>
-          <p>Sampai tiga tautan <code>.ics</code> dan tugasmu. Klik tanggal untuk melihat acaranya, centang tugas, atau tambah tugas di hari itu.</p>
+          <h3 data-en="Calendar and day agenda &lt;span class=&quot;new&quot;&gt;NEW&lt;/span&gt;">Kalender dan agenda harian <span class="new">BARU</span></h3>
+          <p data-en="Up to three &lt;code&gt;.ics&lt;/code&gt; links plus your tasks. Click a date to see its events, tick off tasks, or add a task to that day.">Sampai tiga tautan <code>.ics</code> dan tugasmu. Klik tanggal untuk melihat acaranya, centang tugas, atau tambah tugas di hari itu.</p>
         </article>
         <article class="tile">
-          <div class="vis"><div class="sky"><span>Ashar</span><b>15:12</b><span>dalam 1 jam 4 mnt</span></div></div>
-          <h3>Waktu sholat</h3>
-          <p>Metode Kemenag RI, dengan langit yang mengikuti waktu.</p>
+          <div class="vis"><div class="sky"><span data-en="Asr">Ashar</span><b>15:12</b><span data-en="in 1 h 4 min">dalam 1 jam 4 mnt</span></div></div>
+          <h3 data-en="Prayer times">Waktu sholat</h3>
+          <p data-en="Indonesia&#x27;s Kemenag RI method, with a sky that follows the time of day.">Metode Kemenag RI, dengan langit yang mengikuti waktu.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="todo">
-            <div><span class="chk on"></span><span class="done">Bayar listrik</span></div>
-            <div><span class="chk"></span>Telepon Ibu<small>19:00</small></div>
-            <div><span class="chk"></span>Kirim desain<small>Besok</small></div>
+            <div><span class="chk on"></span><span class="done" data-en="Pay the power bill">Bayar listrik</span></div>
+            <div data-en="&lt;span class=&quot;chk&quot;&gt;&lt;/span&gt;Call Mum&lt;small&gt;19:00&lt;/small&gt;"><span class="chk"></span>Telepon Ibu<small>19:00</small></div>
+            <div data-en="&lt;span class=&quot;chk&quot;&gt;&lt;/span&gt;Send the design&lt;small&gt;Tomorrow&lt;/small&gt;"><span class="chk"></span>Kirim desain<small>Besok</small></div>
           </div></div>
-          <h3>Tugas</h3>
-          <p>Dengan tanggal dan jam, dan pengingat saat tiba.</p>
+          <h3 data-en="Tasks">Tugas</h3>
+          <p data-en="With a date and time, and a reminder when it&#x27;s due.">Dengan tanggal dan jam, dan pengingat saat tiba.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="week"><i style="--h:40%"></i><i style="--h:70%"></i><i style="--h:55%"></i><i style="--h:85%"></i><i style="--h:60%"></i><i style="--h:30%"></i><i style="--h:75%"></i></div></div>
           <h3>Screen Time</h3>
-          <p>Waktu pakai tiap app, hari ini atau tujuh hari.</p>
+          <p data-en="Time spent in each app, today or over seven days.">Waktu pakai tiap app, hari ini atau tujuh hari.</p>
         </article>
         <article class="tile">
           <div class="vis"><div class="files"><span class="file" style="--c:#e8774f">PDF</span><span class="file" style="--c:#5aaef0">PNG</span><span class="file" style="--c:#3ccf6e">XLSX</span></div></div>
           <h3>Shelf</h3>
-          <p>Seret berkas ke notch, ambil lagi nanti. Screenshot masuk otomatis.</p>
+          <p data-en="Drag files onto the notch and pick them up later. Screenshots land here on their own.">Seret berkas ke notch, ambil lagi nanti. Screenshot masuk otomatis.</p>
         </article>
       </div>
     </div>
@@ -784,9 +791,9 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   <section data-notch="notice">
     <div class="wrap">
       <div class="head rise">
-        <p class="eyebrow" style="--c:var(--green)">Notifikasi</p>
-        <h2>Ada kabar, muncul sebentar,<br>lalu pergi.</h2>
-        <p class="sub">Volume dan kecerahan menggantikan tampilan bawaan Windows. Klik salah satu, lalu lihat notch di atas.</p>
+        <p class="eyebrow" style="--c:var(--green)" data-en="Notifications">Notifikasi</p>
+        <h2 data-en="News arrives, stays a moment,&lt;br&gt;then goes.">Ada kabar, muncul sebentar,<br>lalu pergi.</h2>
+        <p class="sub" data-en="Volume and brightness replace Windows&#x27; own pop-ups. Click one, then watch the notch above.">Volume dan kecerahan menggantikan tampilan bawaan Windows. Klik salah satu, lalu lihat notch di atas.</p>
       </div>
       <div class="notices rise" id="notices"></div>
     </div>
@@ -795,42 +802,42 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   <section data-notch="idle">
     <div class="wrap">
       <div class="head rise">
-        <p class="eyebrow" style="--c:#b48cff">Tampilan</p>
-        <h2>Pas dengan mejamu.</h2>
-        <p class="sub">Classic menempel di tepi, Floating melayang. Tiga ukuran, tiga tema, dan sembunyi otomatis jadi bar tipis saat game, video, atau presentasi.</p>
+        <p class="eyebrow" style="--c:#b48cff" data-en="Look">Tampilan</p>
+        <h2 data-en="Fits your desk.">Pas dengan mejamu.</h2>
+        <p class="sub" data-en="Classic sits on the edge, Floating hovers below it. Three sizes, three themes, and it hides as a thin bar during games, videos or presentations.">Classic menempel di tepi, Floating melayang. Tiga ukuran, tiga tema, dan sembunyi otomatis jadi bar tipis saat game, video, atau presentasi.</p>
       </div>
       <div class="looks">
         <div class="look rise" data-theme="black" role="button" tabindex="0" aria-pressed="true">
           <div class="scr" style="--wall:linear-gradient(160deg,#2b3a67,#121726)"><div class="mn" style="--nc:#000"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.6">31°</span></div></div>
-          <div class="cap"><b>Hitam</b><p>Menyatu dengan bingkai layar.</p></div>
+          <div class="cap"><b data-en="Black">Hitam</b><p data-en="Blends into the screen&#x27;s frame.">Menyatu dengan bingkai layar.</p></div>
         </div>
         <div class="look rise" data-theme="glass" role="button" tabindex="0" aria-pressed="false">
-          <div class="scr" style="--wall:linear-gradient(160deg,#e39a6a,#7a3f8a)"><div class="mn fl" style="--nc:#ffffff2e;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:inset 0 0 0 1px #ffffff40"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75">Rabu 25</span></div></div>
-          <div class="cap"><b>Kaca</b><p>Tembus pandang, ikut wallpaper.</p></div>
+          <div class="scr" style="--wall:linear-gradient(160deg,#e39a6a,#7a3f8a)"><div class="mn fl" style="--nc:#ffffff2e;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:inset 0 0 0 1px #ffffff40"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75" data-en="Wed 25">Rabu 25</span></div></div>
+          <div class="cap"><b data-en="Glass">Kaca</b><p data-en="See-through, takes on your wallpaper.">Tembus pandang, ikut wallpaper.</p></div>
         </div>
         <div class="look rise" data-theme="tint" role="button" tabindex="0" aria-pressed="false">
-          <div class="scr" style="--wall:linear-gradient(160deg,#2e8a7a,#173a4f)"><div class="mn" style="--nc:#1d6f8c"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75">3 tugas</span></div></div>
-          <div class="cap"><b>Kaca warna</b><p>Ikut warna aksen Windows.</p></div>
+          <div class="scr" style="--wall:linear-gradient(160deg,#2e8a7a,#173a4f)"><div class="mn" style="--nc:#1d6f8c"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75" data-en="3 tasks">3 tugas</span></div></div>
+          <div class="cap"><b data-en="Tinted glass">Kaca warna</b><p data-en="Follows the Windows accent colour.">Ikut warna aksen Windows.</p></div>
         </div>
       </div>
-      <p class="hint rise" style="text-align:center;margin-top:16px">Arahkan mouse atau ketuk salah satu tema, lalu lihat notch di atas.</p>
-      <p class="sub rise" style="text-align:center;margin:40px auto 0">Pilih yang tampil di kanan jam:</p>
-      <div class="rightside rise"><span>Suhu</span><span>Tanggal</span><span>Agenda berikutnya</span><span>Sisa tugas</span><span>Jam kedua</span><span>Screen Time</span><span>Kosong</span></div>
+      <p class="hint rise" style="text-align:center;margin-top:16px" data-en="Point at or tap a theme, then watch the notch above.">Arahkan mouse atau ketuk salah satu tema, lalu lihat notch di atas.</p>
+      <p class="sub rise" style="text-align:center;margin:40px auto 0" data-en="Choose what shows right of the clock:">Pilih yang tampil di kanan jam:</p>
+      <div class="rightside rise"><span data-en="Temperature">Suhu</span><span data-en="Date">Tanggal</span><span data-en="Next event">Agenda berikutnya</span><span data-en="Tasks left">Sisa tugas</span><span data-en="Second clock">Jam kedua</span><span>Screen Time</span><span data-en="Nothing">Kosong</span></div>
     </div>
   </section>
 
   <section data-notch="mata">
     <div class="wrap">
       <div class="head rise">
-        <p class="eyebrow">Ringan</p>
-        <h2>Kecil, cepat, dan diam saat tidak dipakai.</h2>
-        <p class="sub">Ditulis dalam Rust langsung di atas Win32 dan Direct2D, tanpa webview. Tanpa akun: semua tersimpan di komputermu sebagai berkas teks.</p>
+        <p class="eyebrow" data-en="Light">Ringan</p>
+        <h2 data-en="Small, fast, and still when idle.">Kecil, cepat, dan diam saat tidak dipakai.</h2>
+        <p class="sub" data-en="Written in Rust straight on Win32 and Direct2D, with no webview. No account: everything stays on your PC as text files.">Ditulis dalam Rust langsung di atas Win32 dan Direct2D, tanpa webview. Tanpa akun: semua tersimpan di komputermu sebagai berkas teks.</p>
       </div>
       <div class="stats">
-        <div class="stat rise"><b>20–25 MB</b><span>memori yang dipakai</span></div>
-        <div class="stat rise"><b>2,7 MB</b><span>ukuran installer</span></div>
+        <div class="stat rise"><b>20–25 MB</b><span data-en="of memory in use">memori yang dipakai</span></div>
+        <div class="stat rise"><b data-en="2.7 MB">2,7 MB</b><span data-en="installer size">ukuran installer</span></div>
         <div class="stat rise"><b>Native</b><span>Win32, Direct2D, DirectWrite</span></div>
-        <div class="stat rise"><b>ID · EN</b><span>Windows 10 dan 11</span></div>
+        <div class="stat rise"><b>ID · EN</b><span data-en="Windows 10 and 11">Windows 10 dan 11</span></div>
       </div>
     </div>
   </section>
@@ -838,20 +845,20 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   <section id="pasang" data-notch="unduh">
     <div class="wrap">
       <div class="head rise">
-        <p class="eyebrow">Pasang</p>
-        <h2>Pasang dalam semenit.</h2>
+        <p class="eyebrow" data-en="Install">Pasang</p>
+        <h2 data-en="Installed in a minute.">Pasang dalam semenit.</h2>
       </div>
       <div class="install">
-        <div class="step rise"><h3>Download installer</h3><p>Untuk Windows 10 dan 11, ukurannya 2,7 MB. Versi lama langsung ditimpa; pengaturan tetap tersimpan.</p></div>
-        <div class="step rise"><h3>Lewati SmartScreen</h3><p>Installer belum ditandatangani, jadi Windows menampilkan "Windows protected your PC". Klik <code>More info</code>, lalu <code>Run anyway</code>.</p></div>
-        <div class="step rise"><h3>Selesai</h3><p>Drop jalan sendiri setiap Windows menyala. Klik kanan notch untuk membuka Settings.</p></div>
+        <div class="step rise"><h3 data-en="Download the installer">Download installer</h3><p data-en="For Windows 10 and 11, 2.7 MB. It installs over an older version and keeps your settings.">Untuk Windows 10 dan 11, ukurannya 2,7 MB. Versi lama langsung ditimpa; pengaturan tetap tersimpan.</p></div>
+        <div class="step rise"><h3 data-en="Get past SmartScreen">Lewati SmartScreen</h3><p data-en="The installer isn&#x27;t signed yet, so Windows shows &quot;Windows protected your PC&quot;. Click &lt;code&gt;More info&lt;/code&gt;, then &lt;code&gt;Run anyway&lt;/code&gt;.">Installer belum ditandatangani, jadi Windows menampilkan "Windows protected your PC". Klik <code>More info</code>, lalu <code>Run anyway</code>.</p></div>
+        <div class="step rise"><h3 data-en="Done">Selesai</h3><p data-en="Drop starts with Windows. Right-click the notch to open Settings.">Drop jalan sendiri setiap Windows menyala. Klik kanan notch untuk membuka Settings.</p></div>
       </div>
       <div class="final rise">
         <div class="ears"><span class="eye"></span><span class="eye"></span></div>
-        <h2>Beri Windows-mu notch.</h2>
-        <p class="sub" style="margin:0 auto">Gratis, tanpa akun, tanpa iklan.</p>
+        <h2 data-en="Give your Windows a notch.">Beri Windows-mu notch.</h2>
+        <p class="sub" style="margin:0 auto" data-en="Free, no account, no ads.">Gratis, tanpa akun, tanpa iklan.</p>
         <div class="btns" style="margin-bottom:0">
-          <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+          <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
         </div>
       </div>
     </div>
@@ -862,18 +869,49 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   <div class="wrap">
     <div class="who-made">
       <a class="brand" href="#"><img src="assets/icon.png" alt="">Drop</a>
-      <p>Dibuat oleh Hilal. Gratis dipakai.</p>
+      <p data-en="Made by Hilal. Free to use.">Dibuat oleh Hilal. Gratis dipakai.</p>
     </div>
-    <nav aria-label="Tautan">
-      <a href="https://github.com/rifqihilal/drop/blob/main/LICENSE">Lisensi</a>
+    <nav aria-label="Tautan" data-en-label="Links">
+      <a href="https://github.com/rifqihilal/drop/blob/main/LICENSE" data-en="License">Lisensi</a>
       <a href="https://github.com/rifqihilal/drop/blob/main/NOTICE">NOTICE</a>
-      <a href="https://github.com/rifqihilal/drop/releases">Semua rilis</a>
+      <a href="https://github.com/rifqihilal/drop/releases" data-en="All releases">Semua rilis</a>
     </nav>
   </div>
   <div class="word" aria-hidden="true">Drop</div>
 </footer>
 
 <script>
+// The page speaks Indonesian or English: the visitor's choice if saved, else
+// the browser's language. Texts in the HTML keep their English in data-en.
+const LANG = { en: false };
+const tr = (id, en) => (LANG.en ? en : id);
+const TEXT = {
+  title: ['Drop - Notch ringan untuk Windows', 'Drop - A light notch for Windows'],
+  description: ['Notch di tepi atas layar Windows: progres AI agent, balas WhatsApp, musik, jadwal sholat, kalender, dan notifikasi. Gratis, ringan, native.',
+    'A notch at the top of your Windows screen: AI agent progress, WhatsApp replies, music, prayer times, calendar and notifications. Free, light, native.'],
+};
+function setLang(en, save) {
+  LANG.en = en;
+  document.documentElement.lang = en ? 'en' : 'id';
+  document.title = tr(...TEXT.title);
+  document.querySelector('meta[name="description"]').content = tr(...TEXT.description);
+  document.querySelectorAll('[data-en]').forEach(el => {
+    if (el.dataset.id === undefined) el.dataset.id = el.innerHTML;
+    el.innerHTML = en ? el.dataset.en : el.dataset.id;
+  });
+  document.querySelectorAll('[data-en-label]').forEach(el => {
+    if (el.dataset.idLabel === undefined) el.dataset.idLabel = el.getAttribute('aria-label');
+    el.setAttribute('aria-label', en ? el.dataset.enLabel : el.dataset.idLabel);
+  });
+  document.querySelectorAll('[data-lang]').forEach(b => b.setAttribute('aria-pressed', (b.dataset.lang === 'en') === en));
+  if (save) {
+    try { localStorage.setItem('drop-lang', en ? 'en' : 'id'); } catch {}
+  }
+  document.dispatchEvent(new Event('drop:lang'));
+}
+document.querySelectorAll('[data-lang]').forEach(b => b.addEventListener('click', () => setLang(b.dataset.lang === 'en', true)));
+const savedLang = (() => { try { return localStorage.getItem('drop-lang'); } catch { return null; } })();
+
 // The notch at the top of the page: a strip for each state, swapped as the page scrolls.
 (() => {
   const nb = document.getElementById('nb');
@@ -882,27 +920,27 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   const ico = (id, color) => `<span class="sq" style="--c:${color}"><svg><use href="#${id}"/></svg></span>`;
   const notice = (id, color, title, sub) => [300, 46, `${ico(id, color)}<span class="two"><b>${title}</b><span>${sub}</span></span><span class="gr"></span>`];
   const level = (id, color, title, v) => [300, 46, `${ico(id, color)}<b>${title}</b><span class="gr"></span><span class="lvl" style="--v:${v}%"><i></i></span>`];
-  const S = {
+  let S = {};
+  const strips = () => ({
     idle:  [218, 35, '<span class="ring"></span><b data-clock>13:59</b><span class="gr"></span><span class="dm">31°</span>'],
     agent: [372, 35, '<span class="ast spin">✳</span><span>Edit · render.rs</span><span class="gr"></span><span class="dots">•••</span><b data-clock>13:59</b>'],
-    izin:  [430, 46, '<span class="ast">✳</span><span class="two"><b>webshop</b><span>Izinkan git push?</span></span><span class="gr"></span><span class="pill no">Tolak</span><span class="pill yes">Izinkan</span>'],
-    wa:    [396, 50, `${ico('p-whatsapp-logo', '#25d366')}<span class="two"><b>Rina</b><span>Jadi ketemu jam 7?</span></span><span class="gr"></span><span class="pill" style="background:#1f2a22;color:#8fe3a8">Balas</span>`],
+    izin:  [430, 46, `<span class="ast">✳</span><span class="two"><b>webshop</b><span>${tr('Izinkan git push?', 'Allow git push?')}</span></span><span class="gr"></span><span class="pill no">${tr('Tolak', 'Deny')}</span><span class="pill yes">${tr('Izinkan', 'Allow')}</span>`],
+    wa:    [396, 50, `${ico('p-whatsapp-logo', '#25d366')}<span class="two"><b>Rina</b><span>${tr('Jadi ketemu jam 7?', 'Still on for 7?')}</span></span><span class="gr"></span><span class="pill" style="background:#1f2a22;color:#8fe3a8">${tr('Balas', 'Reply')}</span>`],
     musik: [330, 35, '<span class="cov"></span><span>Evaluasi</span><span class="dm">Hindia</span><span class="gr"></span><span class="bars"><i></i><i></i><i></i><i></i></span>'],
-    unduh: [360, 40, '<span style="color:var(--blue);font-weight:800">↓</span><span>Drop-Setup.exe</span><span class="gr"></span><span class="dm">2,7 MB · 4 MB/s</span><span class="prog"><i></i></span>'],
+    unduh: [360, 40, `<span style="color:var(--blue);font-weight:800">↓</span><span>Drop-Setup.exe</span><span class="gr"></span><span class="dm">${tr('2,7 MB', '2.7 MB')} · 4 MB/s</span><span class="prog"><i></i></span>`],
     mata:  [218, 35, '<span class="gr"></span><span class="eye"></span><span class="eye"></span><span class="gr"></span>'],
     vol:   level('p-speaker-high', '#3a3f4a', 'Volume', 64),
-    light: level('d-sun', '#c9902a', 'Kecerahan', 80),
-    wifi:  notice('p-wifi-high', '#2b7bd8', 'Wi-Fi tersambung', 'Rumah_5G'),
-    bt:    notice('p-bluetooth', '#3b5bdb', 'Earbuds tersambung', 'Baterai 80%'),
-    plug:  notice('d-bolt', '#2f9e55', 'Mengisi daya', '76% · penuh 40 mnt lagi'),
-    low:   notice('p-battery-warning', '#d9480f', 'Baterai lemah', '15% tersisa'),
-    mic:   notice('d-mic-off', '#c92a2a', 'Mikrofon mati', 'Tekan lagi untuk menyalakan'),
-    done:  notice('p-download-simple', '#1c7ed6', 'Unduhan selesai', 'laporan-november.pdf'),
-    pick:  notice('d-drop', '#5aaef0', 'Warna disalin', '#5AAEF0'),
-    caps:  notice('d-caps', '#495057', 'Caps Lock', 'Menyala'),
-    pray:  notice('d-moon', '#7048e8', 'Maghrib', 'dalam 10 menit'),
-  };
-  nb.innerHTML = Object.entries(S).map(([k, v]) => `<div class="st" data-k="${k}">${v[2]}</div>`).join('');
+    light: level('d-sun', '#c9902a', tr('Kecerahan', 'Brightness'), 80),
+    wifi:  notice('p-wifi-high', '#2b7bd8', tr('Wi-Fi tersambung', 'Wi-Fi connected'), 'Rumah_5G'),
+    bt:    notice('p-bluetooth', '#3b5bdb', tr('Earbuds tersambung', 'Earbuds connected'), tr('Baterai 80%', 'Battery 80%')),
+    plug:  notice('d-bolt', '#2f9e55', tr('Mengisi daya', 'Charging'), tr('76% · penuh 40 mnt lagi', '76% · full in 40 min')),
+    low:   notice('p-battery-warning', '#d9480f', tr('Baterai lemah', 'Battery low'), tr('15% tersisa', '15% left')),
+    mic:   notice('d-mic-off', '#c92a2a', tr('Mikrofon mati', 'Microphone off'), tr('Tekan lagi untuk menyalakan', 'Press again to turn it on')),
+    done:  notice('p-download-simple', '#1c7ed6', tr('Unduhan selesai', 'Download complete'), tr('laporan-november.pdf', 'november-report.pdf')),
+    pick:  notice('d-drop', '#5aaef0', tr('Warna disalin', 'Colour copied'), '#5AAEF0'),
+    caps:  notice('d-caps', '#495057', 'Caps Lock', tr('Menyala', 'On')),
+    pray:  notice('d-moon', '#7048e8', 'Maghrib', tr('dalam 10 menit', 'in 10 minutes')),
+  });
   let current = '';
   const show = k => {
     if (k === current) return;
@@ -920,9 +958,8 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   setInterval(tick, 15000);
 
   // Hero: cycle through the strips until someone picks one.
-  const heroKeys = { idle: 'Jam', agent: 'AI agent', izin: 'Izin agent', wa: 'WhatsApp', musik: 'Musik', unduh: 'Unduhan', mata: 'Mata' };
-  chips.innerHTML = Object.entries(heroKeys).map(([k, n]) => `<button type="button" data-k="${k}" aria-pressed="false">${n}</button>`).join('');
-  const order = Object.keys(heroKeys);
+  const heroKeys = () => ({ idle: tr('Jam', 'Clock'), agent: 'AI agent', izin: tr('Izin agent', 'Agent asks'), wa: 'WhatsApp', musik: tr('Musik', 'Music'), unduh: tr('Unduhan', 'Download'), mata: tr('Mata', 'Eyes') });
+  const order = Object.keys(heroKeys());
   let step = 0, auto = true, zone = 'hero';
   chips.addEventListener('click', e => {
     const b = e.target.closest('button');
@@ -950,9 +987,22 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   };
 
   // Notices: a click shows one for a moment, the way Drop does.
-  const list = [['vol', 'p-speaker-high', '#3a3f4a', 'Volume'], ['light', 'd-sun', '#c9902a', 'Kecerahan'], ['wifi', 'p-wifi-high', '#2b7bd8', 'Wi-Fi'], ['bt', 'p-bluetooth', '#3b5bdb', 'Bluetooth'], ['plug', 'd-bolt', '#2f9e55', 'Mengisi daya'], ['low', 'p-battery-warning', '#d9480f', 'Baterai lemah'], ['mic', 'd-mic-off', '#c92a2a', 'Mic mati'], ['done', 'p-download-simple', '#1c7ed6', 'Unduhan selesai'], ['pick', 'd-drop', '#5aaef0', 'Warna diambil'], ['caps', 'd-caps', '#495057', 'Caps Lock'], ['pray', 'd-moon', '#7048e8', 'Pengingat sholat']];
+  const list = () => [['vol', 'p-speaker-high', '#3a3f4a', 'Volume'], ['light', 'd-sun', '#c9902a', tr('Kecerahan', 'Brightness')], ['wifi', 'p-wifi-high', '#2b7bd8', 'Wi-Fi'], ['bt', 'p-bluetooth', '#3b5bdb', 'Bluetooth'], ['plug', 'd-bolt', '#2f9e55', tr('Mengisi daya', 'Charging')], ['low', 'p-battery-warning', '#d9480f', tr('Baterai lemah', 'Battery low')], ['mic', 'd-mic-off', '#c92a2a', tr('Mic mati', 'Mic off')], ['done', 'p-download-simple', '#1c7ed6', tr('Unduhan selesai', 'Download done')], ['pick', 'd-drop', '#5aaef0', tr('Warna diambil', 'Colour picked')], ['caps', 'd-caps', '#495057', 'Caps Lock'], ['pray', 'd-moon', '#7048e8', tr('Pengingat sholat', 'Prayer reminder')]];
   const notices = document.getElementById('notices');
-  notices.innerHTML = list.map(([k, i, c, n]) => `<button type="button" data-k="${k}">${ico(i, c)}${n}</button>`).join('');
+
+  // Everything the script writes, in the language of the moment.
+  const build = () => {
+    S = strips();
+    nb.innerHTML = Object.entries(S).map(([k, v]) => `<div class="st" data-k="${k}">${v[2]}</div>`).join('');
+    chips.innerHTML = Object.entries(heroKeys()).map(([k, n]) => `<button type="button" data-k="${k}" aria-pressed="false">${n}</button>`).join('');
+    notices.innerHTML = list().map(([k, i, c, n]) => `<button type="button" data-k="${k}">${ico(i, c)}${n}</button>`).join('');
+    const was = current;
+    current = '';
+    show(was || sectionState());
+    tick();
+  };
+  build();
+  document.addEventListener('drop:lang', build);
   let back;
   notices.addEventListener('click', e => {
     const b = e.target.closest('button');
@@ -968,7 +1018,6 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
     if (raf) return;
     raf = requestAnimationFrame(() => { raf = 0; clearTimeout(back); show(sectionState()); });
   }, { passive: true });
-  show(sectionState());
 
   // The Tampilan cards dress the notch in their theme while pointed at, and keep it once tapped.
   const looks = [...document.querySelectorAll('[data-theme]')];
@@ -992,14 +1041,28 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
 
   // The WhatsApp reply types itself.
   const typed = document.getElementById('typed');
-  const text = 'Siap, aku sampai jam 7 ya';
   let n = 0;
-  setInterval(() => { n = n > text.length + 12 ? 0 : n + 1; typed.textContent = text.slice(0, n); }, 110);
+  setInterval(() => {
+    const text = tr('Siap, aku sampai jam 7 ya', "Sure, I'll be there at 7");
+    n = n > text.length + 12 ? 0 : n + 1;
+    typed.textContent = text.slice(0, n);
+  }, 110);
 })();
 
 // Keep the download buttons on the newest release without editing this page,
 // and count the installer's downloads over every release. The installer's
 // name carries its version, so /releases/latest/download can't.
+let release = null;
+function writeRelease() {
+  const locale = tr('id-ID', 'en-US');
+  const r = release || { version: '0.3.0', mb: 2.7, total: 0 };
+  const parts = [tr(`Versi ${r.version}`, `Version ${r.version}`), `${r.mb.toLocaleString(locale, { maximumFractionDigits: 1 })} MB`, tr('Windows 10 dan 11', 'Windows 10 and 11')];
+  // A small count reads as a quiet page; show it only once it says something.
+  parts.push(r.total >= 500 ? tr(`diunduh ${r.total.toLocaleString(locale)} kali`, `${r.total.toLocaleString(locale)} downloads`) : tr('Gratis', 'Free'));
+  document.querySelector('[data-meta]').textContent = parts.join(' \u00b7 ');
+}
+document.addEventListener('drop:lang', writeRelease);
+
 fetch('https://api.github.com/repos/rifqihilal/drop/releases?per_page=100')
   .then(response => response.ok ? response.json() : null)
   .then(releases => {
@@ -1010,12 +1073,12 @@ fetch('https://api.github.com/repos/rifqihilal/drop/releases?per_page=100')
     const asset = latest && installer(latest)[0];
     if (!asset) return;
     document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
-    const total = published.flatMap(installer).reduce((sum, item) => sum + item.download_count, 0);
-    const size = (asset.size / 1048576).toLocaleString('id-ID', { maximumFractionDigits: 1 });
-    const parts = [`Versi ${latest.tag_name.replace(/^v/, '')}`, `${size} MB`, 'Windows 10 dan 11'];
-    // A small count reads as a quiet page; show it only once it says something.
-    parts.push(total >= 500 ? `diunduh ${total.toLocaleString('id-ID')} kali` : 'Gratis');
-    document.querySelector('[data-meta]').textContent = parts.join(' · ');
+    release = {
+      version: latest.tag_name.replace(/^v/, ''),
+      mb: asset.size / 1048576,
+      total: published.flatMap(installer).reduce((sum, item) => sum + item.download_count, 0),
+    };
+    writeRelease();
   })
   .catch(() => {});
 
@@ -1062,6 +1125,8 @@ const seen = new IntersectionObserver(entries => {
   });
 }, { threshold: .12 });
 document.querySelectorAll('.rise').forEach(item => seen.observe(item));
+
+setLang(savedLang ? savedLang === 'en' : !/^id\b/i.test(navigator.language || 'id'), false);
 </script>
 </body>
 </html>
