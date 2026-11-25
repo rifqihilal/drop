@@ -13,8 +13,10 @@ webview, memakai sekitar 20–25 MB memori.
 
 ## Baru di 0.3.0
 
-- **AI agent di notch:** progres Claude Code dan OpenCode, izinkan atau tolak
-  perintah, dan jawab pertanyaan agent langsung dari notch.
+- **AI agent di notch:** progres Claude Code, OpenCode, Gemini, Codex, Cursor,
+  Hermes, OpenClaw, GLM, dan DeepSeek, masing-masing dengan warna dan tandanya
+  sendiri. Izinkan atau tolak perintah, dan jawab pertanyaan agent langsung dari
+  notch.
 - **Balas WhatsApp dari notch**, tanpa membuka aplikasinya (WhatsApp Desktop resmi).
 - **Home bento**, **Mixer**, **Droplate** (`Alt+C`), **Teleprompter** (`Alt+P`),
   **Istirahat**, **Pomodoro** baru, dan agenda harian di **Kalender**.
@@ -28,8 +30,8 @@ Catatan lengkap ada di [rilis 0.3.0](https://github.com/rifqihilal/drop/releases
 - **Notch tertutup:** baterai, jam, dan isi kanan pilihanmu (suhu, tanggal,
   agenda, tugas, jam kedua, Screen Time), plus strip langsung untuk agent,
   timer, acara, unduhan, dan musik.
-- **AI agent:** hubungkan sekali dari Settings → AI agent. Drop menambahkan hook
-  ke Claude Code atau plugin ke OpenCode tanpa mengubah hook lain.
+- **AI agent:** hubungkan sekali dari Settings → AI agent, tanpa mengubah hook
+  lain yang sudah ada. Beberapa agent sekaligus tampil sebagai satu strip.
 - **Notifikasi:** pesan Windows di notch, klik untuk membuka tujuannya, dan
   balas WhatsApp di tempat. Volume dan kecerahan menggantikan tampilan bawaan
   Windows.
@@ -66,8 +68,9 @@ WhatsApp replies, music, prayer times, calendar, tasks and notifications. Native
 Rust on Win32 with no webview, using about 20–25 MB of memory. The interface is
 in Indonesian or English.
 
-New in 0.3.0: Claude Code and OpenCode in the notch (allow or deny commands and
-answer their questions there), replying to WhatsApp from the notch, a bento
+New in 0.3.0: your AI agents in the notch (Claude Code, OpenCode, Gemini, Codex,
+Cursor, Hermes, OpenClaw, GLM and DeepSeek; allow or deny commands and answer
+their questions there), replying to WhatsApp from the notch, a bento
 Home, a per-app volume Mixer, Droplate (`Alt+C` colour picker), a Teleprompter
 under the camera (`Alt+P`), break reminders, a new Pomodoro, a day's agenda on
 the calendar, glass themes and a download strip.
