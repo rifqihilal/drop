@@ -4,10 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drop - Notch ringan untuk Windows</title>
-<meta name="description" content="Notch di tepi atas layar Windows: jam, musik, jadwal sholat, kalender, dan notifikasi. Gratis.">
+<meta name="description" content="Notch di tepi atas layar Windows: progres AI agent, balas WhatsApp, musik, jadwal sholat, kalender, dan notifikasi. Gratis, ringan, native.">
 <meta property="og:title" content="Drop - Notch ringan untuk Windows">
-<meta property="og:description" content="Jam, musik, jadwal sholat, dan notifikasi di tepi atas layar Windows.">
-<meta property="og:image" content="assets/shots/home.png">
+<meta property="og:description" content="Progres AI agent, balas WhatsApp, musik, dan jadwal sholat di tepi atas layar Windows.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rifqihilal.github.io/drop/">
+<meta property="og:image" content="https://rifqihilal.github.io/drop/assets/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Drop: notch ringan untuk Windows, dengan kartu Home dan jadwal sholat">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0b0c1a">
 <link rel="icon" href="assets/icon.png">
 <link rel="preload" href="assets/fonts/PlusJakartaSans.ttf" as="font" type="font/ttf" crossorigin>
 <style>
@@ -20,16 +27,18 @@
 
 :root {
   color-scheme: dark;
-  --bg: #1b2029;
-  --surface: #252b36;
-  --text: #eef1f5;
-  --muted: #a2adbd;
-  --line: #353d4a;
-  --accent: #5aaef0;
-  --accent-text: #0c1219;
+  --bg: #0b0c1a;
+  --tile: #131530;
+  --tile-2: #1a1d3d;
+  --line: #262a52;
+  --text: #f2f4f7;
+  --muted: #a9b0c2;
+  --dim: #8a91a8;
+  --blue: #5aaef0;
+  --orange: #e8774f;
+  --green: #3ccf6e;
   --ease: cubic-bezier(.16, 1, .3, 1);
-  --spring: cubic-bezier(.3, 1.35, .45, 1);
-  --radius: 16px;
+  --spring: cubic-bezier(.3, 1.3, .45, 1);
 }
 
 * { box-sizing: border-box; }
@@ -44,469 +53,474 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
-img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; }
-h1, h2, p { margin: 0; }
-h2 {
-  font-size: clamp(1.8rem, 3.6vw, 2.75rem);
-  line-height: 1.12;
-  letter-spacing: -.03em;
-  font-weight: 700;
+h1, h2, h3, p { margin: 0; }
+.icon { width: 1.2em; height: 1.2em; flex: none; fill: currentColor; }
+.wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 24px; }
+section { padding: 120px 0 0; }
+kbd {
+  font: 700 12px/1 "Plus Jakarta Sans", sans-serif;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: #1a1e27;
+  border: 1px solid #2a2f3a;
+  border-bottom-width: 2px;
+  color: var(--text);
+  white-space: nowrap;
 }
-.wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 32px; }
-section { padding: 96px 0; }
+code { font: 700 13px "Plus Jakarta Sans", sans-serif; color: var(--text); background: #1a1e27; padding: 2px 7px; border-radius: 6px; white-space: nowrap; }
 
-.icon { width: 1.25em; height: 1.25em; flex: none; fill: currentColor; }
-
-.top {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 64px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 32px;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  text-decoration: none;
-  letter-spacing: -.02em;
-}
-.brand img { width: 30px; height: 30px; border-radius: 8px; background: #0a0d12; }
-.top a.link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: .94rem;
-  font-weight: 600;
-  text-decoration: none;
-  color: var(--muted);
-  transition: color .2s;
-}
-.top a.link:hover { color: var(--text); }
-
-.hero { padding: 0 0 72px; min-height: min(100dvh, 800px); display: flex; flex-direction: column; }
-.stage {
-  --k: 1;
+/* The notch: fixed to the top edge of the page, the way Drop sits on the screen. */
+.notch {
+  --w: 218px;
+  --h: 35px;
+  --ns: 1;
   position: fixed;
   top: 0;
   left: 50%;
-  width: min(598px, 100vw);
-  height: calc(56px * var(--k));
-  translate: -50% 0;
-  z-index: 10;
-}
-.nt {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 598px;
-  height: 233px;
-  transform: translateX(-50%) scale(var(--k));
-  transform-origin: 50% 0;
-  pointer-events: none;
-}
-.shell {
-  --w: 218px;
-  --h: 35px;
-  position: absolute;
-  top: 0;
-  left: 50%;
+  z-index: 50;
   width: var(--w);
   height: var(--h);
-  transform: translateX(-50%);
-  transition: width .5s var(--spring), height .5s var(--spring);
-  pointer-events: auto;
-  cursor: pointer;
+  transform: translateX(-50%) scale(var(--ns));
+  transform-origin: 50% 0;
+  transition: width .55s var(--spring), height .55s var(--spring);
+  font: 500 13px/1.25 "Plus Jakarta Sans", "Segoe UI", sans-serif;
+  color: #f3f5f8;
+  filter: drop-shadow(0 0 .6px #ffffff8c) drop-shadow(0 8px 26px #5aaef05c);
 }
-.shell::before, .shell::after {
+.notch::before, .notch::after, .ears::before, .ears::after {
   content: "";
   position: absolute;
   top: 0;
-  width: 16px;
-  height: 16px;
-  background: radial-gradient(circle at 0 100%, transparent 15.5px, var(--sh, #000) 16px);
+  width: 15px; /* one pixel over the body, so no seam shows between them */
+  height: 14px;
+  background: radial-gradient(circle at 0 100%, transparent 13.5px, var(--nc, #000) 14px);
+  transition: opacity .3s;
 }
-.shell::before { left: -16px; --sh: var(--sl, #000); }
-.shell::after { right: -16px; transform: scaleX(-1); }
-.shell { top: 0; transition: width .5s var(--spring), height .5s var(--spring), top .5s var(--spring); }
-.shell.floating { top: 10px; }
-.shell.floating::before, .shell.floating::after { display: none; }
-.shell.floating .body { border-radius: 26px; }
-.shell.floating.small .body { border-radius: 19px; }
-.body {
+.notch::before, .ears::before { left: -14px; }
+.notch::after, .ears::after { right: -14px; transform: scaleX(-1); }
+.nb { position: absolute; inset: 0; background: var(--nc, #000); border-radius: 0 0 20px 20px; overflow: hidden; transition: background .4s, border-radius .4s, box-shadow .4s; }
+.notch { transition: width .55s var(--spring), height .55s var(--spring), top .45s var(--spring); }
+/* The themes from the Tampilan section, tried on the notch itself. A filter on
+   the notch would hide the page from the glass's blur, so the glass drops it. */
+.notch.glass { top: 10px; filter: none; }
+.notch.glass::before, .notch.glass::after { opacity: 0; }
+.notch.glass .nb { border-radius: 18px; background: #ffffff26; -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5); box-shadow: inset 0 0 0 1px #ffffff45; }
+.notch.tint { --nc: #1d6f8cf0; filter: drop-shadow(0 8px 26px #2bb5a055); }
+.notch.tint .nb { -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.st { position: absolute; inset: 0; display: flex; align-items: center; gap: 9px; padding: 0 15px; opacity: 0; transition: opacity .2s; white-space: nowrap; pointer-events: none; }
+.st.on { opacity: 1; transition: opacity .3s .16s; }
+.gr { flex: 1; }
+.notch b { font-weight: 700; }
+.dm { opacity: .55; }
+.ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--green) 0 76%, #2a2f36 0); -webkit-mask: radial-gradient(circle, transparent 4.5px, #000 5px); mask: radial-gradient(circle, transparent 4.5px, #000 5px); flex: none; }
+.ast { color: var(--orange); font-size: 17px; line-height: 1; display: inline-block; }
+.spin { animation: spin 2.4s linear infinite; }
+@keyframes spin { to { rotate: 360deg; } }
+.dots { letter-spacing: 2px; color: #9fb3ff; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.sq { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; flex: none; background: var(--c, #333); color: #fff; }
+.st.on .sq { animation: pop .5s var(--spring) .15s both; }
+@keyframes pop { from { scale: .4; } }
+.sq svg { width: 17px; height: 17px; fill: currentColor; }
+.two { display: flex; flex-direction: column; min-width: 0; }
+.two span { font-size: 12px; opacity: .65; }
+.pill { padding: 5px 12px; border-radius: 99px; font-size: 12px; font-weight: 700; }
+.no { background: #3a1d1d; color: #f3a9a4; }
+.yes { background: #9fd8a4; color: #0e2412; }
+.cov { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #f5a26b, #c2417a 60%, #4b2a8a); flex: none; }
+.bars { display: flex; gap: 2px; align-items: flex-end; height: 13px; }
+.bars i { width: 3px; border-radius: 2px; background: #f5a26b; animation: bar .9s ease-in-out infinite; }
+.bars i:nth-child(2) { animation-delay: -.3s; }
+.bars i:nth-child(3) { animation-delay: -.6s; }
+.bars i:nth-child(4) { animation-delay: -.15s; }
+@keyframes bar { 0%, 100% { height: 4px; } 50% { height: 13px; } }
+.prog { position: absolute; left: 15px; right: 15px; bottom: 6px; height: 2px; border-radius: 2px; background: #22272e; overflow: hidden; }
+.prog i { display: block; height: 100%; width: 30%; background: var(--blue); box-shadow: 0 0 6px var(--blue); animation: grow 6s linear infinite; }
+@keyframes grow { to { width: 100%; } }
+.eye { width: 22px; height: 9px; border: 3px solid #e6efff; border-bottom: 0; border-radius: 22px 22px 0 0; filter: drop-shadow(0 0 5px var(--blue)); animation: blink 5s infinite; transform-origin: 50% 100%; }
+@keyframes blink { 0%, 44%, 50%, 100% { scale: 1 1; } 47% { scale: 1 .15; } }
+.lvl { display: block; width: 120px; height: 5px; border-radius: 5px; background: #2a2f36; overflow: hidden; }
+.lvl i { display: block; height: 100%; width: var(--v); background: var(--c, #f3f5f8); border-radius: 5px; }
+
+/* Top bar */
+.bar { position: absolute; top: 0; left: 0; right: 0; z-index: 40; display: flex; align-items: center; gap: 24px; padding: 14px 28px; font-size: 14px; font-weight: 600; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 800; font-size: 16px; }
+.brand img { width: 26px; height: 26px; border-radius: 7px; }
+.bar .sp { flex: 1; }
+.bar a.lk { color: var(--muted); text-decoration: none; transition: color .2s; }
+.bar a.lk:hover { color: var(--text); }
+.bar .out { color: var(--text); text-decoration: none; border: 1px solid #2a2e36; padding: 7px 14px; border-radius: 99px; transition: background .2s; }
+.bar .out:hover { background: #14171d; }
+.bar .group { display: flex; gap: 22px; }
+
+/* Hero */
+.hero { position: relative; text-align: center; padding: 150px 0 0; isolation: isolate; overflow: clip; }
+.hero::before {
+  content: "";
   position: absolute;
-  inset: 0;
-  overflow: hidden;
-  border-radius: 0 0 26px 26px;
-  background: #000;
-  color: #f5f7fa;
-  font-size: 14px;
-  line-height: 1.3;
-  transition: background .4s;
+  left: 50%;
+  top: -300px;
+  width: min(1300px, 180vw);
+  height: 760px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, #5b74ffb3, #7a5bff66 38%, #e8774f33 62%, transparent);
+  filter: blur(10px);
+  z-index: -1;
 }
-.shell.small .body { border-radius: 0 0 18px 18px; }
-.body > * { animation: fade .3s ease both; }
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-:where(.body button) {
-  all: unset;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform .2s var(--ease), opacity .2s;
-}
-:where(.body button):hover { transform: scale(1.15); }
-:where(.body button):active { transform: scale(.92); }
-.body button:focus-visible { outline: 2px solid #5aaef0; outline-offset: 2px; border-radius: 6px; }
-.body .g { width: 1.15em; height: 1.15em; fill: currentColor; flex: none; }
-.dim { opacity: .6; }
-
-.face { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 30px; background: linear-gradient(180deg, #000 8%, #0e2259); }
-.shell.floating .face { background: linear-gradient(180deg, #0a1534, #0e2259); }
-.face i { width: 28px; height: 11px; border: 3px solid #e6efff; border-bottom: 0; border-radius: 28px 28px 0 0; box-sizing: border-box; filter: drop-shadow(0 0 6px #5aaef0); animation: blink 5.5s infinite; transform-origin: 50% 100%; }
-.face i + i { animation-delay: .04s; }
-@keyframes blink { 0%, 44%, 50%, 100% { scale: 1 1; } 47% { scale: 1 .12; } }
-.face .z { position: absolute; left: 72%; top: 18px; font-size: 10px; font-weight: 700; color: #bcd4ff; opacity: 0; animation: zee 3.4s ease-out infinite; }
-.face .z + .z { left: 77%; animation-delay: 1.5s; }
-@keyframes zee { 0% { translate: 0 6px; opacity: 0; } 25% { opacity: .9; } 100% { translate: 8px -12px; opacity: 0; } }
-.face .hi { position: absolute; left: 78%; font-size: 11px; font-weight: 700; color: #e6efff; animation: fade .2s ease both; }
-.face.awake i { height: 14px; animation: none; border-radius: 28px; border-bottom: 3px solid #e6efff; }
-.strip { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 16px; gap: 10px; }
-.strip b { font-weight: 700; }
-.strip .end { justify-self: end; }
-.ring { width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid #37d67a; }
-.cover { background: var(--cover); }
-.strip .cover { width: 24px; height: 24px; border-radius: 6px; }
-.lyricline { position: absolute; inset: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-weight: 700; }
-.lyricline .cover { width: 24px; height: 24px; border-radius: 6px; flex: none; }
-.lyricline span { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bars { display: flex; gap: 2.5px; align-items: center; height: 12px; color: var(--tint, #37d67a); }
-.bars i { width: 3px; height: 100%; border-radius: 2px; background: currentColor; transform-origin: 50% 50%; scale: 1 .45; }
-.bars.on i { animation: bar .8s ease-in-out infinite alternate; }
-.bars.on i:nth-child(2) { animation-delay: -.3s; }
-.bars.on i:nth-child(3) { animation-delay: -.55s; }
-.bars.on i:nth-child(4) { animation-delay: -.15s; }
-@keyframes bar { to { scale: 1 1; } }
-
-.notice { position: absolute; inset: 0; display: flex; align-items: center; gap: 14px; padding: 0 24px 0 20px; }
-.notice .disc { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: #fff; font-size: 19px; flex: none; }
-.notice .txt { flex: 1; min-width: 0; }
-.notice .txt b { display: block; font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.notice .txt span { opacity: .6; font-size: 14px; }
-.notice .big { font-size: 26px; font-weight: 300; }
-.vol { width: 110px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .18); overflow: hidden; }
-.vol i { display: block; height: 100%; background: #fff; }
-
-.app { position: absolute; inset: 0; padding: 0 14px; }
-.app .row { height: 36px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 13px; }
-.app .tile { position: relative; display: flex; gap: 14px; align-items: center; padding: 12px 14px; border-radius: 18px; background: rgba(255, 255, 255, .08); }
-.logo { width: 56px; height: 56px; border-radius: 14px; background: #25d366; color: #fff; display: grid; place-items: center; font-size: 30px; flex: none; }
-.app .meta { display: flex; justify-content: space-between; font-size: 12px; opacity: .7; }
-.app b { display: block; font-size: 16px; font-weight: 700; }
-.app p { opacity: .7; font-size: 14px; }
-.app .tile > div:last-child { flex: 1; min-width: 0; }
-
-.card { position: absolute; inset: 0; padding: 12px 40px 22px; }
-.card .head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; height: 24px; font-size: 13px; }
-.card .head h4 { margin: 0; font-size: 15px; font-weight: 700; color: #fff; }
-.card .head h4 em { font-style: normal; color: var(--t, #37d67a); }
-.card .head .end { justify-self: end; }
-.side { position: absolute; top: 50%; translate: 0 -50%; width: 24px; height: 24px; border-radius: 50%; background: rgba(255, 255, 255, .12); font-size: 11px; }
-.side.l { left: 9px; }
-.side.r { right: 9px; }
-.dots { position: absolute; left: 0; right: 0; bottom: 8px; display: flex; justify-content: center; gap: 5px; }
-.dots button { width: 6px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .28); transition: width .25s var(--ease), background-color .2s; }
-.dots button[aria-current] { width: 18px; background: #fff; }
-.dots button:hover { background: #fff; transform: none; }
-.page { position: relative; height: 168px; padding-top: 8px; }
-
-.mus { display: grid; grid-template-columns: 76px 1fr; gap: 6px 14px; }
-.mus .cover { width: 76px; height: 76px; border-radius: 13px; }
-.mus .t { font-size: 17px; font-weight: 700; margin-top: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mus .a { opacity: .6; }
-.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; font-size: 12px; }
-.seek span { opacity: .6; }
-.track { display: block; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .18); cursor: pointer; overflow: hidden; position: relative; }
-.track::after { content: ""; position: absolute; inset: -8px 0; }
-.track i { display: block; height: 100%; background: var(--tint); width: 0; }
-.ctl { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-size: 19px; }
-.ctl .mid { display: flex; gap: 24px; align-items: center; }
-.ctl .mid .big { font-size: 25px; }
-.ctl .q { justify-self: start; opacity: .6; }
-.ctl .q.on { opacity: 1; color: var(--tint); }
-.ctl .q.off { opacity: .25; }
-.ctl .s { justify-self: end; opacity: .85; }
-.mus.ly { grid-template-columns: 196px 1fr; column-gap: 22px; }
-.mus.ly .left { display: grid; grid-template-columns: 54px 1fr; gap: 6px 10px; align-content: start; }
-.mus.ly .cover { width: 54px; height: 54px; border-radius: 10px; }
-.mus.ly .t { font-size: 14px; margin-top: 6px; }
-.mus.ly .a { font-size: 12px; }
-.mus.ly .ctl { font-size: 15px; }
-.mus.ly .ctl .mid { gap: 12px; }
-.mus.ly .ctl .mid .big { font-size: 20px; }
-.lines { height: 136px; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
-.lines p { font-size: 14px; opacity: .3; transition: opacity .35s; }
-.lines p.now { font-size: 18px; font-weight: 700; line-height: 1.25; opacity: 1; animation: roll .45s var(--ease); }
-@keyframes roll { from { translate: 0 16px; opacity: .3; } }
-
-.home { display: grid; grid-template-columns: 190px 1fr; gap: 16px; }
-.hero-tile { height: 158px; border-radius: 16px; padding: 12px 16px; background: linear-gradient(180deg, #2a62c2, #5aa3e3); position: relative; font-size: 13px; }
-.hero-tile b { display: block; font-size: 32px; font-weight: 700; line-height: 1.2; }
-.hero-tile small { position: absolute; left: 16px; bottom: 12px; font-size: 12px; }
-.home ul, .inbox ul, .todo ul { list-style: none; margin: 0; padding: 0; }
-.home li { padding: 7px 0; font-size: 13px; }
-.home li + li { border-top: 1px solid rgba(255, 255, 255, .1); }
-.spread { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.home li b { font-size: 14px; }
-.hbar { height: 3px; margin-top: 5px; border-radius: 2px; background: rgba(255, 255, 255, .15); overflow: hidden; }
-.hbar i { display: block; height: 100%; background: #3b92ee; }
-
-.inbox .top2, .todo .top2 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-.pill { padding: 4px 11px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: 12px; font-weight: 600; gap: 5px; }
-.inbox li { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 4px 6px; border-radius: 10px; font-size: 13px; cursor: pointer; }
-.inbox li:hover { background: rgba(255, 255, 255, .08); }
-.inbox .logo { width: 32px; height: 32px; border-radius: 8px; font-size: 18px; }
-.inbox .logo.mail { background: #3b82e8; }
-.inbox .logo.cal { background: #e8583b; }
-.inbox small { display: block; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.inbox li > span:nth-child(2) { min-width: 0; }
-.empty { display: grid; place-items: center; height: 130px; opacity: .5; }
-
-.pray { display: grid; grid-template-columns: 1fr 1.25fr; gap: 16px; }
-.pray .nm { font-size: 30px; font-weight: 700; line-height: 1.15; }
-.pray svg { width: 100%; height: 86px; display: block; }
-.times { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 12px; text-align: center; margin-top: 2px; }
-.times b { display: block; font-weight: 600; }
-.times .now { color: #3b92ee; }
-
-.cal { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
-.days { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11.5px; row-gap: 3px; }
-.days .h { opacity: .55; }
-.days .today { background: #3b92ee; border-radius: 50%; color: #fff; }
-
-.foc { display: grid; grid-template-columns: 130px 1fr; gap: 22px; align-items: center; }
-.dial { width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; font-weight: 700; background: conic-gradient(#ee4b4b var(--p, 0%), rgba(255, 255, 255, .12) 0); position: relative; }
-.dial::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #000; }
-.dial span { position: relative; }
-.seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: 12px; margin-bottom: 10px; }
-.seg button { padding: 3px 11px; border-radius: 999px; opacity: .7; }
-.seg button[aria-pressed="true"] { background: rgba(255, 255, 255, .16); opacity: 1; }
-.go { padding: 7px 18px; border-radius: 999px; background: #ee4b4b; font-weight: 700; font-size: 13px; gap: 6px; margin-top: 10px; }
-.round { width: 32px; height: 32px; border-radius: 50%; background: rgba(255, 255, 255, .1); margin-left: 8px; }
-
-.todo li { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 14px; }
-.todo li button { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .55); box-sizing: border-box; }
-.todo li.done { opacity: .45; text-decoration: line-through; }
-.todo li.done button { background: #37d67a; border-color: #37d67a; }
-.todo input { all: unset; box-sizing: border-box; width: 100%; padding: 5px 12px; margin-top: 6px; border-radius: 10px; background: rgba(255, 255, 255, .1); font-size: 13px; cursor: text; }
-.todo input::placeholder { color: rgba(255, 255, 255, .6); }
-.todo input:focus-visible { outline: 2px solid #5aaef0; }
-
-.zone { height: 130px; margin-top: 4px; border: 1.5px dashed rgba(255, 255, 255, .35); border-radius: 14px; display: grid; place-items: center; text-align: center; font-size: 13px; padding: 8px; transition: background-color .25s; }
-.zone.over { background: rgba(90, 174, 240, .25); }
-.zone ul { list-style: none; margin: 0; padding: 0; }
-.zone li { max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 104px auto 0; max-width: 720px; padding: 0 16px; }
-.chips p { width: 100%; text-align: center; color: var(--muted); font-size: .9rem; }
-.chip {
-  all: unset;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  font-size: .9rem;
-  font-weight: 600;
-  transition: transform .2s var(--ease), border-color .2s, background-color .2s;
-}
-.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: transparent; }
-.chip[aria-pressed="false"]:hover, .chip:not([aria-pressed]):hover { border-color: var(--muted); background: var(--surface); transform: translateY(-1px); }
-.chip:active { transform: scale(.97); }
-.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.mini { background: #000; color: #f5f7fa; border-radius: 0 0 20px 20px; display: flex; align-items: center; gap: 12px; padding: 12px 18px; width: 340px; max-width: 100%; font-size: 14px; line-height: 1.3; }
-.mini .logo { width: 44px; height: 44px; border-radius: 11px; font-size: 24px; }
-.mini b { display: block; font-size: 15px; }
-.mini span { opacity: .65; }
-.mini .g { width: 20px; height: 20px; fill: currentColor; flex: none; }
-.mini .end { margin-left: auto; opacity: .6; }
-
-.hero-copy {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1.25fr 1fr;
-  gap: 56px;
-  align-items: end;
-  padding-top: 64px;
-}
+.tag { display: inline-flex; gap: 8px; align-items: center; padding: 6px 14px; border-radius: 99px; border: 1px solid #262a33; background: #0a0c10b3; font-size: 13px; font-weight: 600; color: #b3bac6; }
+.tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 8px var(--orange); flex: none; }
 h1 {
-  font-size: clamp(2.6rem, 6vw, 4.5rem);
-  line-height: 1.04;
-  letter-spacing: -.04em;
+  font-size: clamp(2.7rem, 8.4vw, 6.4rem);
+  line-height: .98;
+  letter-spacing: -.05em;
   font-weight: 800;
+  margin: 26px 0 22px;
+  background: linear-gradient(180deg, #fff 35%, #8a93a3);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  padding-bottom: .06em;
 }
-.hero-side { display: grid; gap: 24px; justify-items: start; }
-.hero-side p { color: var(--muted); font-size: 1.1rem; }
-.cta { display: flex; flex-wrap: wrap; gap: 12px; }
-.downloads { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+.lead { max-width: 580px; margin: 0 auto; color: var(--muted); font-size: 18px; line-height: 1.6; }
+.btns { display: flex; gap: 10px; justify-content: center; margin: 32px 0 14px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 10px; padding: 14px 24px; border-radius: 99px; font-weight: 700; text-decoration: none; font-size: 15px; transition: transform .2s var(--ease), background .2s, box-shadow .2s; }
+.btn:active { transform: scale(.97); }
+.btn.main { background: #fff; color: #0b0c1a; }
+.btn.main:hover { box-shadow: 0 0 40px -6px #ffffff66; }
+.btn.ghost { border: 1px solid #2a2e36; }
+.btn.ghost:hover { background: #12151b; }
+.meta { font-size: 13px; color: var(--dim); }
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 64px auto 0; max-width: 680px; }
+.chips button {
+  all: unset;
+  cursor: pointer;
+  padding: 7px 15px;
+  border-radius: 99px;
+  font: 600 13px "Plus Jakarta Sans", sans-serif;
+  color: #aab1bd;
+  border: 1px solid #23262d;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.chips button:hover { border-color: #3a3f4a; color: var(--text); }
+.chips button[aria-pressed="true"] { background: var(--text); color: #0b0c1a; border-color: var(--text); }
+.chips button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.hint { color: var(--dim); font-size: 13px; margin-top: 14px; }
 
-.btn {
+/* Soft light behind the sections, so the page is never flat black */
+main { position: relative; isolation: isolate; }
+.aurora { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.aurora i { position: absolute; width: 900px; height: 900px; border-radius: 50%; background: radial-gradient(closest-side, var(--c), transparent); opacity: .55; }
+#kartu { overflow-x: clip; }
+
+/* Section heads */
+.eyebrow { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--c, var(--blue)); }
+h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -.04em; font-weight: 800; margin: 14px 0 16px; }
+.sub { color: var(--muted); max-width: 560px; }
+.head { text-align: center; }
+.head .sub { margin: 0 auto; }
+
+/* Feature rows: text, and a card hanging from the top of a desktop */
+.row { display: grid; grid-template-columns: 1fr 1.15fr; gap: 64px; align-items: center; }
+.row.flip .copy { order: 2; }
+.list { list-style: none; padding: 0; margin: 26px 0 0; display: grid; gap: 12px; color: #c9ced7; font-size: 16px; }
+.list li { display: flex; gap: 12px; align-items: baseline; }
+.list li::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--c, var(--blue)); flex: none; translate: 0 -2px; }
+.note { margin-top: 22px; font-size: 14px; color: var(--dim); }
+.desk {
+  position: relative;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  height: 360px;
+  overflow: hidden;
+  background:
+    radial-gradient(110% 80% at 15% 110%, var(--g1), transparent 60%),
+    radial-gradient(80% 80% at 95% 0%, var(--g2), transparent 60%),
+    #11132c;
+}
+.desk .win { position: absolute; border-radius: 10px; background: #ffffff08; border: 1px solid #ffffff10; }
+.card {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+  width: min(460px, calc(100% - 44px));
+  background: #000;
+  border-radius: 0 0 28px 28px;
+  padding: 14px 18px 16px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #f3f5f8;
+  box-shadow: 0 30px 60px -20px #000;
+}
+.card::before, .card::after { content: ""; position: absolute; top: 0; width: 17px; height: 16px; background: radial-gradient(circle at 0 100%, transparent 15.5px, #000 16px); }
+.card::before { left: -16px; }
+.card::after { right: -16px; transform: scaleX(-1); }
+.ch { display: flex; justify-content: center; gap: 8px; align-items: center; font-size: 12px; margin-bottom: 12px; }
+.ch b { font-weight: 700; }
+.agent { display: grid; grid-template-columns: 64px 1fr; gap: 14px; }
+.bot { width: 64px; height: 64px; border-radius: 16px; border: 2px solid #c98a3a; box-shadow: 0 0 18px -2px #e8a24f88, inset 0 0 14px #e8a24f33; display: flex; justify-content: center; align-items: center; gap: 8px; }
+.bot i { width: 14px; height: 14px; border-radius: 50%; background: #f4f4f4; box-shadow: 0 0 8px #fff; animation: look 4s ease-in-out infinite; }
+@keyframes look { 0%, 40%, 100% { translate: 0; } 50%, 85% { translate: 2px 0; } }
+.who { display: flex; gap: 7px; align-items: center; }
+.who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #f5b13d; }
+.who b { font-size: 14px; }
+.ask { margin: 4px 0 10px; display: flex; gap: 6px; align-items: center; }
+.term { border-radius: 10px; background: #0f1115; border: 1px solid #23262d; padding: 9px 12px 22px; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; }
+.term span { color: #6fb6ff; display: block; margin-bottom: 4px; font-family: "Plus Jakarta Sans", sans-serif; font-weight: 600; }
+.wait { height: 2px; margin: 8px 0 12px; border-radius: 2px; background: #c98a3a; transform-origin: 0; animation: shrink 9s linear infinite; }
+@keyframes shrink { to { transform: scaleX(0); } }
+.acts { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; }
+.acts span { text-align: center; padding: 9px; border-radius: 12px; font-weight: 700; }
+.pd { display: flex; justify-content: center; gap: 5px; margin-top: 12px; }
+.pd i { width: 5px; height: 5px; border-radius: 50%; background: #3a3f4a; }
+.pd i.on { width: 16px; border-radius: 3px; background: #d9dde3; }
+.inbox-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 15px; }
+.clear { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 99px; background: #1c1e22; font-weight: 700; font-size: 12.5px; }
+.clear svg { width: 14px; height: 14px; fill: currentColor; }
+.chat { display: grid; gap: 8px; }
+.msg { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; }
+.app { width: 30px; height: 30px; display: grid; place-items: center; color: #25d366; }
+.app svg { width: 28px; height: 28px; fill: currentColor; }
+.msg b { font-size: 14px; }
+.msg small { display: block; color: #8b9099; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg > div { min-width: 0; }
+.age { align-self: start; display: flex; gap: 6px; align-items: center; color: #8b9099; font-size: 12px; white-space: nowrap; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #e5484d; color: #fff; font-weight: 800; font-size: 11px; display: grid; place-items: center; }
+.reply { display: flex; align-items: center; gap: 8px; background: #ffffff1a; border-radius: 12px; padding: 5px 5px 5px 12px; margin-left: 40px; min-height: 38px; }
+.reply .typed { flex: 1; overflow: hidden; white-space: nowrap; font-size: 13px; }
+.reply .typed::after { content: "|"; color: #25d366; animation: pulse 1s steps(1) infinite; margin-left: 1px; }
+.send { width: 28px; height: 28px; border-radius: 9px; background: #25d366; display: grid; place-items: center; color: #052e14; flex: none; }
+.send svg { width: 14px; height: 14px; fill: currentColor; }
+
+/* Bento of pages */
+.bento { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 56px; }
+.tile {
+  position: relative;
+  min-height: 250px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, var(--tile-2), var(--tile));
+  border: 1px solid var(--line);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color .3s;
+  will-change: transform;
+}
+.tile:hover { border-color: #3a3f6a; }
+.tile.w2 { grid-column: span 2; }
+.tile .vis { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 140px; margin-bottom: 14px; }
+.tile h3 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tile p { color: var(--muted); font-size: 14px; line-height: 1.5; margin-top: 4px; }
+.new { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #0b0d12; background: var(--orange); padding: 2px 6px; border-radius: 5px; }
+
+.mini-home { display: grid; grid-template-columns: 1.3fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; width: 100%; max-width: 420px; height: 140px; }
+.mini-home > div { border-radius: 14px; background: #1c2040; padding: 10px 12px; font-size: 12px; color: #9aa1ad; display: flex; flex-direction: column; justify-content: space-between; }
+.mini-home .big { grid-row: span 2; background: linear-gradient(160deg, #6a4bd8, #2c2a6e); color: #e3dcff; }
+.mini-home .big b { font-size: 32px; letter-spacing: -.03em; line-height: 1; }
+.mini-home b { font-size: 16px; color: #fff; }
+.mus { display: grid; grid-template-columns: 74px 1fr; gap: 16px; width: 100%; max-width: 420px; align-items: center; }
+.mus .art { width: 74px; height: 74px; border-radius: 14px; background: linear-gradient(135deg, #f5a26b, #c2417a 60%, #4b2a8a); box-shadow: 0 10px 30px -8px #c2417a88; }
+.mus .line { height: 3px; border-radius: 3px; background: #2e3354; margin: 10px 0 8px; position: relative; }
+.mus .line i { position: absolute; inset: 0 auto 0 0; width: 46%; background: #f5a26b; border-radius: 3px; animation: play 30s linear infinite; }
+@keyframes play { from { width: 20%; } to { width: 90%; } }
+.mus .line i::after { content: ""; position: absolute; right: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: #ffd2b0; box-shadow: 0 0 10px 2px #f5a26b; }
+.mus .ly { font-size: 13px; color: #6c7380; }
+.mus .ly em { font-style: normal; color: #f5a26b; }
+.mix { display: grid; gap: 12px; width: 100%; font-size: 12px; color: #c9ced7; }
+.mix div { display: grid; grid-template-columns: 58px 1fr; gap: 10px; align-items: center; }
+.mix .lvl { width: 100%; height: 6px; }
+.swatch { display: flex; gap: 8px; }
+.swatch i { width: 30px; height: 30px; border-radius: 9px; background: var(--c); box-shadow: inset 0 0 0 1px #ffffff1a; }
+.swatch i:nth-child(3) { outline: 2px solid #fff; outline-offset: 2px; }
+.loupe { display: grid; justify-items: center; gap: 14px; }
+.loupe .hex { font: 700 13px Consolas, monospace; color: #c9ced7; }
+.tp { position: relative; width: 100%; height: 120px; overflow: hidden; -webkit-mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask: linear-gradient(transparent, #000 30%, #000 70%, transparent); }
+.tp div { animation: roll 16s linear infinite; font-size: 17px; font-weight: 600; line-height: 1.7; color: #6c7380; text-align: center; }
+.tp div p:nth-child(odd) { color: #e6e9ee; }
+@keyframes roll { to { translate: 0 -50%; } }
+.tpm { display: flex; gap: 10px; justify-content: center; align-items: center; font-size: 12px; color: var(--dim); margin-top: 8px; flex-wrap: wrap; }
+.rings { width: 120px; height: 120px; }
+.rings svg { width: 100%; height: 100%; rotate: -90deg; }
+.rings circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+.rul { width: 100%; text-align: center; }
+.rul b { font-size: 34px; letter-spacing: -.03em; font-weight: 800; }
+.ticks { height: 34px; margin-top: 10px; background: repeating-linear-gradient(90deg, #3a3f5a 0 2px, transparent 2px 12px); -webkit-mask: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent); mask: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent); position: relative; animation: slide 6s linear infinite; }
+.ticks::after { content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 3px; border-radius: 2px; background: #f45d5d; box-shadow: 0 0 8px #f45d5d; }
+@keyframes slide { to { background-position: -120px 0; } }
+.cal { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; width: 100%; align-items: center; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; font-size: 11px; text-align: center; color: #c9ced7; }
+.days span { padding: 4px 0; border-radius: 7px; position: relative; }
+.days .h { color: var(--dim); font-weight: 700; }
+.days .ev::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 3px; height: 3px; border-radius: 50%; background: var(--blue); translate: -50% 0; }
+.days .sel { background: var(--blue); color: #04121f; font-weight: 800; }
+.agenda { display: grid; gap: 8px; font-size: 12px; }
+.agenda div { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px; background: #1c2040; }
+.agenda i { width: 3px; align-self: stretch; border-radius: 2px; background: var(--c); }
+.chk { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid #4a505c; flex: none; }
+.chk.on { background: var(--green); border-color: var(--green); }
+.sky { width: 100%; height: 140px; border-radius: 16px; background: linear-gradient(180deg, #f2a65a, #c86b98 55%, #3c3a7a); position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 14px; font-size: 12px; color: #fff; }
+.sky::before { content: ""; position: absolute; width: 40px; height: 40px; border-radius: 50%; background: #ffe3a8; box-shadow: 0 0 40px 10px #ffd18a; right: 24px; top: 30px; }
+.sky b { font-size: 22px; position: relative; }
+.sky span { position: relative; opacity: .85; }
+.week { display: flex; gap: 8px; align-items: flex-end; height: 110px; width: 100%; justify-content: center; }
+.week i { width: 18px; border-radius: 6px 6px 3px 3px; background: #2e3456; height: var(--h); }
+.week i:last-child { background: var(--blue); }
+.files { display: flex; gap: 10px; }
+.file { width: 62px; height: 76px; border-radius: 10px; background: #1c2040; border: 1px solid #2e3456; position: relative; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px; font-size: 10px; font-weight: 700; color: #c9ced7; }
+.file::before { content: ""; position: absolute; top: 12px; left: 50%; translate: -50% 0; width: 26px; height: 26px; border-radius: 7px; background: var(--c); }
+.file:nth-child(1) { rotate: -6deg; translate: 0 6px; }
+.file:nth-child(3) { rotate: 7deg; }
+.todo { display: grid; gap: 12px; width: 100%; font-size: 13px; color: #c9ced7; }
+.todo div { display: flex; gap: 10px; align-items: center; }
+.todo .done { color: var(--dim); text-decoration: line-through; }
+.todo small { margin-left: auto; color: var(--dim); }
+
+/* Notices */
+.notices { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 48px auto 0; max-width: 820px; }
+.notices button {
+  all: unset;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 22px;
-  border-radius: 999px;
-  font-weight: 700;
-  font-size: 1rem;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: transform .25s var(--ease), background-color .2s, border-color .2s;
+  padding: 7px 16px 7px 7px;
+  border-radius: 99px;
+  background: var(--tile);
+  border: 1px solid var(--line);
+  font: 600 14px "Plus Jakarta Sans", sans-serif;
+  transition: border-color .2s, background .2s;
 }
-.btn:active { transform: scale(.97); }
-.btn:hover { transform: translateY(-2px); }
-.btn:active:hover { transform: scale(.97); }
-.btn.main { background: var(--accent); color: var(--accent-text); }
-.btn.plain { border: 1px solid var(--line); color: var(--text); }
-.btn.plain:hover { border-color: var(--muted); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.notices button:hover { border-color: #353b47; background: var(--tile-2); }
+.notices button:active { transform: scale(.97); }
+.notices button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.notices .sq { width: 26px; height: 26px; border-radius: 8px; }
+.notices .sq svg { width: 15px; height: 15px; }
 
-.facts {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 32px;
-  border-top: 1px solid var(--line);
-  padding-top: 32px;
-}
-.facts b {
-  display: block;
-  font-size: clamp(2rem, 4vw, 3.1rem);
-  line-height: 1.1;
-  letter-spacing: -.03em;
-  font-weight: 700;
-}
-.facts span { color: var(--muted); font-size: .96rem; }
+/* Look */
+.looks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 56px; }
+.look { border-radius: 22px; border: 1px solid var(--line); overflow: hidden; background: var(--tile); cursor: pointer; transition: border-color .25s, translate .8s var(--ease), opacity .8s var(--ease); }
+.look:hover, .look[aria-pressed="true"] { border-color: #6d6aff; }
+.look:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.look .scr { position: relative; height: 150px; background: var(--wall); }
+.look .mn { position: absolute; top: 0; left: 50%; translate: -50% 0; width: 178px; height: 30px; border-radius: 0 0 16px 16px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; font-weight: 700; color: #fff; background: var(--nc); }
+.look .mn::before, .look .mn::after { content: ""; position: absolute; top: 0; width: 13px; height: 12px; background: radial-gradient(circle at 0 100%, transparent 11.5px, var(--nc) 12px); }
+.look .mn::before { left: -12px; }
+.look .mn::after { right: -12px; transform: scaleX(-1); }
+.look .mn.fl { top: 10px; border-radius: 16px; }
+.look .mn.fl::before, .look .mn.fl::after { display: none; }
+.look .cap { padding: 16px 20px 20px; }
+.look .cap b { font-size: 16px; }
+.look .cap p { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.rightside { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+.rightside span { font-size: 13px; color: #c9ced7; padding: 6px 12px; border-radius: 99px; background: var(--tile); border: 1px solid var(--line); }
 
-.pages .grid {
-  display: grid;
-  grid-template-columns: 1fr 598px;
-  gap: 64px;
-  align-items: center;
-  margin-top: 48px;
-}
-.tabs { display: grid; gap: 4px; }
-.tabs button {
-  all: unset;
-  box-sizing: border-box;
-  cursor: pointer;
-  display: block;
-  padding: 12px 16px;
-  border-radius: var(--radius);
-  transition: background-color .2s;
-}
-.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.tabs button:hover { background: var(--surface); }
-.tabs button b { font-weight: 700; }
-.tabs button span {
-  display: block;
-  color: var(--muted);
-  font-size: .94rem;
-  max-height: 0;
+/* Light */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 56px; }
+.stat { border-radius: 22px; border: 1px solid var(--line); background: var(--tile); padding: 26px 22px; }
+.stat b { display: block; font-size: clamp(2rem, 4vw, 2.7rem); font-weight: 800; letter-spacing: -.04em; line-height: 1.05; background: linear-gradient(180deg, #fff 40%, #8a93a3); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.stat span { display: block; color: var(--muted); font-size: 14px; margin-top: 10px; }
+
+/* Install */
+.install { margin-top: 56px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; counter-reset: s; }
+.step { border-radius: 22px; border: 1px solid var(--line); background: var(--tile); padding: 24px; counter-increment: s; }
+.step::before { content: counter(s); display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: #1a1e27; font-weight: 800; font-size: 14px; margin-bottom: 18px; }
+.step h3 { font-size: 17px; font-weight: 700; }
+.step p { color: var(--muted); font-size: 14px; margin-top: 6px; }
+.final { position: relative; text-align: center; margin-top: 120px; padding: 90px 24px 100px; border-radius: 32px; border: 1px solid var(--line); overflow: hidden; isolation: isolate; background: #15173a; }
+.final::before { content: ""; position: absolute; inset: auto -20% -60% -20%; height: 120%; background: radial-gradient(closest-side, #3a4fd855, #e8774f22 55%, transparent); z-index: -1; }
+.final .ears { position: absolute; top: 0; left: 50%; translate: -50% 0; width: 140px; height: 28px; background: #000; border-radius: 0 0 14px 14px; display: flex; justify-content: center; align-items: center; gap: 16px; }
+.final .ears .eye { width: 18px; height: 7px; border-width: 2.5px; }
+
+/* Footer: the name, huge and faint, sinking into a violet glow */
+.foot {
+  position: relative;
   overflow: hidden;
-  opacity: 0;
-  transition: max-height .4s var(--ease), opacity .3s;
+  margin-top: 80px;
+  padding-top: 110px;
+  color: #b9b3d9;
+  font-size: 14px;
+  background:
+    radial-gradient(60% 90% at 28% 100%, #6b2bd9b0, transparent 70%),
+    radial-gradient(55% 80% at 82% 100%, #3b3ac2a0, transparent 70%),
+    linear-gradient(180deg, var(--bg), #1d1046 45%, #2a1563);
 }
-.tabs button[aria-selected="true"] { background: var(--surface); }
-.tabs button[aria-selected="true"] span { max-height: 4.6em; opacity: 1; }
-.shot { position: relative; aspect-ratio: 598 / 233; }
-.shot img { position: absolute; inset: 0; width: 100%; opacity: 0; transition: opacity .3s; }
-.shot img.on { opacity: 1; }
-
-.bento {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-  margin-top: 48px;
-}
-.cell {
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 32px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.cell h3 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
-.cell p { color: var(--muted); font-size: .97rem; }
-.notices { grid-column: span 3; grid-row: span 2; }
-.pile { display: grid; gap: 12px; margin-top: 24px; justify-items: start; }
-.pile img { width: 330px; max-width: 100%; }
-.pile > :nth-child(2) { margin-left: 13%; }
-.pile > :nth-child(3) { margin-left: 4%; }
-.eyes { grid-column: span 2; }
-.eyes img { width: 229px; margin: 0 auto 20px; }
-.local { grid-column: span 2; background: var(--accent); }
-.local h3, .local p { color: var(--accent-text); }
-.local p { opacity: .88; }
-
-.install .steps {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr 1fr;
-  gap: 40px;
-  margin-top: 48px;
-  border-top: 1px solid var(--line);
-  padding-top: 32px;
-}
-.steps h3 { margin: 0 0 8px; font-size: 1.15rem; letter-spacing: -.02em; }
-.steps p { color: var(--muted); font-size: .98rem; }
-.steps code {
-  font-family: inherit;
+.foot .wrap { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; align-items: center; position: relative; z-index: 1; }
+.who-made { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.foot nav { display: flex; gap: 22px; }
+.foot a { text-decoration: none; color: #d6d0f2; transition: color .2s; }
+.foot a:hover { color: #fff; }
+.word {
+  font-size: clamp(8rem, 34vw, 31rem);
   font-weight: 700;
-  color: var(--text);
+  letter-spacing: -.05em;
+  line-height: .8;
+  text-align: center;
+  margin: 48px 0 -.14em;
+  background: linear-gradient(180deg, #ffffff30, #ffffff0a 75%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  user-select: none;
 }
-.install .cta { margin-top: 40px; }
 
-footer { border-top: 1px solid var(--line); padding: 32px 0 40px; color: var(--muted); font-size: .92rem; }
-footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; }
-footer nav { display: flex; gap: 20px; }
-footer a { color: inherit; text-underline-offset: 3px; }
-footer a:hover { color: var(--text); }
+.rise { opacity: 0; translate: 0 24px; transition: opacity .8s var(--ease), translate .8s var(--ease), border-color .3s; }
+.rise.seen { opacity: 1; translate: 0 0; }
 
-@media (prefers-reduced-motion: no-preference) {
-  .rise { opacity: 0; transform: translateY(20px); transition: opacity .7s var(--ease), transform .7s var(--ease); }
-  .rise.seen { opacity: 1; transform: none; }
+@media (max-width: 960px) {
+  .row { grid-template-columns: 1fr; gap: 40px; }
+  .row.flip .copy { order: 0; }
+  .bento { grid-template-columns: repeat(2, 1fr); }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .looks, .install { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .notch { --ns: .8; }
+  .bar { padding: 58px 16px 0; }
+  .tag { font-size: 12px; }
+  .bar .group { display: none; }
+  .wrap { padding: 0 16px; }
+  section { padding-top: 96px; }
+  .hero { padding-top: 126px; }
+  .lead { font-size: 16px; }
+  .bento { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { padding: 16px; min-height: 0; border-radius: 18px; }
+  .tile.w2 { grid-column: span 2; }
+  .tile:not(.w2) .vis { min-height: 110px; margin-bottom: 10px; }
+  .tile:not(.w2) h3 { font-size: 15px; }
+  .tile:not(.w2) p { font-size: 13px; }
+  .tile:not(.w2) .new { font-size: 9px; }
+  .mix { gap: 9px; font-size: 11px; }
+  .mix div { grid-template-columns: 48px 1fr; gap: 6px; }
+  .swatch { gap: 5px; }
+  .swatch i { width: 24px; height: 24px; border-radius: 7px; }
+  .rings { width: 96px; height: 96px; }
+  .rul b { font-size: 28px; }
+  .sky { height: 110px; padding: 10px; }
+  .sky::before { width: 30px; height: 30px; right: 14px; top: 18px; }
+  .sky b { font-size: 18px; }
+  .todo { gap: 9px; font-size: 12px; }
+  .todo small { display: none; }
+  .week { height: 90px; gap: 5px; }
+  .week i { width: 11px; }
+  .files { gap: 4px; }
+  .file { width: 42px; height: 54px; font-size: 8px; padding-bottom: 6px; }
+  .file::before { width: 18px; height: 18px; top: 9px; border-radius: 5px; }
+  .desk { height: 340px; }
+  .card { padding: 12px 14px 14px; width: calc(100% - 36px); }
+  .agent { grid-template-columns: 1fr; }
+  .bot { display: none; }
+  .cal { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { padding: 20px 16px; }
+  .final { margin-top: 96px; padding: 72px 18px 80px; }
+  .foot .wrap { flex-direction: column; align-items: flex-start; }
+  .foot { margin-top: 100px; padding-top: 64px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after { transition: none !important; animation: none !important; }
-}
-
-@media (max-width: 1040px) {
-  .pages .grid { grid-template-columns: 1fr; gap: 32px; }
-  .shot { order: -1; max-width: 598px; }
-}
-@media (max-width: 900px) {
-  .top { position: static; height: auto; padding: 16px; order: 1; }
-  .hero { min-height: 0; padding-bottom: 56px; }
-  .chips { margin-top: 76px; }
-  .hero-copy { grid-template-columns: 1fr; gap: 24px; padding-top: 16px; order: 2; }
-  .stage { order: 0; }
-  .wrap { padding: 0 16px; }
-  section { padding: 64px 0; }
-  .facts { grid-template-columns: 1fr; gap: 20px; }
-  .bento { grid-template-columns: 1fr; }
-  .notices, .eyes, .local { grid-column: auto; grid-row: auto; }
-  .cell { padding: 24px; }
-  .pile > :nth-child(2), .pile > :nth-child(3) { margin-left: 0; }
-  .install .steps { grid-template-columns: 1fr; gap: 24px; }
-  .cta, .cta .btn { width: 100%; justify-content: center; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .rise { opacity: 1; translate: 0 0; }
 }
 </style>
 </head>
@@ -538,517 +552,452 @@ footer a:hover { color: var(--text); }
   <symbol id="p-wifi-high" viewBox="0 0 256 256"><path d="M140,204a12,12,0,1,1-12-12A12,12,0,0,1,140,204ZM237.08,87A172,172,0,0,0,18.92,87,8,8,0,0,0,29.08,99.37a156,156,0,0,1,197.84,0A8,8,0,0,0,237.08,87ZM205,122.77a124,124,0,0,0-153.94,0A8,8,0,0,0,61,135.31a108,108,0,0,1,134.06,0,8,8,0,0,0,11.24-1.3A8,8,0,0,0,205,122.77Zm-32.26,35.76a76.05,76.05,0,0,0-89.42,0,8,8,0,0,0,9.42,12.94,60,60,0,0,1,70.58,0,8,8,0,1,0,9.42-12.94Z"/></symbol>
   <symbol id="p-cloud-sun" viewBox="0 0 256 256"><path d="M164,72a76.2,76.2,0,0,0-20.26,2.73,55.63,55.63,0,0,0-9.41-11.54l9.51-13.57a8,8,0,1,0-13.11-9.18L121.22,54A55.9,55.9,0,0,0,96,48c-.58,0-1.16,0-1.74,0L91.37,31.71a8,8,0,1,0-15.75,2.77L78.5,50.82A56.1,56.1,0,0,0,55.23,65.67L41.61,56.14a8,8,0,1,0-9.17,13.11L46,78.77A55.55,55.55,0,0,0,40,104c0,.57,0,1.15,0,1.72L23.71,108.6a8,8,0,0,0,1.38,15.88,8.24,8.24,0,0,0,1.39-.12l16.32-2.88a55.74,55.74,0,0,0,5.86,12.42A52,52,0,0,0,84,224h80a76,76,0,0,0,0-152ZM56,104a40,40,0,0,1,72.54-23.24,76.26,76.26,0,0,0-35.62,40,52.14,52.14,0,0,0-31,4.17A40,40,0,0,1,56,104ZM164,208H84a36,36,0,1,1,4.78-71.69c-.37,2.37-.63,4.79-.77,7.23a8,8,0,0,0,16,.92,58.91,58.91,0,0,1,1.88-11.81c0-.16.09-.32.12-.48A60.06,60.06,0,1,1,164,208Z"/></symbol>
 </svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="d-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4 13.5h6.5L9.5 22 20 9.5h-6.5z"/></symbol>
+  <symbol id="d-mic-off" viewBox="0 0 24 24"><path d="M12 2a3.5 3.5 0 0 0-3.5 3.5v.9l6.9 6.9c.06-.25.1-.53.1-.8v-7A3.5 3.5 0 0 0 12 2ZM3.7 2.3 2.3 3.7l6.2 6.2v1.6a3.5 3.5 0 0 0 5.2 3l1.5 1.5A5.5 5.5 0 0 1 6.5 11.5h-2a7.5 7.5 0 0 0 6.5 7.4V22h2v-3.1c1.2-.15 2.3-.6 3.2-1.3l4.1 4.1 1.4-1.4ZM19.5 11.5h-2c0 .7-.13 1.4-.37 2l1.5 1.5c.55-1.05.87-2.2.87-3.5Z"/></symbol>
+  <symbol id="d-drop" viewBox="0 0 24 24"><path d="M20.7 3.3a3.3 3.3 0 0 0-4.6 0l-2.6 2.6-1.1-1.1-1.4 1.4 1.1 1.1-7.3 7.3a2 2 0 0 0-.6 1.4v1.6L2.8 19l2.2 2.2 1.4-1.4h1.6a2 2 0 0 0 1.4-.6l7.3-7.3 1.1 1.1 1.4-1.4-1.1-1.1 2.6-2.6a3.3 3.3 0 0 0 0-4.6ZM7.6 18.4H6v-1.6l7.3-7.3 1.6 1.6Z"/></symbol>
+  <symbol id="d-caps" viewBox="0 0 24 24"><path d="M12 3 3 12h5v5h8v-5h5Zm-4 16h8v2H8z"/></symbol>
+  <symbol id="d-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></symbol>
+  <symbol id="d-sun" viewBox="0 0 24 24"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm-1-6h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4zM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1zM16.3 6.3l2.1-2.1 1.4 1.4-2.1 2.1z"/></symbol>
+  <symbol id="d-send" viewBox="0 0 24 24"><path d="M3 20.5 21 12 3 3.5l.01 6.6L15 12 3.01 13.9z"/></symbol>
+</svg>
 
-<div class="hero">
-  <header class="top">
-    <a class="brand" href="#"><img src="assets/icon.png" alt="" width="30" height="30">Drop</a>
-    <a class="link" href="https://github.com/rifqihilal/drop"><svg class="icon"><use href="#i-git"/></svg>GitHub</a>
-  </header>
-  <div class="stage" id="stage">
-    <div class="nt"><div class="shell" id="shell" aria-label="Demo notch Drop"><div class="body" id="body"></div></div></div>
-  </div>
-  <div class="chips">
-    <p>Arahkan kursor ke notch, lalu scroll dan klik. Atau picu kabarnya di sini.</p>
-    <button class="chip" data-chip="whatsapp">WhatsApp</button>
-    <button class="chip" data-chip="download">Download</button>
-    <button class="chip" data-chip="volume">Volume</button>
-    <button class="chip" data-chip="wifi">Wi-Fi</button>
-    <button class="chip" data-chip="bluetooth">Bluetooth</button>
-    <button class="chip" data-chip="battery">Baterai</button>
-    <button class="chip" data-chip="caps">Caps Lock</button>
-    <button class="chip" data-chip="eyes">Mata</button>
-    <button class="chip" id="float" aria-pressed="false">Floating</button>
-  </div>
-  <div class="wrap hero-copy">
-    <h1>Windows-mu kini punya notch.</h1>
-    <div class="hero-side">
-      <p>Jam, musik, jadwal sholat, dan notifikasi di tepi atas layar. Melebar saat perlu, mengecil saat tidak.</p>
-      <div class="cta">
-        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
-      </div>
-      <p class="downloads" data-downloads hidden></p>
-    </div>
-  </div>
-</div>
+<div class="notch" id="notch" aria-hidden="true"><div class="nb" id="nb"></div></div>
+
+<header class="bar">
+  <a class="brand" href="#"><img src="assets/icon.png" alt="">Drop</a>
+  <span class="sp"></span>
+  <nav class="group" aria-label="Bagian">
+    <a class="lk" href="#agent">Agent</a>
+    <a class="lk" href="#kartu">Kartu</a>
+    <a class="lk" href="#pasang">Pasang</a>
+  </nav>
+  <a class="out" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe">Download</a>
+</header>
 
 <main>
-  <div class="wrap">
-    <div class="facts rise">
-      <div><b>2,7 MB</b><span>ukuran installer</span></div>
-      <div><b>~ 20MB</b><span>memori saat berjalan</span></div>
-      <div><b>Rust</b><span>native, tanpa webview</span></div>
-    </div>
+  <div class="aurora" aria-hidden="true">
+    <i style="--c:#6d3fd8;left:-380px;top:14%"></i>
+    <i style="--c:#1f6fb8;right:-420px;top:24%"></i>
+    <i style="--c:#4c2fb0;left:50%;margin-left:-450px;top:38%"></i>
+    <i style="--c:#8a3f8f;left:-420px;top:56%"></i>
+    <i style="--c:#2a4fc0;right:-380px;top:68%"></i>
+    <i style="--c:#5b2fc0;left:20%;top:84%"></i>
   </div>
-
-  <section class="pages">
+  <section class="hero" data-notch="hero">
     <div class="wrap">
-      <h2 class="rise">Satu kartu untuk semua yang kamu cek.</h2>
-      <div class="grid rise">
-        <div class="tabs" role="tablist" aria-label="Halaman kartu" id="tabs">
-          <button role="tab" aria-selected="true" aria-controls="shot" data-shot="0"><b>Hari Ini</b><span>Jam, cuaca, sholat berikutnya, dan tugas terdekat.</span></button>
-          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="1"><b>Sholat</b><span>Jadwal Kemenag RI dengan posisi matahari, plus pengingat sebelum adzan.</span></button>
-          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="2"><b>Kalender</b><span>Kalender bulanan dan agenda dari sampai tiga tautan .ics.</span></button>
-          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="3"><b>Fokus</b><span>Pomodoro, timer, dan stopwatch.</span></button>
-          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="4"><b>Tugas</b><span>Daftar singkat yang diketik langsung di notch.</span></button>
-          <button role="tab" aria-selected="false" aria-controls="shot" data-shot="5"><b>Shelf</b><span>Seret file ke notch, lalu seret keluar ke aplikasi lain. Screenshot baru masuk sendiri.</span></button>
-        </div>
-        <div class="shot" id="shot" role="tabpanel">
-          <img class="on" src="assets/shots/home.png" alt="Halaman Hari Ini: jam, cuaca, dan sholat berikutnya" width="598" height="233">
-          <img src="assets/shots/sholat.png" alt="Halaman Sholat dengan lengkung posisi matahari" width="598" height="233" loading="lazy">
-          <img src="assets/shots/kalender.png" alt="Kalender bulanan" width="598" height="233" loading="lazy">
-          <img src="assets/shots/fokus.png" alt="Timer Fokus 25 menit" width="598" height="233" loading="lazy">
-          <img src="assets/shots/tugas.png" alt="Daftar tugas" width="598" height="233" loading="lazy">
-          <img src="assets/shots/shelf.png" alt="Shelf kosong dengan area taruh file" width="598" height="233" loading="lazy">
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section style="padding-top:0">
-    <div class="wrap">
-      <h2 class="rise">Ada kabar, muncul sebentar, lalu pergi.</h2>
-      <div class="bento">
-        <div class="cell notices rise">
-          <h3>Notifikasi tanpa jendela baru</h3>
-          <p>Pesan WhatsApp, progres download, volume, Wi-Fi, Bluetooth, baterai, dan agenda tampil di notch.</p>
-          <div class="pile">
-            <div class="mini"><span class="logo"><svg class="g"><use href="#p-whatsapp-logo"/></svg></span><div><b>Rani</b><span>Besok jadi ketemu jam 3?</span></div></div>
-            <div class="mini"><svg class="g"><use href="#p-download-simple"/></svg><div>Laporan-Q3.pdf</div><span class="end">49,6 MB</span></div>
-            <img src="assets/shots/baterai.png" alt="Notifikasi baterai lemah" width="364" height="78" loading="lazy">
-            <img src="assets/shots/agenda.png" alt="Pengingat agenda 10 menit lagi" width="397" height="78" loading="lazy" style="width:360px">
-          </div>
-        </div>
-        <div class="cell eyes rise">
-          <img src="assets/shots/mata.png" alt="Mata beranimasi di notch" width="229" height="50" loading="lazy">
-          <h3>Ditinggal, Drop tidur</h3>
-          <p>Saat komputer tidak disentuh, notch berubah jadi sepasang mata yang mengantuk.</p>
-        </div>
-        <div class="cell local rise">
-          <h3>Tanpa akun</h3>
-          <p>Semua tersimpan di komputermu sebagai berkas teks. Internet hanya dipakai untuk cuaca, lirik, dan agenda.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="install" id="pasang" style="padding-top:0">
-    <div class="wrap">
-      <h2 class="rise">Pasang dalam semenit.</h2>
-      <div class="steps rise">
-        <div>
-          <h3>Download installer</h3>
-          <p>Untuk Windows 10 dan 11, ukurannya 2,7 MB.</p>
-        </div>
-        <div>
-          <h3>Lewati peringatan SmartScreen</h3>
-          <p>Installer Drop belum ditandatangani, jadi Windows menampilkan "Windows protected your PC". Klik <code>More info</code>, lalu <code>Run anyway</code>.</p>
-        </div>
-        <div>
-          <h3>Selesai</h3>
-          <p>Drop jalan sendiri setiap Windows menyala. Klik kanan notch untuk membuka Settings.</p>
-        </div>
-      </div>
-      <div class="cta rise">
+      <span class="tag"><i></i>Baru di 0.3.0: Claude Code dan OpenCode di notch</span>
+      <h1>Tepi atas layarmu,<br>kini hidup.</h1>
+      <p class="lead">Drop adalah notch ringan untuk Windows. Progres AI agent, pesan WhatsApp, musik, dan jadwal sholat duduk di tepi atas layar. Melebar saat perlu, lalu mengecil lagi.</p>
+      <div class="btns">
         <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+        <a class="btn ghost" href="#kartu">Lihat fitur</a>
+      </div>
+      <p class="meta" data-meta>Versi 0.3.0 · 2,7 MB · Windows 10 dan 11 · Gratis</p>
+      <div class="chips" id="chips" aria-label="Isi notch"></div>
+      <p class="hint">Notch di atas halaman ini hidup. Pilih untuk melihat isinya.</p>
+    </div>
+  </section>
+
+  <section id="agent" data-notch="izin">
+    <div class="wrap row">
+      <div class="copy rise" style="--c: var(--orange)">
+        <p class="eyebrow">AI agent</p>
+        <h2>Agent bekerja, kamu tetap tahu.</h2>
+        <p class="sub">Progres Claude Code dan OpenCode tampil di notch. Tidak perlu bolak-balik ke terminal untuk tahu agent sedang apa.</p>
+        <ul class="list">
+          <li>Langkah yang sedang jalan, lama giliran, rencana kerja, dan balasan terakhir.</li>
+          <li>Izinkan atau tolak perintah, dan jawab pertanyaan agent, langsung dari notch.</li>
+          <li>Beberapa agent sekaligus tampil sebagai satu strip, dengan daftar semua sesi.</li>
+        </ul>
+        <p class="note">Hubungkan sekali dari Settings → AI agent. Saat ini untuk Claude Code dan OpenCode.</p>
+      </div>
+      <div class="desk rise" style="--g1:#e8774f40;--g2:#7a4fd850">
+        <div class="win" style="left:6%;top:30%;width:46%;height:60%"></div>
+        <div class="win" style="left:56%;top:44%;width:38%;height:46%"></div>
+        <div class="card">
+          <div class="ch"><span class="ring"></span><span class="dm">Sabtu, 21 Nov</span><b>13:59</b></div>
+          <div class="agent">
+            <div class="bot"><i></i><i></i></div>
+            <div>
+              <div class="who"><b>webshop</b><span class="dm">Claude Code</span></div>
+              <div class="ask"><span class="ast">✳</span>Izinkan Jalanin · git push origin main?</div>
+              <div class="term"><span>Terminal</span>$ git push origin main</div>
+              <div class="wait"></div>
+              <div class="acts"><span class="no">Tolak</span><span class="yes">Izinkan</span></div>
+            </div>
+          </div>
+          <div class="pd"><i></i><i></i><i></i><i></i><i class="on"></i><i></i></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-notch="wa">
+    <div class="wrap row flip">
+      <div class="copy rise" style="--c: #25d366">
+        <p class="eyebrow">WhatsApp</p>
+        <h2>Balas tanpa membuka aplikasinya.</h2>
+        <p class="sub">Pesan masuk muncul sebentar di notch. Klik untuk membalas di tempat, lalu kembali bekerja.</p>
+        <ul class="list">
+          <li>Jumlah pesan belum dibaca per pengirim.</li>
+          <li>Klik notifikasi lain untuk membuka tujuannya: chat, tautan, atau app pengirimnya.</li>
+          <li>Suara notifikasi pilihan, dibuat pelan.</li>
+        </ul>
+        <p class="note">Untuk WhatsApp Desktop resmi.</p>
+      </div>
+      <div class="desk rise" style="--g1:#25d36630;--g2:#2b7bd84a">
+        <div class="win" style="left:8%;top:34%;width:40%;height:56%"></div>
+        <div class="win" style="left:52%;top:28%;width:40%;height:62%"></div>
+        <div class="card">
+          <div class="ch"><span class="ring"></span><span class="dm">Rabu, 25 Nov</span><b data-clock>13:30</b></div>
+          <div class="inbox-head"><b>3 notifikasi</b><span class="clear"><svg><use href="#p-trash"/></svg>Hapus semua</span></div>
+          <div class="chat">
+            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b>Rina</b><small>WhatsApp · Jadi ketemu jam 7? Aku bawa laptopnya</small></div><span class="age"><span class="badge">2</span>1 mnt</span></div>
+            <div class="reply"><span class="typed" id="typed"></span><span class="send"><svg><use href="#d-send"/></svg></span></div>
+            <div class="msg"><span class="app"><svg><use href="#p-whatsapp-logo"/></svg></span><div><b>Tim Kantor</b><small>WhatsApp · Bayu: slide sudah aku upload ya</small></div><span class="age">5 mnt</span></div>
+          </div>
+          <div class="pd"><i></i><i class="on"></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="kartu" data-notch="musik">
+    <div class="wrap">
+      <div class="head rise">
+        <p class="eyebrow">Kartu</p>
+        <h2>Semua yang biasa kamu cek,<br>satu gerakan mouse.</h2>
+        <p class="sub">Arahkan mouse ke notch dan kartunya terbuka. Pindah halaman dengan scroll, geser touchpad, atau <kbd>Alt</kbd> <kbd>N</kbd>.</p>
+      </div>
+      <div class="bento">
+        <article class="tile w2">
+          <div class="vis"><div class="mini-home">
+            <div class="big"><span>Selamat pagi, Dimas</span><b data-clock>09:41</b><span>Rabu, 25 Nov</span></div>
+            <div><span>Cuaca</span><b>26°</b></div>
+            <div><span>Dzuhur</span><b>11:52</b></div>
+            <div><span>Fokus</span><b>18:20</b></div>
+            <div><span>Agent</span><b style="color:var(--orange)">✳ Edit</b></div>
+          </div></div>
+          <h3>Home bento <span class="new">BARU</span></h3>
+          <p>Jam dan sapaan, plus 4 atau 6 kotak pilihan. Klik kotak untuk membuka halamannya.</p>
+        </article>
+        <article class="tile w2">
+          <div class="vis"><div class="mus">
+            <div class="art"></div>
+            <div><b>Evaluasi</b> <span style="color:var(--dim)">· Hindia</span>
+              <div class="line"><i></i></div>
+              <div class="ly"><em>Baik-baik sajalah</em> ...</div></div>
+          </div></div>
+          <h3>Musik dan lirik</h3>
+          <p>Kontrol, sampul, dan lirik tersinkron. Lagu berganti di tempat saat next atau prev.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="mix">
+            <div><span>Speaker</span><span class="lvl" style="--v:72%;--c:#f3f5f8"><i></i></span></div>
+            <div><span>Spotify</span><span class="lvl" style="--v:58%;--c:#3ccf6e"><i></i></span></div>
+            <div><span>Chrome</span><span class="lvl" style="--v:34%;--c:#5aaef0"><i></i></span></div>
+            <div><span>Discord</span><span class="lvl" style="--v:80%;--c:#8c8cf5"><i></i></span></div>
+          </div></div>
+          <h3>Mixer <span class="new">BARU</span></h3>
+          <p>Volume tiap app yang sedang bersuara.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="loupe">
+            <div class="swatch"><i style="--c:#f2c14e"></i><i style="--c:#e8774f"></i><i style="--c:#5aaef0"></i><i style="--c:#2bb5a0"></i></div>
+            <span class="hex">#5AAEF0</span>
+            <span><kbd>Alt</kbd> <kbd>C</kbd></span>
+          </div></div>
+          <h3>Droplate <span class="new">BARU</span></h3>
+          <p>Ambil warna dari mana saja dengan kaca pembesar.</p>
+        </article>
+        <article class="tile w2">
+          <div class="vis" style="flex-direction:column">
+            <div class="tp"><div>
+              <p>Halo semuanya, terima kasih sudah hadir.</p><p>Hari ini saya mau cerita soal tiga hal.</p><p>Pertama, apa yang sudah kita capai.</p><p>Kedua, apa yang masih tertunda.</p><p>Ketiga, rencana bulan depan.</p><p>Mari kita mulai dari angka.</p>
+              <p>Halo semuanya, terima kasih sudah hadir.</p><p>Hari ini saya mau cerita soal tiga hal.</p><p>Pertama, apa yang sudah kita capai.</p><p>Kedua, apa yang masih tertunda.</p><p>Ketiga, rencana bulan depan.</p><p>Mari kita mulai dari angka.</p>
+            </div></div>
+            <div class="tpm"><span>140 wpm</span><span>·</span><span>2:10 lagi</span><span>·</span><span><kbd>Alt</kbd> <kbd>P</kbd></span></div>
+          </div>
+          <h3>Teleprompter <span class="new">BARU</span></h3>
+          <p>Naskah bergulir pelan tepat di bawah kamera. Bisa disembunyikan dari rekaman layar.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="rings"><svg viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="52" stroke="#1d2a24"/><circle cx="60" cy="60" r="52" stroke="#3ccf6e" stroke-dasharray="327" stroke-dashoffset="90"/>
+            <circle cx="60" cy="60" r="39" stroke="#1d2433"/><circle cx="60" cy="60" r="39" stroke="#5aaef0" stroke-dasharray="245" stroke-dashoffset="110"/>
+            <circle cx="60" cy="60" r="26" stroke="#2d2120"/><circle cx="60" cy="60" r="26" stroke="#e8774f" stroke-dasharray="163" stroke-dashoffset="40"/>
+          </svg></div></div>
+          <h3>Istirahat <span class="new">BARU</span></h3>
+          <p>Mata, peregangan, dan minum. Ditahan selama rapat.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="rul"><b>25:00</b><div class="ticks"></div></div></div>
+          <h3>Pomodoro</h3>
+          <p>Penggaris menit untuk fokus dan istirahat, plus stopwatch.</p>
+        </article>
+        <article class="tile w2">
+          <div class="vis"><div class="cal">
+            <div class="days">
+              <span class="h">S</span><span class="h">S</span><span class="h">R</span><span class="h">K</span><span class="h">J</span><span class="h">S</span><span class="h">M</span>
+              <span>16</span><span class="ev">17</span><span>18</span><span>19</span><span class="ev">20</span><span>21</span><span>22</span>
+              <span>23</span><span>24</span><span class="sel">25</span><span class="ev">26</span><span>27</span><span>28</span><span>29</span>
+              <span class="ev">30</span><span>1</span><span>2</span><span>3</span><span class="ev">4</span><span>5</span><span>6</span>
+            </div>
+            <div class="agenda">
+              <div><i style="--c:#5aaef0"></i>09:00 Rapat mingguan</div>
+              <div><span class="chk on"></span><span style="color:var(--dim);text-decoration:line-through">Kirim laporan</span></div>
+              <div><span class="chk"></span>Beli kado Ibu</div>
+            </div>
+          </div></div>
+          <h3>Kalender dan agenda harian <span class="new">BARU</span></h3>
+          <p>Sampai tiga tautan <code>.ics</code> dan tugasmu. Klik tanggal untuk melihat acaranya, centang tugas, atau tambah tugas di hari itu.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="sky"><span>Ashar</span><b>15:12</b><span>dalam 1 jam 4 mnt</span></div></div>
+          <h3>Waktu sholat</h3>
+          <p>Metode Kemenag RI, dengan langit yang mengikuti waktu.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="todo">
+            <div><span class="chk on"></span><span class="done">Bayar listrik</span></div>
+            <div><span class="chk"></span>Telepon Ibu<small>19:00</small></div>
+            <div><span class="chk"></span>Kirim desain<small>Besok</small></div>
+          </div></div>
+          <h3>Tugas</h3>
+          <p>Dengan tanggal dan jam, dan pengingat saat tiba.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="week"><i style="--h:40%"></i><i style="--h:70%"></i><i style="--h:55%"></i><i style="--h:85%"></i><i style="--h:60%"></i><i style="--h:30%"></i><i style="--h:75%"></i></div></div>
+          <h3>Screen Time</h3>
+          <p>Waktu pakai tiap app, hari ini atau tujuh hari.</p>
+        </article>
+        <article class="tile">
+          <div class="vis"><div class="files"><span class="file" style="--c:#e8774f">PDF</span><span class="file" style="--c:#5aaef0">PNG</span><span class="file" style="--c:#3ccf6e">XLSX</span></div></div>
+          <h3>Shelf</h3>
+          <p>Seret berkas ke notch, ambil lagi nanti. Screenshot masuk otomatis.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section data-notch="notice">
+    <div class="wrap">
+      <div class="head rise">
+        <p class="eyebrow" style="--c:var(--green)">Notifikasi</p>
+        <h2>Ada kabar, muncul sebentar,<br>lalu pergi.</h2>
+        <p class="sub">Volume dan kecerahan menggantikan tampilan bawaan Windows. Klik salah satu, lalu lihat notch di atas.</p>
+      </div>
+      <div class="notices rise" id="notices"></div>
+    </div>
+  </section>
+
+  <section data-notch="idle">
+    <div class="wrap">
+      <div class="head rise">
+        <p class="eyebrow" style="--c:#b48cff">Tampilan</p>
+        <h2>Pas dengan mejamu.</h2>
+        <p class="sub">Classic menempel di tepi, Floating melayang. Tiga ukuran, tiga tema, dan sembunyi otomatis jadi bar tipis saat game, video, atau presentasi.</p>
+      </div>
+      <div class="looks">
+        <div class="look rise" data-theme="black" role="button" tabindex="0" aria-pressed="true">
+          <div class="scr" style="--wall:linear-gradient(160deg,#2b3a67,#121726)"><div class="mn" style="--nc:#000"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.6">31°</span></div></div>
+          <div class="cap"><b>Hitam</b><p>Menyatu dengan bingkai layar.</p></div>
+        </div>
+        <div class="look rise" data-theme="glass" role="button" tabindex="0" aria-pressed="false">
+          <div class="scr" style="--wall:linear-gradient(160deg,#e39a6a,#7a3f8a)"><div class="mn fl" style="--nc:#ffffff2e;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:inset 0 0 0 1px #ffffff40"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75">Rabu 25</span></div></div>
+          <div class="cap"><b>Kaca</b><p>Tembus pandang, ikut wallpaper.</p></div>
+        </div>
+        <div class="look rise" data-theme="tint" role="button" tabindex="0" aria-pressed="false">
+          <div class="scr" style="--wall:linear-gradient(160deg,#2e8a7a,#173a4f)"><div class="mn" style="--nc:#1d6f8c"><span class="ring"></span>13:59<span class="gr"></span><span style="opacity:.75">3 tugas</span></div></div>
+          <div class="cap"><b>Kaca warna</b><p>Ikut warna aksen Windows.</p></div>
+        </div>
+      </div>
+      <p class="hint rise" style="text-align:center;margin-top:16px">Arahkan mouse atau ketuk salah satu tema, lalu lihat notch di atas.</p>
+      <p class="sub rise" style="text-align:center;margin:40px auto 0">Pilih yang tampil di kanan jam:</p>
+      <div class="rightside rise"><span>Suhu</span><span>Tanggal</span><span>Agenda berikutnya</span><span>Sisa tugas</span><span>Jam kedua</span><span>Screen Time</span><span>Kosong</span></div>
+    </div>
+  </section>
+
+  <section data-notch="mata">
+    <div class="wrap">
+      <div class="head rise">
+        <p class="eyebrow">Ringan</p>
+        <h2>Kecil, cepat, dan diam saat tidak dipakai.</h2>
+        <p class="sub">Ditulis dalam Rust langsung di atas Win32 dan Direct2D, tanpa webview. Tanpa akun: semua tersimpan di komputermu sebagai berkas teks.</p>
+      </div>
+      <div class="stats">
+        <div class="stat rise"><b>20–25 MB</b><span>memori yang dipakai</span></div>
+        <div class="stat rise"><b>2,7 MB</b><span>ukuran installer</span></div>
+        <div class="stat rise"><b>Native</b><span>Win32, Direct2D, DirectWrite</span></div>
+        <div class="stat rise"><b>ID · EN</b><span>Windows 10 dan 11</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pasang" data-notch="unduh">
+    <div class="wrap">
+      <div class="head rise">
+        <p class="eyebrow">Pasang</p>
+        <h2>Pasang dalam semenit.</h2>
+      </div>
+      <div class="install">
+        <div class="step rise"><h3>Download installer</h3><p>Untuk Windows 10 dan 11, ukurannya 2,7 MB. Versi lama langsung ditimpa; pengaturan tetap tersimpan.</p></div>
+        <div class="step rise"><h3>Lewati SmartScreen</h3><p>Installer belum ditandatangani, jadi Windows menampilkan "Windows protected your PC". Klik <code>More info</code>, lalu <code>Run anyway</code>.</p></div>
+        <div class="step rise"><h3>Selesai</h3><p>Drop jalan sendiri setiap Windows menyala. Klik kanan notch untuk membuka Settings.</p></div>
+      </div>
+      <div class="final rise">
+        <div class="ears"><span class="eye"></span><span class="eye"></span></div>
+        <h2>Beri Windows-mu notch.</h2>
+        <p class="sub" style="margin:0 auto">Gratis, tanpa akun, tanpa iklan.</p>
+        <div class="btns" style="margin-bottom:0">
+          <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.0/Drop-0.3.0.0-Setup.exe"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+        </div>
       </div>
     </div>
   </section>
 </main>
 
-<footer>
+<footer class="foot" data-notch="mata">
   <div class="wrap">
-    <p>Dibuat oleh Hilal. Gratis dipakai.</p>
+    <div class="who-made">
+      <a class="brand" href="#"><img src="assets/icon.png" alt="">Drop</a>
+      <p>Dibuat oleh Hilal. Gratis dipakai.</p>
+    </div>
     <nav aria-label="Tautan">
-      <a href="https://github.com/rifqihilal/drop/blob/main/NOTICE">NOTICE</a>
       <a href="https://github.com/rifqihilal/drop/blob/main/LICENSE">Lisensi</a>
+      <a href="https://github.com/rifqihilal/drop/blob/main/NOTICE">NOTICE</a>
       <a href="https://github.com/rifqihilal/drop/releases">Semua rilis</a>
     </nav>
   </div>
+  <div class="word" aria-hidden="true">Drop</div>
 </footer>
 
 <script>
-// The hero notch: a playable copy of the real one, drawn in HTML.
+// The notch at the top of the page: a strip for each state, swapped as the page scrolls.
 (() => {
-  const stage = document.getElementById('stage');
-  const shell = document.getElementById('shell');
-  const body = document.getElementById('body');
+  const nb = document.getElementById('nb');
+  const notch = document.getElementById('notch');
+  const chips = document.getElementById('chips');
+  const ico = (id, color) => `<span class="sq" style="--c:${color}"><svg><use href="#${id}"/></svg></span>`;
+  const notice = (id, color, title, sub) => [300, 46, `${ico(id, color)}<span class="two"><b>${title}</b><span>${sub}</span></span><span class="gr"></span>`];
+  const level = (id, color, title, v) => [300, 46, `${ico(id, color)}<b>${title}</b><span class="gr"></span><span class="lvl" style="--v:${v}%"><i></i></span>`];
+  const S = {
+    idle:  [218, 35, '<span class="ring"></span><b data-clock>13:59</b><span class="gr"></span><span class="dm">31°</span>'],
+    agent: [372, 35, '<span class="ast spin">✳</span><span>Edit · render.rs</span><span class="gr"></span><span class="dots">•••</span><b data-clock>13:59</b>'],
+    izin:  [430, 46, '<span class="ast">✳</span><span class="two"><b>webshop</b><span>Izinkan git push?</span></span><span class="gr"></span><span class="pill no">Tolak</span><span class="pill yes">Izinkan</span>'],
+    wa:    [396, 50, `${ico('p-whatsapp-logo', '#25d366')}<span class="two"><b>Rina</b><span>Jadi ketemu jam 7?</span></span><span class="gr"></span><span class="pill" style="background:#1f2a22;color:#8fe3a8">Balas</span>`],
+    musik: [330, 35, '<span class="cov"></span><span>Evaluasi</span><span class="dm">Hindia</span><span class="gr"></span><span class="bars"><i></i><i></i><i></i><i></i></span>'],
+    unduh: [360, 40, '<span style="color:var(--blue);font-weight:800">↓</span><span>Drop-Setup.exe</span><span class="gr"></span><span class="dm">2,7 MB · 4 MB/s</span><span class="prog"><i></i></span>'],
+    mata:  [218, 35, '<span class="gr"></span><span class="eye"></span><span class="eye"></span><span class="gr"></span>'],
+    vol:   level('p-speaker-high', '#3a3f4a', 'Volume', 64),
+    light: level('d-sun', '#c9902a', 'Kecerahan', 80),
+    wifi:  notice('p-wifi-high', '#2b7bd8', 'Wi-Fi tersambung', 'Rumah_5G'),
+    bt:    notice('p-bluetooth', '#3b5bdb', 'Earbuds tersambung', 'Baterai 80%'),
+    plug:  notice('d-bolt', '#2f9e55', 'Mengisi daya', '76% · penuh 40 mnt lagi'),
+    low:   notice('p-battery-warning', '#d9480f', 'Baterai lemah', '15% tersisa'),
+    mic:   notice('d-mic-off', '#c92a2a', 'Mikrofon mati', 'Tekan lagi untuk menyalakan'),
+    done:  notice('p-download-simple', '#1c7ed6', 'Unduhan selesai', 'laporan-november.pdf'),
+    pick:  notice('d-drop', '#5aaef0', 'Warna disalin', '#5AAEF0'),
+    caps:  notice('d-caps', '#495057', 'Caps Lock', 'Menyala'),
+    pray:  notice('d-moon', '#7048e8', 'Maghrib', 'dalam 10 menit'),
+  };
+  nb.innerHTML = Object.entries(S).map(([k, v]) => `<div class="st" data-k="${k}">${v[2]}</div>`).join('');
+  let current = '';
+  const show = k => {
+    if (k === current) return;
+    current = k;
+    const [w, h] = S[k];
+    notch.style.setProperty('--w', w + 'px');
+    notch.style.setProperty('--h', h + 'px');
+    nb.querySelectorAll('.st').forEach(s => s.classList.toggle('on', s.dataset.k === k));
+    chips.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === k));
+  };
+
   const pad = n => String(n).padStart(2, '0');
-  const icon = name => `<svg class="g"><use href="#p-${name}"/></svg>`;
-  const clean = text => text.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-  const mmss = s => `${Math.floor(s / 60)}:${pad(Math.floor(s % 60))}`;
-  const clock = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-  const DAYS = ['Min', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-  const today = () => { const d = new Date(); return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`; };
+  const tick = () => { const d = new Date(); document.querySelectorAll('[data-clock]').forEach(c => { c.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}`; }); };
+  tick();
+  setInterval(tick, 15000);
 
-  const tracks = [
-    { title: 'Senja di Teras', artist: 'Lagu demo', length: 214, cover: 'linear-gradient(140deg,#f2994a,#d6457a 55%,#3a2a8c)', tint: '#f2884a', glow: '#5a2346',
-      lines: ['Senja turun di teras rumah', 'Kopi dingin, kita belum beranjak', 'Lampu jalan mulai menyala', 'Besok biar jadi urusan besok'] },
-    { title: 'Kereta Terakhir', artist: 'Lagu demo', length: 187, cover: 'linear-gradient(140deg,#2bb5a0,#1f6fd6 60%,#10234f)', tint: '#35c7b0', glow: '#123d55',
-      lines: ['Peron sepi menjelang malam', 'Tiket lusuh di saku jaket', 'Kereta datang tanpa suara', 'Kupilih pulang kali ini'] },
-    { title: 'Hujan Bulan Sepuluh', artist: 'Lagu demo', length: 246, cover: 'linear-gradient(140deg,#8c9bb5,#4b5a78 55%,#1a2133)', tint: '#a9bbd6', glow: '#2a3347',
-      lines: ['Atap seng mulai bernyanyi', 'Jendela berembun pelan', 'Kutulis namamu di kaca', 'Lalu hujan menghapusnya'] },
-  ];
-  const prayers = [['Subuh', '04:06'], ['Dzuhur', '11:39'], ['Ashar', '14:57'], ['Maghrib', '17:52'], ['Isya', '19:05']];
-  const modes = [['Fokus', 1500], ['Timer', 300], ['Stopwatch', 0]];
-  const PAGES = ['music', 'home', 'inbox', 'pray', 'cal', 'focus', 'todo', 'shelf'];
+  // Hero: cycle through the strips until someone picks one.
+  const heroKeys = { idle: 'Jam', agent: 'AI agent', izin: 'Izin agent', wa: 'WhatsApp', musik: 'Musik', unduh: 'Unduhan', mata: 'Mata' };
+  chips.innerHTML = Object.entries(heroKeys).map(([k, n]) => `<button type="button" data-k="${k}" aria-pressed="false">${n}</button>`).join('');
+  const order = Object.keys(heroKeys);
+  let step = 0, auto = true, zone = 'hero';
+  chips.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    auto = false;
+    step = order.indexOf(b.dataset.k);
+    show(b.dataset.k);
+  });
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  setInterval(() => {
+    if (zone !== 'hero' || !auto || still) return;
+    step = (step + 1) % order.length;
+    show(order[step]);
+  }, 2600);
 
-  const state = {
-    view: 'eyes', page: 0, track: 0, pos: 64, playing: true, lyrics: false,
-    mode: 0, left: 1500, running: false, session: 1,
-    tasks: [['Kirim laporan bulanan', false], ['Telepon Ibu', false], ['Beli kopi', true]],
-    inbox: [
-      { logo: 'whatsapp-logo', cls: '', title: 'Rani', text: 'Besok jadi ketemu jam 3?', age: '2 mnt' },
-      { logo: 'envelope-simple', cls: 'mail', title: 'Email', text: 'Tagihan listrik bulan ini sudah terbit', age: '1 jam' },
-      { logo: 'calendar-blank', cls: 'cal', title: 'Kalender', text: 'Rapat tim jam 14:00', age: '3 jam' },
-    ],
-    shelf: [],
-  };
-  let noticeTimer = 0;
-  let downloadTimer = 0;
-  let leaveTimer = 0;
-  let lastWheel = 0;
-  let shownLine = -1;
-  let restTimer = 0;
-  let mouse = false;
-
-  const track = () => tracks[state.track];
-  const lineIndex = () => Math.floor(state.pos / 4) % track().lines.length;
-  const lyricAt = offset => { const { lines } = track(); return lines[(lineIndex() + offset + lines.length) % lines.length]; };
-  const shape = (w, h, small) => {
-    shell.style.setProperty('--w', `${w}px`);
-    shell.style.setProperty('--h', `${h}px`);
-    shell.classList.toggle('small', Boolean(small));
-    shell.style.setProperty('--sl', '#000');
-  };
-  const bars = () => `<span class="bars ${state.playing ? 'on' : ''}" style="--tint:${track().tint}"><i></i><i></i><i></i><i></i></span>`;
-
-  const header = (first, second, color, end = '') => `<div class="head" style="--t:${color}"><h4>${first} <em>${second}</em></h4><span class="dim">${today()} <b id="clk">${clock()}</b></span><span class="end">${end}</span></div>`;
-
-  const pages = {
-    music() {
-      const t = track();
-      const info = `<div class="cover" style="--cover:${t.cover}"></div><div style="min-width:0"><div class="t">${t.title}</div><div class="a">${t.artist}</div></div>`;
-      const seek = `<div class="seek"><span id="pos">${mmss(state.pos)}</span><span class="track" id="seek"><i id="fill" style="width:${state.pos / t.length * 100}%"></i></span><span>${mmss(t.length)}</span></div>`;
-      const ctl = `<div class="ctl"><button class="q ${state.lyrics ? 'on' : ''}" data-do="lyrics" aria-label="Mode lirik" aria-pressed="${state.lyrics}">${icon('quotes')}</button><span class="mid"><button data-do="prev" aria-label="Lagu sebelumnya">${icon('skip-back')}</button><button class="big" data-do="play" aria-label="${state.playing ? 'Jeda' : 'Putar'}">${icon(state.playing ? 'pause' : 'play')}</button><button data-do="next" aria-label="Lagu berikutnya">${icon('skip-forward')}</button></span><span class="s">${icon('speaker-high')}</span></div>`;
-      const inner = state.lyrics
-        ? `<div class="mus ly"><div class="left">${info}${'<div style="grid-column:1/-1">' + seek + '</div>'}<div style="grid-column:1/-1">${ctl}</div></div><div class="lines" id="lines">${lines()}</div></div>`
-        : `<div class="mus">${info}${seek}${ctl}</div>`;
-      return header('Now', 'Playing', '#37d67a', bars()) + `<div class="page">${inner}</div>`;
-    },
-    home() {
-      const hour = new Date().getHours();
-      const hello = hour < 11 ? 'pagi' : hour < 15 ? 'siang' : hour < 18 ? 'sore' : 'malam';
-      const task = state.tasks.find(item => !item[1]);
-      const [name, time] = nextPrayer();
-      return `<div class="page" style="padding-top:4px"><div class="home"><div class="hero-tile">Selamat ${hello}<b id="clk">${clock()}</b>${today()}<small>76% baterai</small></div><ul>
-        <li class="spread">${icon('cloud-sun')}<span style="flex:1"><b>31°</b><br><span class="dim">Cerah berawan, Jakarta</span></span></li>
-        <li><div class="spread"><b>${name}</b><b>${time}</b></div><div class="hbar"><i style="width:68%"></i></div></li>
-        <li>${task ? clean(task[0]) : 'Semua tugas selesai'}</li></ul></div></div>`;
-    },
-    inbox() {
-      const { inbox } = state;
-      const rows = inbox.map((row, i) => `<li data-remove="${i}"><span class="logo ${row.cls}">${icon(row.logo)}</span><span><b>${clean(row.title)}</b><small>${clean(row.text)}</small></span><span class="dim" style="font-size:12px">${row.age}</span></li>`).join('');
-      return header('Pusat', 'Notifikasi', '#5aaef0') + `<div class="page inbox">${inbox.length
-        ? `<div class="top2"><b>${inbox.length} notifikasi</b><button class="pill" data-do="clear">${icon('trash')}Hapus semua</button></div><ul>${rows}</ul>`
-        : '<div class="empty">Belum ada notifikasi</div>'}</div>`;
-    },
-    pray() {
-      const [name, time, index] = nextPrayer();
-      const d = new Date();
-      const part = Math.min(1, Math.max(0, ((d.getHours() + d.getMinutes() / 60) - 5.5) / 12.5));
-      const x = 10 + part * 200;
-      const y = 80 - Math.sin(part * Math.PI) * 68;
-      const row = prayers.map(([label, at], i) => `<span class="${i === index ? 'now' : ''}"><b>${label}</b>${at}</span>`).join('');
-      return header('Sholat', 'Jakarta', '#37d67a') + `<div class="page"><div class="pray"><div><span class="dim">Next</span><div class="nm">${name}</div><b>${time}</b> <span class="dim">contoh jadwal</span></div>
-        <svg viewBox="0 0 220 90" aria-hidden="true"><path d="M10 80 Q110 -56 210 80" fill="none" stroke="#7c8ff0" stroke-width="2"/><circle cx="${x}" cy="${y}" r="7" fill="#f7c04a"/></svg>
-        <div class="times">${row}</div></div></div>`;
-    },
-    cal() {
-      const d = new Date();
-      const first = (new Date(d.getFullYear(), d.getMonth(), 1).getDay() + 6) % 7;
-      const count = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-      let cells = ['Sn', 'Sl', 'Rb', 'Km', 'Jm', 'Sb', 'Mg'].map(day => `<span class="h">${day}</span>`).join('');
-      cells += '<span></span>'.repeat(first);
-      for (let day = 1; day <= count; day += 1) cells += `<span class="${day === d.getDate() ? 'today' : ''}">${day}</span>`;
-      return header(['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'][d.getMonth()], d.getFullYear(), '#ee4b4b') +
-        `<div class="page"><div class="cal"><div class="days">${cells}</div><div><span class="dim">Agenda</span><p style="margin-top:6px"><b>Rapat tim</b><br><span class="dim">14:00</span></p><p style="margin-top:6px"><b>Bayar listrik</b><br><span class="dim">Besok</span></p></div></div></div>`;
-    },
-    focus() {
-      const segs = modes.map(([label], i) => `<button aria-pressed="${i === state.mode}" data-mode="${i}">${label}</button>`).join('');
-      return header('Fokus', 'Timer', '#ee4b4b') + `<div class="page"><div class="foc"><div class="dial" id="dial"><span id="left">${mmss(state.left)}</span></div><div><div class="seg">${segs}</div><div><b>${modes[state.mode][0]}</b> <span class="dim">Sesi ${state.session}</span></div><button class="go" data-do="run">${icon(state.running ? 'pause' : 'play')}${state.running ? 'Jeda' : 'Start'}</button><button class="round" data-do="reset" aria-label="Ulangi">${icon('arrow-counter-clockwise')}</button></div></div></div>`;
-    },
-    todo() {
-      const done = state.tasks.filter(item => item[1]).length;
-      const rows = state.tasks.slice(-3).map((item, i, shown) => {
-        const index = state.tasks.length - shown.length + i;
-        return `<li class="${item[1] ? 'done' : ''}"><button data-task="${index}" aria-label="Tandai ${clean(item[0])}"></button>${clean(item[0])}</li>`;
-      }).join('');
-      return header('Daftar', 'Tugas', '#37d67a') + `<div class="page todo"><div class="top2"><span><b>${done}/${state.tasks.length}</b> <span class="dim">selesai</span></span>${done ? '<button class="pill" data-do="tidy">Hapus selesai</button>' : ''}</div><ul>${rows}</ul><input id="newtask" placeholder="Ketik tugas, lalu Enter" aria-label="Tugas baru" maxlength="40"></div>`;
-    },
-    shelf() {
-      const files = state.shelf.slice(-4).map(name => `<li>${clean(name)}</li>`).join('');
-      return header('Shelf', 'Berkas', '#5aaef0') + `<div class="page"><div class="zone" id="zone">${files ? `<ul>${files}</ul>` : 'Seret file dari komputermu ke sini. File tidak diunggah ke mana pun.'}</div></div>`;
-    },
+  // Elsewhere the notch follows the section in view.
+  const sections = [...document.querySelectorAll('[data-notch]')];
+  const sectionState = () => {
+    const mid = innerHeight * .45;
+    const s = sections.find(el => { const r = el.getBoundingClientRect(); return r.top <= mid && r.bottom > mid; }) || sections[0];
+    zone = s.dataset.notch;
+    if (zone === 'hero') return order[step];
+    if (zone === 'notice') return 'vol';
+    return zone;
   };
 
-  function lines() {
-    return `<p>${lyricAt(-1)}</p><p class="now">${lyricAt(0)}</p><p>${lyricAt(1)}</p>`;
-  }
-  function nextPrayer() {
-    const now = clock();
-    const index = prayers.findIndex(([, at]) => at > now);
-    const at = index < 0 ? 0 : index;
-    return [...prayers[at], at];
-  }
+  // Notices: a click shows one for a moment, the way Drop does.
+  const list = [['vol', 'p-speaker-high', '#3a3f4a', 'Volume'], ['light', 'd-sun', '#c9902a', 'Kecerahan'], ['wifi', 'p-wifi-high', '#2b7bd8', 'Wi-Fi'], ['bt', 'p-bluetooth', '#3b5bdb', 'Bluetooth'], ['plug', 'd-bolt', '#2f9e55', 'Mengisi daya'], ['low', 'p-battery-warning', '#d9480f', 'Baterai lemah'], ['mic', 'd-mic-off', '#c92a2a', 'Mic mati'], ['done', 'p-download-simple', '#1c7ed6', 'Unduhan selesai'], ['pick', 'd-drop', '#5aaef0', 'Warna diambil'], ['caps', 'd-caps', '#495057', 'Caps Lock'], ['pray', 'd-moon', '#7048e8', 'Pengingat sholat']];
+  const notices = document.getElementById('notices');
+  notices.innerHTML = list.map(([k, i, c, n]) => `<button type="button" data-k="${k}">${ico(i, c)}${n}</button>`).join('');
+  let back;
+  notices.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    current = '';
+    show(b.dataset.k);
+    clearTimeout(back);
+    back = setTimeout(() => { current = ''; show(sectionState()); }, 2800);
+  });
 
-  const face = hi => `<div class="face ${hi ? 'awake' : ''}"><i></i><i></i>${hi ? '<span class="hi">Hi!</span>' : '<b class="z">z</b><b class="z">z</b>'}</div>`;
+  let raf = 0;
+  addEventListener('scroll', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; clearTimeout(back); show(sectionState()); });
+  }, { passive: true });
+  show(sectionState());
 
-  function draw() {
-    clearTimeout(noticeTimer);
-    clearTimeout(restTimer);
-    if (state.view === 'eyes') {
-      shape(229, 50);
-      body.style.background = '';
-      body.innerHTML = face(false);
-      return;
-    }
-    if (state.view === 'card') {
-      const name = PAGES[state.page];
-      shape(598, 233);
-      const tinted = name === 'music';
-      body.style.background = tinted ? `linear-gradient(100deg, ${track().glow}, #000 62%)` : '';
-      if (tinted) shell.style.setProperty('--sl', track().glow);
-      const dots = PAGES.map((_, i) => `<button ${i === state.page ? 'aria-current="true"' : ''} data-page="${i}" aria-label="Halaman ${i + 1}"></button>`).join('');
-      body.innerHTML = `<div class="card" style="--tint:${track().tint}">${pages[name]()}</div><button class="side l" data-step="-1" aria-label="Halaman sebelumnya">${icon('caret-left')}</button><button class="side r" data-step="1" aria-label="Halaman berikutnya">${icon('caret-right')}</button><div class="dots">${dots}</div>`;
-      return;
-    }
-    body.style.background = '';
-    restTimer = setTimeout(() => { state.view = 'eyes'; draw(); }, 6000);
-    if (state.lyrics && state.playing) {
-      shape(340, 38, true);
-      body.innerHTML = `<div class="lyricline" tabindex="0" role="button" aria-label="Buka notch"><div class="cover" style="--cover:${track().cover}"></div><span id="stripline">${lyricAt(0)}</span></div>`;
-    } else if (state.playing) {
-      shape(269, 38, true);
-      body.innerHTML = `<div class="strip" tabindex="0" role="button" aria-label="Buka notch"><div class="cover" style="--cover:${track().cover}"></div><b id="clk">${clock()}</b><span class="end">${bars()}</span></div>`;
-    } else {
-      shape(218, 35, true);
-      body.innerHTML = `<div class="strip" tabindex="0" role="button" aria-label="Buka notch"><div class="ring"></div><b id="clk">${clock()}</b><span class="end">31°</span></div>`;
-    }
-  }
-
-  function tick() {
-    if (state.playing) {
-      state.pos += .25;
-      if (state.pos >= track().length) step(1);
-    }
-    if (state.running) {
-      if (modes[state.mode][1]) {
-        state.left = Math.max(0, state.left - .25);
-        if (!state.left) { state.running = false; state.session += 1; say({ c: '#ee4b4b', i: 'calendar-blank', t: 'Sesi selesai', s: 'Istirahat dulu sebentar', w: 340 }); }
-      } else {
-        state.left += .25;
-      }
-    }
-    const set = (id, text) => { const el = document.getElementById(id); if (el && el.textContent !== text) el.textContent = text; };
-    set('clk', clock());
-    set('pos', mmss(state.pos));
-    set('left', mmss(state.left));
-    const fill = document.getElementById('fill');
-    if (fill) fill.style.width = `${state.pos / track().length * 100}%`;
-    const dial = document.getElementById('dial');
-    if (dial) {
-      const total = modes[state.mode][1];
-      dial.style.setProperty('--p', `${total ? (1 - state.left / total) * 100 : (state.left % 60) / 60 * 100}%`);
-    }
-    if (lineIndex() !== shownLine) {
-      shownLine = lineIndex();
-      const box = document.getElementById('lines');
-      if (box) box.innerHTML = lines();
-      set('stripline', lyricAt(0));
-    }
-  }
-
-  function step(by) {
-    state.track = (state.track + by + tracks.length) % tracks.length;
-    state.pos = 0;
-    if (state.view === 'card' || state.view === 'rest') draw();
-  }
-
-  function open(page) {
-    clearTimeout(leaveTimer);
-    clearTimeout(restTimer);
-    if (page !== undefined) state.page = page;
-    if (state.view === 'eyes') {
-      state.view = 'hi';
-      body.innerHTML = face(true);
-      setTimeout(() => {
-        state.view = 'card';
-        draw();
-        if (mouse && !shell.matches(':hover')) leaveTimer = setTimeout(close, 500);
-      }, 500);
-      return;
-    }
-    state.view = 'card';
-    draw();
-  }
-  function close() {
-    state.view = 'rest';
-    draw();
-  }
-
-  function say({ c, i, t, s, big, w, vol }) {
-    clearTimeout(downloadTimer);
-    state.view = 'notice';
-    shape(w || 370, 78);
-    body.style.background = '';
-    const end = vol !== undefined ? `<span class="vol"><i style="width:${vol}%"></i></span>` : big ? `<span class="big">${big}</span>` : '';
-    body.innerHTML = `<div class="notice" style="--c:${c}"><span class="disc">${icon(i)}</span><span class="txt"><b>${t}</b><span>${s}</span></span>${end}</div>`;
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(close, 3000);
-  }
-
-  const chips = {
-    volume: () => say({ c: '#4b5563', i: 'speaker-high', t: 'Volume', s: '62%', vol: 62, w: 340 }),
-    whatsapp() {
-      clearTimeout(noticeTimer);
-      clearTimeout(downloadTimer);
-      state.view = 'notice';
-      shape(470, 128);
-      body.style.background = '';
-      body.innerHTML = `<div class="app"><div class="row"><span class="dim">${today()}</span><b id="clk">${clock()}</b></div><div class="tile"><span class="logo">${icon('whatsapp-logo')}</span><div><div class="meta"><span>WhatsApp</span><span>Baru saja</span></div><b>Rani</b><p>Besok jadi ketemu jam 3?</p></div></div></div>`;
-      noticeTimer = setTimeout(close, 4000);
-    },
-    download() {
-      clearTimeout(noticeTimer);
-      clearTimeout(downloadTimer);
-      state.view = 'notice';
-      shape(420, 38, true);
-      body.style.background = '';
-      body.innerHTML = `<div class="strip" style="grid-template-columns:1fr auto 1fr"><span class="spread" style="justify-content:start;min-width:0">${icon('download-simple')}<span style="white-space:nowrap">Laporan-Q3.pdf</span></span><b id="clk">${clock()}</b><span class="end dim" id="size">0 MB</span></div>`;
-      let size = 0;
-      const grow = () => {
-        size += 7.3;
-        const label = document.getElementById('size');
-        if (!label) return;
-        if (size > 50) {
-          say({ c: '#3b92ee', i: 'download-simple', t: 'Unduhan selesai', s: 'Laporan-Q3.pdf', w: 340 });
-          return;
-        }
-        label.textContent = `${size.toFixed(1)} MB`;
-        downloadTimer = setTimeout(grow, 320);
-      };
-      downloadTimer = setTimeout(grow, 320);
-    },
-    wifi: () => say({ c: '#4bbcf0', i: 'wifi-high', t: 'Rumah 5G', s: 'Wi-Fi connected', w: 300 }),
-    bluetooth: () => say({ c: '#3b92ee', i: 'bluetooth', t: 'Earbuds', s: 'Connected, baterai 99%', w: 340 }),
-    battery: () => say({ c: '#f0483e', i: 'battery-warning', t: 'Battery low', s: 'Colok charger dulu', big: '20%', w: 370 }),
-    caps: () => say({ c: '#4b5563', i: 'text-aa', t: 'Caps Lock', s: 'Nyala', w: 270 }),
-    eyes() {
-      clearTimeout(downloadTimer);
-      state.view = 'eyes';
-      draw();
-    },
+  // The Tampilan cards dress the notch in their theme while pointed at, and keep it once tapped.
+  const looks = [...document.querySelectorAll('[data-theme]')];
+  let picked = 'black';
+  const dress = theme => {
+    notch.classList.toggle('glass', theme === 'glass');
+    notch.classList.toggle('tint', theme === 'tint');
   };
-
-  const actions = {
-    play() { state.playing = !state.playing; draw(); },
-    next() { step(1); },
-    prev() { step(-1); },
-    lyrics() { state.lyrics = !state.lyrics; draw(); },
-    clear() { state.inbox = []; draw(); },
-    run() { state.running = !state.running; draw(); },
-    reset() { state.running = false; state.left = modes[state.mode][1]; draw(); },
-    tidy() { state.tasks = state.tasks.filter(item => !item[1]); draw(); },
-  };
-
-  shell.addEventListener('click', event => {
-    if (state.view !== 'card') {
-      if (state.view === 'rest' || state.view === 'eyes') open();
-      return;
-    }
-    const hit = event.target.closest('[data-do],[data-step],[data-page],[data-mode],[data-task],[data-remove]');
-    const seek = event.target.closest('#seek');
-    if (seek) {
-      const box = seek.getBoundingClientRect();
-      state.pos = (event.clientX - box.left) / box.width * track().length;
-      tick();
-      return;
-    }
-    if (!hit) return;
-    const { do: action, step: by, page, mode, task, remove } = hit.dataset;
-    if (action) actions[action]();
-    if (by) open((state.page + Number(by) + PAGES.length) % PAGES.length);
-    if (page) open(Number(page));
-    if (mode) { state.mode = Number(mode); state.running = false; state.left = modes[state.mode][1]; draw(); }
-    if (task) { state.tasks[task][1] = !state.tasks[task][1]; draw(); }
-    if (remove) { state.inbox.splice(Number(remove), 1); draw(); }
-  });
-  shell.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && state.view === 'card') { close(); return; }
-    if ((event.key === 'Enter' || event.key === ' ') && state.view !== 'card') { event.preventDefault(); open(); return; }
-    if (event.key === 'Enter' && event.target.id === 'newtask') {
-      const text = event.target.value.trim();
-      if (!text) return;
-      state.tasks.push([text, false]);
-      draw();
-      document.getElementById('newtask').focus();
-    }
-  });
-  shell.addEventListener('pointerenter', event => {
-    mouse = event.pointerType === 'mouse';
-    if (mouse && state.view !== 'notice' && state.view !== 'hi') open();
-    clearTimeout(leaveTimer);
-  });
-  shell.addEventListener('pointerleave', event => {
-    if (event.pointerType !== 'mouse' || state.view !== 'card') return;
-    leaveTimer = setTimeout(() => { if (document.activeElement.id !== 'newtask') close(); }, 500);
-  });
-  document.addEventListener('pointerdown', event => {
-    if (state.view === 'card' && event.pointerType !== 'mouse' && !shell.contains(event.target)) close();
-  });
-  shell.addEventListener('wheel', event => {
-    if (state.view !== 'card') return;
-    event.preventDefault();
-    const now = performance.now();
-    if (now - lastWheel < 260) return;
-    lastWheel = now;
-    open((state.page + Math.sign(event.deltaY) + PAGES.length) % PAGES.length);
-  }, { passive: false });
-
-  // The shelf takes real files from the desktop, by name only.
-  let shelfOpened = false;
-  document.addEventListener('dragover', event => event.preventDefault());
-  document.addEventListener('drop', event => event.preventDefault());
-  shell.addEventListener('dragenter', () => { if (!shelfOpened) { shelfOpened = true; open(PAGES.indexOf('shelf')); } });
-  shell.addEventListener('dragover', () => { const zone = document.getElementById('zone'); if (zone) zone.classList.add('over'); });
-  shell.addEventListener('dragleave', event => {
-    if (shell.contains(event.relatedTarget)) return;
-    shelfOpened = false;
-    const zone = document.getElementById('zone');
-    if (zone) zone.classList.remove('over');
-  });
-  shell.addEventListener('drop', event => {
-    shelfOpened = false;
-    state.shelf.push(...[...event.dataTransfer.files].map(file => file.name));
-    open(PAGES.indexOf('shelf'));
+  looks.forEach(look => {
+    const theme = look.dataset.theme;
+    look.addEventListener('mouseenter', () => dress(theme));
+    look.addEventListener('mouseleave', () => dress(picked));
+    const pick = () => {
+      picked = theme;
+      looks.forEach(l => l.setAttribute('aria-pressed', l === look));
+      dress(theme);
+    };
+    look.addEventListener('click', pick);
+    look.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
   });
 
-  document.querySelectorAll('[data-chip]').forEach(chip => chip.addEventListener('click', () => chips[chip.dataset.chip]()));
-
-  const floating = document.getElementById('float');
-  floating.addEventListener('click', () => {
-    floating.setAttribute('aria-pressed', shell.classList.toggle('floating'));
-  });
-
-  const fit = () => stage.style.setProperty('--k', Math.min(1, stage.clientWidth / 598));
-  new ResizeObserver(fit).observe(stage);
-  fit();
-  draw();
-  setInterval(tick, 250);
+  // The WhatsApp reply types itself.
+  const typed = document.getElementById('typed');
+  const text = 'Siap, aku sampai jam 7 ya';
+  let n = 0;
+  setInterval(() => { n = n > text.length + 12 ? 0 : n + 1; typed.textContent = text.slice(0, n); }, 110);
 })();
 
-// Keep the download button on the newest release without editing this page,
+// Keep the download buttons on the newest release without editing this page,
 // and count the installer's downloads over every release. The installer's
 // name carries its version, so /releases/latest/download can't.
 fetch('https://api.github.com/repos/rifqihilal/drop/releases?per_page=100')
@@ -1059,39 +1008,51 @@ fetch('https://api.github.com/repos/rifqihilal/drop/releases?per_page=100')
     const installer = release => release.assets.filter(item => item.name.endsWith('.exe'));
     const latest = published[0];
     const asset = latest && installer(latest)[0];
-    if (asset) {
-      document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
-    }
+    if (!asset) return;
+    document.querySelectorAll('[data-download]').forEach(link => { link.href = asset.browser_download_url; });
     const total = published.flatMap(installer).reduce((sum, item) => sum + item.download_count, 0);
-    const note = document.querySelector('[data-downloads]');
-    if (note && latest && total > 0) {
-      note.textContent = `Versi ${latest.tag_name.replace(/^v/, '')} \u00b7 sudah diunduh ${total.toLocaleString('id-ID')} kali`;
-      note.hidden = false;
-    }
+    const size = (asset.size / 1048576).toLocaleString('id-ID', { maximumFractionDigits: 1 });
+    const parts = [`Versi ${latest.tag_name.replace(/^v/, '')}`, `${size} MB`, 'Windows 10 dan 11'];
+    // A small count reads as a quiet page; show it only once it says something.
+    parts.push(total >= 500 ? `diunduh ${total.toLocaleString('id-ID')} kali` : 'Gratis');
+    document.querySelector('[data-meta]').textContent = parts.join(' · ');
   })
   .catch(() => {});
 
-const tabs = [...document.querySelectorAll('#tabs button')];
-const shots = [...document.querySelectorAll('#shot img')];
-function pick(index) {
-  tabs.forEach((tab, i) => {
-    tab.setAttribute('aria-selected', i === index);
-    tab.tabIndex = i === index ? 0 : -1;
-  });
-  shots.forEach((shot, i) => shot.classList.toggle('on', i === index));
-}
-tabs.forEach((tab, i) => {
-  tab.tabIndex = i === 0 ? 0 : -1;
-  tab.addEventListener('click', () => pick(i));
-  tab.addEventListener('keydown', event => {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    if (!step) return;
-    event.preventDefault();
-    const next = (i + step + tabs.length) % tabs.length;
-    pick(next);
-    tabs[next].focus();
-  });
-});
+// The bento tiles start scattered and settle into place one by one as the page scrolls.
+(() => {
+  const bento = document.querySelector('.bento');
+  const tiles = [...bento.querySelectorAll('.tile')];
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const turns = [-9, 7, -5, 10, -7, 6, -11, 8, -6, 9, -8, 5];
+  let from = [];
+  const measure = () => {
+    const mid = bento.offsetWidth / 2;
+    const single = getComputedStyle(bento).gridTemplateColumns.split(' ').length === 1;
+    from = tiles.map((t, i) => {
+      const dx = single ? (i % 2 ? 70 : -70) : (t.offsetLeft + t.offsetWidth / 2 - mid) * .85 + (i % 2 ? 40 : -40);
+      return [dx, 140 + (i % 3) * 70, turns[i % turns.length]];
+    });
+  };
+  const ease = x => 1 - Math.pow(1 - x, 3);
+  const draw = () => {
+    const vh = innerHeight;
+    tiles.forEach((t, i) => {
+      const top = t.offsetTop + bento.getBoundingClientRect().top;
+      const e = ease(Math.min(1, Math.max(0, (vh * .98 - top - (i % 4) * 45) / (vh * .5))));
+      const [dx, dy, r] = from[i];
+      const k = 1 - e;
+      t.style.transform = k ? `translate3d(${dx * k}px, ${dy * k}px, 0) rotate(${r * k}deg) scale(${.88 + .12 * e})` : '';
+      t.style.opacity = .15 + .85 * e;
+    });
+  };
+  let raf = 0;
+  const queue = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); };
+  measure();
+  draw();
+  addEventListener('scroll', queue, { passive: true });
+  addEventListener('resize', () => { measure(); queue(); });
+})();
 
 const seen = new IntersectionObserver(entries => {
   entries.forEach(entry => {
@@ -1099,7 +1060,7 @@ const seen = new IntersectionObserver(entries => {
     entry.target.classList.add('seen');
     seen.unobserve(entry.target);
   });
-}, { threshold: .15 });
+}, { threshold: .12 });
 document.querySelectorAll('.rise').forEach(item => seen.observe(item));
 </script>
 </body>
