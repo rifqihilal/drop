@@ -8,6 +8,21 @@ tugas, notifikasi, dan progres AI agent. Native, tanpa webview, di bawah 30 MB R
 
 **[Unduh Drop](https://github.com/rifqihilal/drop/releases/latest)** · [Halaman Drop](https://rifqihilal.github.io/drop/)
 
+## Fitur
+
+- **Notch tertutup:** baterai, jam, dan isi kanan pilihanmu (suhu, tanggal,
+  agenda, tugas, jam kedua, Screen Time), plus strip langsung untuk agent,
+  timer, acara, unduhan, dan musik.
+- **AI agent:** progres Claude Code dan OpenCode, izinkan/tolak perintah, dan
+  jawab pertanyaan agent langsung dari notch.
+- **Notifikasi:** pesan Windows di notch, klik untuk membuka, dan balas WhatsApp
+  tanpa membuka aplikasinya.
+- **Kartu:** Home bento, Musik dengan lirik, Sholat (Kemenag RI), Kalender `.ics`
+  dengan agenda harian, Tugas, Pomodoro, Istirahat, Mixer, Droplate (`Alt+C`),
+  Teleprompter (`Alt+P`), Screen Time, dan Shelf.
+- **Tampilan:** Classic atau Floating, tiga ukuran, tema Hitam, Kaca, atau Kaca
+  warna, sembunyi otomatis jadi bar tipis, bahasa Indonesia atau Inggris.
+
 ## Pasang
 
 1. Unduh `Drop-<versi>-Setup.exe` dari [rilis terbaru](https://github.com/rifqihilal/drop/releases/latest).
