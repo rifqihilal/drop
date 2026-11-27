@@ -579,7 +579,7 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
     <a class="lk" href="#pasang" data-en="Install">Pasang</a>
   </nav>
   <div class="lang" role="group" aria-label="Bahasa / Language"><button type="button" data-lang="id" aria-pressed="true">ID</button><button type="button" data-lang="en" aria-pressed="false">EN</button></div>
-  <a class="out" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.1/Drop-0.3.1.0-Setup.exe">Download</a>
+  <a class="out" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.2/Drop-0.3.2.0-Setup.exe">Download</a>
 </header>
 
 <main>
@@ -593,14 +593,14 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
   </div>
   <section class="hero" data-notch="hero">
     <div class="wrap">
-      <span class="tag" data-en="&lt;i&gt;&lt;/i&gt;New in 0.3.1: your AI agents in the notch"><i></i>Baru di 0.3.1: AI agent-mu di notch</span>
+      <span class="tag" data-en="&lt;i&gt;&lt;/i&gt;New in 0.3.2: reply from the notification card"><i></i>Baru di 0.3.2: balas dari kartu notifikasi</span>
       <h1 data-en="The top of your screen,&lt;br&gt;now alive.">Tepi atas layarmu,<br>kini hidup.</h1>
       <p class="lead" data-en="Drop is a light notch for Windows. AI agent progress, WhatsApp messages, music and prayer times sit at the top edge of your screen. It grows when there is something to see, then shrinks back.">Drop adalah notch ringan untuk Windows. Progres AI agent, pesan WhatsApp, musik, dan jadwal sholat duduk di tepi atas layar. Melebar saat perlu, lalu mengecil lagi.</p>
       <div class="btns">
-        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.1/Drop-0.3.1.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+        <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.2/Drop-0.3.2.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
         <a class="btn ghost" href="#kartu" data-en="See features">Lihat fitur</a>
       </div>
-      <p class="meta" data-meta>Versi 0.3.1 · 2,7 MB · Windows 10 dan 11 · Gratis</p>
+      <p class="meta" data-meta>Versi 0.3.2 · 2,7 MB · Windows 10 dan 11 · Gratis</p>
       <div class="chips" id="chips" aria-label="Isi notch" data-en-label="Notch content"></div>
       <p class="hint" data-en="The notch at the top of this page is live. Pick one to see it.">Notch di atas halaman ini hidup. Pilih untuk melihat isinya.</p>
     </div>
@@ -858,7 +858,7 @@ h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.04; letter-spacing: -
         <h2 data-en="Give your Windows a notch.">Beri Windows-mu notch.</h2>
         <p class="sub" style="margin:0 auto" data-en="Free, no account, no ads.">Gratis, tanpa akun, tanpa iklan.</p>
         <div class="btns" style="margin-bottom:0">
-          <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.1/Drop-0.3.1.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
+          <a class="btn main" data-download href="https://github.com/rifqihilal/drop/releases/download/v0.3.2/Drop-0.3.2.0-Setup.exe" data-en="&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-win&quot;/&gt;&lt;/svg&gt;Download for Windows"><svg class="icon"><use href="#i-win"/></svg>Download untuk Windows</a>
         </div>
       </div>
     </div>
@@ -1055,7 +1055,7 @@ const savedLang = (() => { try { return localStorage.getItem('drop-lang'); } cat
 let release = null;
 function writeRelease() {
   const locale = tr('id-ID', 'en-US');
-  const r = release || { version: '0.3.1', mb: 2.7, total: 0 };
+  const r = release || { version: '0.3.2', mb: 2.7, total: 0 };
   const parts = [tr(`Versi ${r.version}`, `Version ${r.version}`), `${r.mb.toLocaleString(locale, { maximumFractionDigits: 1 })} MB`, tr('Windows 10 dan 11', 'Windows 10 and 11')];
   // A small count reads as a quiet page; show it only once it says something.
   parts.push(r.total >= 500 ? tr(`diunduh ${r.total.toLocaleString(locale)} kali`, `${r.total.toLocaleString(locale)} downloads`) : tr('Gratis', 'Free'));
